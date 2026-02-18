@@ -1,0 +1,5 @@
+cache/
+*.mp3
+*.webm
+node_modules/
+.env
