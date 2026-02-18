@@ -1,0 +1,513 @@
+const mysql = require('mysql2/promise');
+const path = require('path');
+const fs = require('fs');
+const { checkCooldown } = require('../../utils/cooldown');
+
+// ID CỦA BOSS (Cho vay tiền)
+const BOSS_ID = "100037351338722";
+
+// Hàm lấy ngày từ Date object (dùng giờ hệ thống đã là UTC+7)
+function getDateString(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+// Hạn mức vay tối đa
+const MAX_LOAN = 1000000;
+
+// Lãi suất mỗi ngày
+const DAILY_INTEREST_RATE = 0.075; // 7.5%
+
+module.exports = {
+    name: "vay",
+    description: "Vay tiền từ Boss (lãi 7.5%/ngày)",
+    usage: "\n!vay [số_tiền] [số_ngày] | !vay check | !vay tra | !vay checkall",
+    
+    execute: async ({ api, event, args, config }) => {
+        const { threadID, messageID, senderID } = event;
+
+        // Cooldown 5s
+        const cooldown = checkCooldown({ command: "vay", key: senderID, durationMs: 5000 });
+        if (!cooldown.allowed) {
+            return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
+        }
+
+        // Đọc config
+        const configPath = path.resolve(__dirname, '../../../config.json');
+        let dbConfig = {};
+        try {
+            const configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const db = configFile.database;
+            dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
+        } catch (err) {
+            return api.sendMessage("❌ Lỗi config.json", threadID);
+        }
+
+        const command = args[0]?.toLowerCase();
+
+        let connection;
+        try {
+            connection = await mysql.createConnection(dbConfig);
+
+            // Kiểm tra xem user có đang trong tù không
+            const [jailRows] = await connection.execute(
+                'SELECT * FROM user_jail WHERE psid = ? AND jail_until > NOW()',
+                [senderID]
+            );
+
+            if (jailRows.length > 0) {
+                const jailUntil = new Date(jailRows[0].jail_until);
+                const now = new Date();
+                const remainingMs = jailUntil - now;
+                const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+                return api.sendMessage(
+                    `🔒 BẠN ĐANG TRONG TÙ!\n━━━━━━━━━━━━━━━━━━\n⏰ Còn lại: ${remainingHours} giờ\n❌ Không thể vay tiền trong tù`,
+                    threadID,
+                    messageID
+                );
+            }
+
+            // Lấy thông tin user
+            const [userRows] = await connection.execute('SELECT credits, name FROM messenger_users WHERE psid = ?', [senderID]);
+            if (userRows.length === 0) {
+                return api.sendMessage("❌ Bạn chưa có tài khoản. Gõ !tien để tạo.", threadID, messageID);
+            }
+
+            const userName = userRows[0].name;
+
+            // === CHECK ALL KHOẢN VAY (ADMIN/BOSS) ===
+            if (command === "checkall") {
+                if (senderID !== BOSS_ID) {
+                    return api.sendMessage("❌ Chỉ Boss mới dùng được lệnh này.", threadID, messageID);
+                }
+
+                const [loanRows] = await connection.execute(
+                    `SELECT bl.psid, bl.principal, bl.interest_rate, bl.taken_at, bl.last_loan_check, bl.due_days, bl.is_overdue,
+                            mu.name
+                     FROM bank_loans bl
+                     LEFT JOIN messenger_users mu ON mu.psid = bl.psid
+                     ORDER BY bl.taken_at ASC`
+                );
+
+                if (loanRows.length === 0) {
+                    return api.sendMessage("✅ Hiện không có khoản vay nào.", threadID, messageID);
+                }
+
+                const now = new Date();
+                let msg = `📋 DANH SÁCH CON NỢ\n━━━━━━━━━━━━━━━━━━\n`;
+                msg += `👥 Tổng: ${loanRows.length}\n`;
+                msg += `━━━━━━━━━━━━━━━━━━\n`;
+
+                loanRows.forEach((loan, idx) => {
+                    const principal = parseInt(loan.principal);
+                    const interestRate = parseFloat(loan.interest_rate);
+                    const takenAt = new Date(loan.taken_at);
+                    const lastCheck = loan.last_loan_check ? new Date(loan.last_loan_check) : takenAt;
+                    const dueDate = new Date(takenAt.getTime() + loan.due_days * 24 * 60 * 60 * 1000);
+
+                    const lastCheckDay = getDateString(lastCheck);
+                    const nowDay = getDateString(now);
+                    const daysSinceLastCheck = Math.max(0, Math.floor((now - lastCheck) / (1000 * 60 * 60 * 24)));
+
+                    let totalDebt = principal;
+                    if (lastCheckDay !== nowDay && daysSinceLastCheck >= 1) {
+                        totalDebt = principal + principal * interestRate * daysSinceLastCheck;
+                    }
+
+                    const isOverdue = now > dueDate;
+                    const daysOverdue = isOverdue ? Math.floor((now - dueDate) / (1000 * 60 * 60 * 24)) : 0;
+                    const daysUntilDue = Math.max(0, Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24)));
+
+                    const name = loan.name || "Không rõ";
+                    const status = isOverdue ? `❌ Quá hạn ${daysOverdue} ngày` : `📅 Còn ${daysUntilDue} ngày`;
+
+                    msg += `${idx + 1}. ${name}\n`;
+                    msg += `🆔 ${loan.psid}\n`;
+                    msg += `💰 Gốc: ${principal.toLocaleString()}\n`;
+                    msg += `💵 Nợ: ${Math.floor(totalDebt).toLocaleString()}\n`;
+                    msg += `${status}\n`;
+                    msg += `━━━━━━━━━━━━━━━━━━\n`;
+                });
+
+                return api.sendMessage(msg, threadID, messageID);
+            }
+
+            // === CHECK KHOẢN VAY ===
+            if (["check", "info"].includes(command)) {
+                const [loanRows] = await connection.execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+                
+                if (loanRows.length === 0) {
+                    return api.sendMessage(
+                        `💳 THÔNG TIN VAY\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n📊 Không có khoản vay nào\n━━━━━━━━━━━━━━━━━━\n💡 Vay tối đa: ${MAX_LOAN.toLocaleString()}\n💰 Lãi suất: 7.5%/ngày`,
+                        threadID,
+                        messageID
+                    );
+                }
+
+                const loan = loanRows[0];
+                const principal = parseInt(loan.principal);
+                const interestRate = parseFloat(loan.interest_rate);
+                const takenAt = new Date(loan.taken_at);
+                const lastCheck = loan.last_loan_check ? new Date(loan.last_loan_check) : takenAt;
+                const now = new Date();
+                const dueDate = new Date(takenAt.getTime() + loan.due_days * 24 * 60 * 60 * 1000);
+
+                // Tính số ngày từ lần check cuối (dựa trên ngày lịch)
+                const lastCheckDay = getDateString(lastCheck);
+                const nowDay = getDateString(now);
+                const daysSinceLastCheck = Math.max(0, Math.floor((now - lastCheck) / (1000 * 60 * 60 * 24)));
+                
+                // Tính lãi tích lũy (chỉ tính nếu đã sang ngày tiếp theo)
+                let totalDebt = principal;
+                if (lastCheckDay !== nowDay && daysSinceLastCheck >= 1) {
+                    // Lãi đơn giản: mỗi ngày = principal × rate
+                    const newInterest = principal * interestRate * daysSinceLastCheck;
+                    totalDebt = principal + newInterest;
+
+                    // Cập nhật last_loan_check
+                    await connection.execute(
+                        'UPDATE bank_loans SET last_loan_check = ? WHERE psid = ?',
+                        [now, senderID]
+                    );
+                }
+
+                // Kiểm tra quá hạn
+                const isOverdue = now > dueDate;
+                const daysOverdue = isOverdue ? Math.floor((now - dueDate) / (1000 * 60 * 60 * 24)) : 0;
+
+                // Cập nhật trạng thái quá hạn và tự động vào tù nếu quá 3 ngày
+                if (daysOverdue >= 3 && !loan.is_overdue) {
+                    await connection.beginTransaction();
+                    try {
+                        // Đánh dấu quá hạn
+                        await connection.execute('UPDATE bank_loans SET is_overdue = TRUE WHERE psid = ?', [senderID]);
+                        
+                        // Cho vào tù 48 giờ
+                        const jailUntil = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+                        await connection.execute(
+                            'INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE jail_until = ?, reason = ?',
+                            [senderID, jailUntil, 'Nợ quá hạn', jailUntil, 'Nợ quá hạn']
+                        );
+                        
+                        await connection.commit();
+                        
+                        return api.sendMessage(
+                            `🚨 NỢ QUÁ HẠN!\n━━━━━━━━━━━━━━━━━━\n⚠️ Bạn đã nợ quá ${daysOverdue} ngày!\n🔒 Tự động vào tù 48 giờ\n💰 Nợ: ${totalDebt.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n💡 Trả nợ để thoát tù sớm!`,
+                            threadID,
+                            messageID
+                        );
+                    } catch (err) {
+                        await connection.rollback();
+                        throw err;
+                    }
+                }
+
+                const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+                
+                let msg = `💳 THÔNG TIN KHOẢN VAY\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n`;
+                msg += `💰 Gốc: ${principal.toLocaleString()}\n`;
+                msg += `📈 Lãi suất: ${(interestRate * 100).toFixed(1)}%/ngày\n`;
+                msg += `💵 Tổng nợ hiện tại: ${totalDebt.toLocaleString()}\n`;
+                msg += `━━━━━━━━━━━━━━━━━━\n`;
+                
+                if (isOverdue) {
+                    msg += `❌ QUÁ HẠN ${daysOverdue} NGÀY!\n`;
+                    if (daysOverdue >= 3) {
+                        msg += `⚠️ Chuẩn bị vào tù!\n`;
+                    }
+                } else {
+                    msg += `📅 Hạn trả: ${daysUntilDue} ngày nữa\n`;
+                }
+                
+                msg += `━━━━━━━━━━━━━━━━━━\n`;
+                msg += `💡 Dùng !vay tra để trả nợ`;
+
+                return api.sendMessage(msg, threadID, messageID);
+            }
+
+            // === TRẢ NỢ ===
+            else if (["tra", "pay", "repay"].includes(command)) {
+                const [loanRows] = await connection.execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+                
+                if (loanRows.length === 0) {
+                    return api.sendMessage("❌ Bạn không có khoản vay nào cần trả.", threadID, messageID);
+                }
+
+                const loan = loanRows[0];
+                const principal = parseInt(loan.principal);
+                const takenAt = new Date(loan.taken_at);
+                const now = new Date();
+
+                // Kiểm tra đã sang ngày tiếp theo chưa (dựa trên ngày lịch)
+                const takenAtDay = getDateString(takenAt);
+                const nowDay = getDateString(now);
+                
+                if (takenAtDay === nowDay) {
+                    // Cùng ngày = không được trả
+                    const tomorrowStart = new Date(now);
+                    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+                    tomorrowStart.setHours(0, 0, 0, 0);
+                    
+                    const hoursLeft = Math.ceil((tomorrowStart - now) / (1000 * 60 * 60));
+                    
+                    return api.sendMessage(
+                        `⏰ CHƯA ĐỦ THỜI GIAN!\n━━━━━━━━━━━━━━━━━━\n⚠️ Vay hôm nay, trả từ ngày mai (00:00 UTC+7)\n⏳ Còn lại: ~${hoursLeft} giờ`,
+                        threadID,
+                        messageID
+                    );
+                }
+
+                // Tính tổng nợ
+                const lastCheck = loan.last_loan_check ? new Date(loan.last_loan_check) : takenAt;
+                const daysSinceLastCheck = Math.max(0, Math.floor((now - lastCheck) / (1000 * 60 * 60 * 24)));
+                const newInterest = principal * DAILY_INTEREST_RATE * daysSinceLastCheck;
+                const totalDebt = principal + newInterest;
+
+                const userCredits = parseInt(userRows[0].credits);
+
+                // Hỏi user muốn trả cả hay một phần
+                global.vayReplyHandlers = global.vayReplyHandlers || {};
+                global.vayReplyHandlers[senderID] = {
+                    totalDebt: totalDebt,
+                    principal: principal,
+                    userCredits: userCredits
+                };
+
+                return api.sendMessage(
+                    `💳 TRẢ NỢ\n━━━━━━━━━━━━━━━━━━\n💰 Tổng nợ: ${totalDebt.toLocaleString()}\n💵 Tiền có: ${userCredits.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\nReply:\n1️⃣ - Trả toàn bộ\n2️⃣ - Trả một phần (gõ số tiền)`,
+                    threadID,
+                    (err, info) => {
+                        if (!err) {
+                            global.client.handleReply.push({
+                                name: "vay_repay",
+                                messageID: info.messageID,
+                                author: senderID,
+                                totalDebt: totalDebt,
+                                principal: principal,
+                                userCredits: userCredits,
+                                userName: userName
+                            });
+                        }
+                    },
+                    messageID
+                );
+            }
+
+            // === VAY TIỀN ===
+            else {
+                // Kiểm tra xem đã có khoản vay chưa
+                const [loanRows] = await connection.execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+                
+                if (loanRows.length > 0) {
+                    return api.sendMessage(
+                        `❌ BẠN ĐÃ CÓ KHOẢN VAY!\n━━━━━━━━━━━━━━━━━━\n💡 Phải trả hết nợ cũ mới vay được\n📊 Dùng !vay check để xem chi tiết`,
+                        threadID,
+                        messageID
+                    );
+                }
+
+                const amountStr = args[0];
+                const daysStr = args[1];
+
+                if (!amountStr || !daysStr) {
+                    return api.sendMessage(
+                        `💳 VAY TIỀN - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n📝 Cú pháp: !vay [số_tiền] [số_ngày]\n💡 Ví dụ: !vay 500000 7\n━━━━━━━━━━━━━━━━━━\n💰 Hạn mức: ${MAX_LOAN.toLocaleString()}\n📈 Lãi suất: 7.5%/ngày\n⏰ Trả từ ngày mai (00:00 UTC+7)`,
+                        threadID,
+                        messageID
+                    );
+                }
+
+                const amount = parseInt(amountStr);
+                const days = parseInt(daysStr);
+
+                if (isNaN(amount) || amount <= 0) {
+                    return api.sendMessage("⚠️ Số tiền không hợp lệ!", threadID, messageID);
+                }
+
+                if (amount > MAX_LOAN) {
+                    return api.sendMessage(
+                        `❌ VƯỢT HẠN MỨC VAY!\n━━━━━━━━━━━━━━━━━━\n💰 Hạn mức tối đa: ${MAX_LOAN.toLocaleString()}\n📝 Bạn muốn vay: ${amount.toLocaleString()}`,
+                        threadID,
+                        messageID
+                    );
+                }
+
+                if (isNaN(days) || days < 1 || days > 30) {
+                    return api.sendMessage("⚠️ Số ngày phải từ 1-30 ngày!", threadID, messageID);
+                }
+
+                // Tính tổng lãi dự kiến
+                const estimatedInterest = amount * DAILY_INTEREST_RATE * days;
+                const estimatedTotal = amount + estimatedInterest;
+
+                await connection.beginTransaction();
+                try {
+                    const now = new Date();
+                    
+                    // Tạo khoản vay
+                    await connection.execute(
+                        'INSERT INTO bank_loans (psid, principal, interest_rate, taken_at, last_loan_check, due_days, is_overdue) VALUES (?, ?, ?, ?, ?, ?, FALSE)',
+                        [senderID, amount, DAILY_INTEREST_RATE, now, now, days]
+                    );
+
+                    // Cộng tiền cho user
+                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [amount, senderID]);
+
+                    // Trừ tiền boss
+                    await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [amount, BOSS_ID]);
+
+                    await connection.commit();
+
+                    return api.sendMessage(
+                        `✅ VAY TIỀN THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số tiền vay: ${amount.toLocaleString()}\n📅 Thời hạn: ${days} ngày\n📈 Lãi suất: 7.5%/ngày\n━━━━━━━━━━━━━━━━━━\n💵 Dự kiến trả: ~${Math.floor(estimatedTotal).toLocaleString()}\n⏰ Trả từ ngày mai (00:00 UTC+7)\n━━━━━━━━━━━━━━━━━━\n⚠️ Quá hạn 3 ngày = Vào tù!`,
+                        threadID,
+                        messageID
+                    );
+                } catch (err) {
+                    await connection.rollback();
+                    throw err;
+                }
+            }
+
+        } catch (e) {
+            console.error("Lỗi Vay:", e);
+            return api.sendMessage("❌ Lỗi hệ thống vay tiền.", threadID, messageID);
+        } finally {
+            if (connection) await connection.end();
+        }
+    },
+
+    // Handle reply cho trả nợ
+    handleReply: async ({ api, event, handleReply, config }) => {
+        const { threadID, messageID, senderID, body } = event;
+
+        if (!handleReply || handleReply.name !== "vay_repay" || handleReply.author !== senderID) return;
+
+        const configPath = path.resolve(__dirname, '../../../config.json');
+        let dbConfig = {};
+        try {
+            const configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const db = configFile.database;
+            dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
+        } catch (err) {
+            return api.sendMessage("❌ Lỗi config.json", threadID);
+        }
+
+        const reply = body.trim();
+        const { totalDebt, principal, userCredits, userName } = handleReply;
+
+        let connection;
+        try {
+            connection = await mysql.createConnection(dbConfig);
+
+            // Cập nhật lại credits hiện tại
+            const [userRows] = await connection.execute('SELECT credits FROM messenger_users WHERE psid = ?', [senderID]);
+            const currentCredits = parseInt(userRows[0].credits);
+
+            if (reply === "1") {
+                // Trả toàn bộ
+                if (currentCredits < totalDebt) {
+                    return api.sendMessage(
+                        `💸 KHÔNG ĐỦ TIỀN!\n━━━━━━━━━━━━━━━━━━\n💰 Cần: ${totalDebt.toLocaleString()}\n💵 Có: ${currentCredits.toLocaleString()}\n💔 Thiếu: ${(totalDebt - currentCredits).toLocaleString()}`,
+                        threadID,
+                        messageID
+                    );
+                }
+
+                await connection.beginTransaction();
+                try {
+                    // Trừ tiền user
+                    await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [totalDebt, senderID]);
+
+                    // Cộng tiền cho boss
+                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [totalDebt, BOSS_ID]);
+
+                    // Xóa khoản vay
+                    await connection.execute('DELETE FROM bank_loans WHERE psid = ?', [senderID]);
+
+                    // Nếu đang trong tù vì nợ, thả ra
+                    await connection.execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
+
+                    await connection.commit();
+
+                    return api.sendMessage(
+                        `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${totalDebt.toLocaleString()}\n💵 Còn lại: ${(currentCredits - totalDebt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
+                        threadID,
+                        messageID
+                    );
+                } catch (err) {
+                    await connection.rollback();
+                    throw err;
+                }
+            } else if (!isNaN(reply)) {
+                // Trả một phần
+                const partialAmount = parseInt(reply);
+
+                if (partialAmount <= 0 || partialAmount > totalDebt) {
+                    return api.sendMessage("⚠️ Số tiền không hợp lệ!", threadID, messageID);
+                }
+
+                if (currentCredits < partialAmount) {
+                    return api.sendMessage(`💸 Không đủ tiền! Có: ${currentCredits.toLocaleString()}`, threadID, messageID);
+                }
+
+                await connection.beginTransaction();
+                try {
+                    // Trừ tiền user
+                    await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [partialAmount, senderID]);
+
+                    // Cộng tiền cho boss
+                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [partialAmount, BOSS_ID]);
+
+                    // Giảm gốc
+                    const newPrincipal = principal - partialAmount;
+                    
+                    if (newPrincipal <= 0) {
+                        // Trả hết
+                        await connection.execute('DELETE FROM bank_loans WHERE psid = ?', [senderID]);
+                        await connection.execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
+                        
+                        await connection.commit();
+                        
+                        return api.sendMessage(
+                            `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Còn lại: ${(currentCredits - partialAmount).toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
+                            threadID,
+                            messageID
+                        );
+                    } else {
+                        // Cập nhật gốc mới và reset last_loan_check
+                        const now = new Date();
+                        await connection.execute(
+                            'UPDATE bank_loans SET principal = ?, last_loan_check = ?, is_overdue = FALSE WHERE psid = ?',
+                            [newPrincipal, now, senderID]
+                        );
+                        
+                        // Nếu đang trong tù vì nợ, thả ra
+                        await connection.execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
+                        
+                        await connection.commit();
+                        
+                        return api.sendMessage(
+                            `✅ TRẢ NỢ 1 PHẦN THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Nợ còn lại: ${newPrincipal.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n💡 Dùng !vay check để xem chi tiết`,
+                            threadID,
+                            messageID
+                        );
+                    }
+                } catch (err) {
+                    await connection.rollback();
+                    throw err;
+                }
+            } else {
+                return api.sendMessage("⚠️ Reply không hợp lệ! Reply 1 hoặc gõ số tiền.", threadID, messageID);
+            }
+
+        } catch (e) {
+            console.error("Lỗi Vay Reply:", e);
+            return api.sendMessage("❌ Lỗi xử lý trả nợ.", threadID, messageID);
+        } finally {
+            if (connection) await connection.end();
+        }
+    }
+};

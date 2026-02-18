@@ -1,0 +1,26 @@
+{
+  "botName": "DarkWin",
+  "prefix": "!",
+  "language": "vi",
+  "adminOnly": false,
+  "adminID": [
+    "100050609227874"
+  ],
+  "database": {
+    "type": "mysql",
+    "host": "localhost",
+    "port": 3306,
+    "name": "goatbot",
+    "user": "bot",
+    "password": "123456"
+  },
+  "adminIDs": ["100037351338722"],
+  "fca": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "forceLogin": true,
+    "autoMarkDelivery": false
+  },
+  "server": {
+    "port": 3000
+  }
+}
