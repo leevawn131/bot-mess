@@ -9,7 +9,7 @@ module.exports = {
         const { threadID, senderID, mentions, messageReply } = event;
 
         // Cooldown 3s
-        const cooldown = checkCooldown({ command: "ghepdoi", key: threadID, durationMs: 3000 });
+        const cooldown = checkCooldown({ command: "ghepdoi", key: threadID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi ghép đôi tiếp!`, threadID);
         }

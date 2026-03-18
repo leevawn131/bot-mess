@@ -1,5 +1,7 @@
 const mysql = require('mysql2/promise');
 const { checkCooldown } = require('../../utils/cooldown');
+const { recordAction } = require('../../utils/questSystem');
+const { consumeEnergy } = require('../../utils/energySystem');
 
 module.exports = {
     name: "lamviec",
@@ -24,6 +26,14 @@ module.exports = {
             // Check tài khoản
             const [rows] = await connection.execute('SELECT credits, vip_until FROM messenger_users WHERE psid = ?', [senderID]);
             if (rows.length === 0) return api.sendMessage("❌ Bạn chưa có tài khoản. Gõ !tien tạo trước đã.", threadID, messageID);
+
+            const energyUse = await consumeEnergy(connection, senderID, 15);
+            if (!energyUse.ok) {
+                if (energyUse.reason === 'not_enough') {
+                    return api.sendMessage(energyUse.message, threadID, messageID);
+                }
+                return api.sendMessage("❌ Không thể kiểm tra thể lực lúc này.", threadID, messageID);
+            }
             
             const currentBalance = parseInt(rows[0].credits);
             
@@ -69,8 +79,12 @@ module.exports = {
                 // Trừ tiền
                 await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [lostMoney, senderID]);
 
+                try {
+                    recordAction(senderID, 'work', 1);
+                } catch (_) {}
+
                 return api.sendMessage(
-                    `⚠️ XUI XẺO!\nBạn ${reason}.\n💸 Bị trừ: -${lostMoney.toLocaleString()} credits.\n😭 Số dư còn: ${(currentBalance - lostMoney).toLocaleString()}`,
+                    `⚠️ XUI XẺO!\nBạn ${reason}.\n💸 Bị trừ: -${lostMoney.toLocaleString()} credits.\n⚡ Thể lực: -15 (${energyUse.energy}/${energyUse.maxEnergy})\n😭 Số dư còn: ${(currentBalance - lostMoney).toLocaleString()}`,
                     threadID, messageID
                 );
 
@@ -91,13 +105,6 @@ module.exports = {
                 if (hasWorkGlove) {
                     const bonusPercent = workGlove[0].effect_value / 100;
                     salary = Math.floor(salary * (1 + bonusPercent));
-                    
-                    // Trừ lượt dùng
-                    await connection.execute(
-                        'UPDATE active_effects SET uses_left = uses_left - 1 WHERE psid = ? AND effect_type = "work_bonus"',
-                        [senderID]
-                    );
-                    await connection.execute('DELETE FROM active_effects WHERE uses_left <= 0');
                 }
                 
                 // VIP bonus +50%
@@ -105,12 +112,34 @@ module.exports = {
                     salary = Math.floor(salary * 1.5);
                 }
 
-                // Cộng tiền
-                await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [salary, senderID]);
+                await connection.beginTransaction();
+                try {
+                    if (hasWorkGlove) {
+                        await connection.execute(
+                            'UPDATE active_effects SET uses_left = uses_left - 1 WHERE psid = ? AND effect_type = "work_bonus"',
+                            [senderID]
+                        );
+                        await connection.execute('DELETE FROM active_effects WHERE uses_left <= 0');
+                    }
+
+                    // Cộng tiền
+                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [salary, senderID]);
+
+                    await connection.commit();
+                } catch (txErr) {
+                    await connection.rollback();
+                    throw txErr;
+                }
+
+                try {
+                    recordAction(senderID, 'work', 1);
+                    recordAction(senderID, 'work_earn', salary);
+                } catch (_) {}
 
                 let msg = `🛠️ THÀNH CÔNG!\nBạn đã ${jobName} chăm chỉ.\n💰 Nhận lương: +${salary.toLocaleString()} credits\n`;
                 if (hasWorkGlove) msg += `🧤 Găng tay: +${workGlove[0].effect_value}%!\n`;
                 if (hasVIP) msg += `👑 VIP: +50%!\n`;
+                msg += `⚡ Thể lực: -15 (${energyUse.energy}/${energyUse.maxEnergy})\n`;
                 msg += `💳 Số dư mới: ${(currentBalance + salary).toLocaleString()}`;
                 
                 return api.sendMessage(msg, threadID, messageID);

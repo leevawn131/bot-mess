@@ -1,6 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const { login } = require("ws3-fca");
+const { checkPermission } = require("./modules/utils/checkPermission");
+const { startModeScheduler } = require("./modules/utils/modeScheduler");
 
 // 1. LOAD CONFIG
 let config;
@@ -113,8 +115,69 @@ login(credentials, {
 
     console.log(`📂 Đã nạp ${global.commands.size} lệnh và ${events.size} sự kiện.`);
 
+    // --- BẬT HẸN GIỜ TỰ ĐỘNG ĐỔI MODE ---
+    startModeScheduler(api);
+
     // --- HÀM ĐẾM TIN NHẮN ---
     const statsPath = path.join(__dirname, "message_stats.json");
+
+    const getTimeKeys = (now = new Date()) => {
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+        const dayKey = `${year}-${month}-${day}`;
+        const monthKey = `${year}-${month}`;
+
+        const weekDate = new Date(year, now.getMonth(), now.getDate());
+        const weekDay = (weekDate.getDay() + 6) % 7;
+        weekDate.setDate(weekDate.getDate() - weekDay + 3);
+
+        const firstThursday = new Date(weekDate.getFullYear(), 0, 4);
+        const firstWeekDay = (firstThursday.getDay() + 6) % 7;
+        firstThursday.setDate(firstThursday.getDate() - firstWeekDay + 3);
+
+        const weekNumber = 1 + Math.round((weekDate - firstThursday) / (7 * 24 * 60 * 60 * 1000));
+        const weekKey = `${weekDate.getFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+
+        return { dayKey, weekKey, monthKey };
+    };
+
+    const trimMapByNewestKeys = (mapObj, limit) => {
+        const keys = Object.keys(mapObj || {}).sort();
+        if (keys.length <= limit) return;
+        const toDelete = keys.slice(0, keys.length - limit);
+        toDelete.forEach((k) => {
+            delete mapObj[k];
+        });
+    };
+
+    const normalizeEntry = (raw) => {
+        if (typeof raw === "number") {
+            return {
+                total: Number(raw) || 0,
+                daily: {},
+                weekly: {},
+                monthly: {}
+            };
+        }
+
+        if (!raw || typeof raw !== "object") {
+            return {
+                total: 0,
+                daily: {},
+                weekly: {},
+                monthly: {}
+            };
+        }
+
+        return {
+            total: Number(raw.total) || 0,
+            daily: raw.daily && typeof raw.daily === "object" ? raw.daily : {},
+            weekly: raw.weekly && typeof raw.weekly === "object" ? raw.weekly : {},
+            monthly: raw.monthly && typeof raw.monthly === "object" ? raw.monthly : {}
+        };
+    };
+
     const updateMessageStats = (senderID, threadID) => {
         try {
             let stats = {};
@@ -126,11 +189,21 @@ login(credentials, {
                 stats[threadID] = {};
             }
 
-            if (!stats[threadID][senderID]) {
-                stats[threadID][senderID] = 0;
-            }
+            const uid = String(senderID);
+            const entry = normalizeEntry(stats[threadID][uid]);
+            const { dayKey, weekKey, monthKey } = getTimeKeys();
 
-            stats[threadID][senderID]++;
+            entry.total = Number(entry.total || 0) + 1;
+            entry.daily[dayKey] = Number(entry.daily[dayKey] || 0) + 1;
+            entry.weekly[weekKey] = Number(entry.weekly[weekKey] || 0) + 1;
+            entry.monthly[monthKey] = Number(entry.monthly[monthKey] || 0) + 1;
+
+            // Giữ file stats gọn để tránh phình theo thời gian.
+            trimMapByNewestKeys(entry.daily, 45);
+            trimMapByNewestKeys(entry.weekly, 26);
+            trimMapByNewestKeys(entry.monthly, 18);
+
+            stats[threadID][uid] = entry;
 
             fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
         } catch (e) {
@@ -160,6 +233,9 @@ login(credentials, {
 
         const prefix = config.prefix || "!";
 
+        // Lệnh không cần check quyền (tự trong lệnh xử lý)
+        const FREE_COMMANDS = ["mode"];
+
         // =================================================================
         // XỬ LÝ LỆNH CÓ PREFIX (VD: !ve, !taixiu, !reset)
         // =================================================================
@@ -173,6 +249,18 @@ login(credentials, {
             if (command) {
                 try {
                     console.log(`🚀 [CMD] ${commandName} | UID: ${event.senderID}`);
+                    
+                    // KIỂM TRA QUYỀN: Bỏ qua các lệnh tự handle quyền
+                    if (!FREE_COMMANDS.includes(commandName)) {
+                        const permCheck = await checkPermission(event.threadID, event.senderID, api);
+                        if (!permCheck.allowed) {
+                            return api.sendMessage(
+                                `❌ Bạn không được dùng lệnh này trong mode hiện tại.`,
+                                event.threadID
+                            );
+                        }
+                    }
+                    
                     await command.execute({ api, event, args, config });
                 } catch (error) {
                     api.sendMessage(`❌ Lỗi thực thi lệnh: ${commandName}`, event.threadID);
@@ -184,6 +272,11 @@ login(credentials, {
         // XỬ LÝ REPLY (Tài Xỉu, Bầu Cua...)
         // =================================================================
         if (event.type === "message_reply") {
+            const permCheck = await checkPermission(event.threadID, event.senderID, api);
+            if (!permCheck.allowed) {
+                return;
+            }
+
             global.commands.forEach(async (cmd) => {
                 if (cmd.handleReply) {
                     try {

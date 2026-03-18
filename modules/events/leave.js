@@ -1,3 +1,42 @@
+const { addLeaveHistoryEntry } = require("../utils/leaveHistory");
+const { isAntioutEnabled } = require("../utils/antioutSettings");
+
+async function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function tryReAddUser({ api, threadID, leftID, retries = 2 }) {
+    let lastError = "";
+
+    for (let i = 0; i < retries; i++) {
+        try {
+            if (typeof api.gcmember !== "function") {
+                return { ok: false, error: "Thiếu hàm gcmember trong thư viện." };
+            }
+
+            const result = await api.gcmember("add", [String(leftID)], String(threadID));
+            if (result && result.type === "error_gc") {
+                lastError = String(result.error || "Không rõ lý do");
+            }
+
+            await wait(1200);
+            const threadInfo = await api.getThreadInfo(threadID);
+            const participantSet = new Set((threadInfo?.participantIDs || []).map(id => String(id)));
+            if (participantSet.has(String(leftID))) {
+                return { ok: true, error: "" };
+            }
+
+            if (!lastError) {
+                lastError = "Đã gửi lệnh mời lại nhưng chưa thấy thành viên quay lại nhóm.";
+            }
+        } catch (e) {
+            lastError = e?.message || "Không rõ lý do";
+        }
+    }
+
+    return { ok: false, error: lastError || "Không rõ lý do" };
+}
+
 module.exports = {
     name: "leave",
     eventType: ["log:unsubscribe"],
@@ -5,10 +44,29 @@ module.exports = {
     execute: async ({ api, event }) => {
         try {
             const { threadID, logMessageBody, logMessageData, author } = event;
-            const leftID = logMessageData.leftParticipantFbId;
+            const leftID = logMessageData?.leftParticipantFbId;
             const botID = api.getCurrentUserID();
+            const isKickByBody = Boolean(
+                logMessageBody &&
+                logMessageBody.includes("đã xóa") &&
+                logMessageBody.includes("khỏi nhóm")
+            );
+            const isSelfByBody = Boolean(
+                logMessageBody &&
+                logMessageBody.includes("đã rời khỏi nhóm")
+            );
+            const isSelfLeave = String(author) === String(leftID) || (!isKickByBody && isSelfByBody);
+            const now = Date.now();
+            const antioutEnabled = isAntioutEnabled(threadID);
 
-            if (leftID == botID) return;
+            if (!leftID || leftID == botID) return;
+
+            const suppressMap = global.leaveEventSuppressByThread || {};
+            const suppressUntil = Number(suppressMap[String(threadID)] || 0);
+            const shouldSuppressMessage = suppressUntil && now < suppressUntil;
+            if (suppressUntil && now >= suppressUntil) {
+                delete suppressMap[String(threadID)];
+            }
 
             // --- LOGIC TÁCH TÊN (DÙNG LAST INDEX OF) ---
             let name = "Thành viên";
@@ -37,8 +95,8 @@ module.exports = {
                 
                 // TRƯỜNG HỢP 2: TỰ OUT ("[TÊN] đã rời nhóm")
                 // Logic: Lấy toàn bộ phần trước chữ "đã rời nhóm" cuối cùng
-                else if (logMessageBody.includes("đã rời nhóm")) {
-                    const endPhrase = " đã rời nhóm";
+                else if (logMessageBody.includes("đã rời khỏi nhóm.")) {
+                    const endPhrase = " đã rời khỏi nhóm.";
                     const lastEndIndex = logMessageBody.lastIndexOf(endPhrase);
                     
                     if (lastEndIndex !== -1) {
@@ -53,6 +111,49 @@ module.exports = {
                     const info = await api.getUserInfo(leftID);
                     if (info[leftID]?.name) name = info[leftID].name;
                 } catch (e) {}
+            }
+
+            addLeaveHistoryEntry(threadID, {
+                uid: leftID,
+                name,
+                leftAt: now,
+                action: isSelfLeave ? "self" : "kick",
+                actorID: author
+            });
+
+            if (antioutEnabled && isSelfLeave) {
+                let addBackOk = false;
+                let addBackError = "";
+
+                try {
+                    const threadInfo = await api.getThreadInfo(threadID);
+                    const adminIDs = (threadInfo?.adminIDs || []).map((item) => String(item.id));
+                    const isBotAdmin = adminIDs.includes(String(botID));
+
+                    if (!isBotAdmin) {
+                        addBackError = "Bot chưa có quyền QTV.";
+                    } else {
+                        const addResult = await tryReAddUser({ api, threadID, leftID, retries: 2 });
+                        addBackOk = addResult.ok;
+                        addBackError = addResult.error;
+                    }
+                } catch (e) {
+                    addBackError = e?.message || "Không rõ lý do";
+                }
+
+                if (addBackOk) {
+                    return api.sendMessage(`🛡️ Antiout: ${name} tự rời nhóm và đã được kéo lại.`, threadID);
+                }
+
+                if (!shouldSuppressMessage) {
+                    return api.sendMessage(`⚠️ Antiout đang bật nhưng không kéo lại được ${name}.\nLý do: ${addBackError}`, threadID);
+                }
+
+                return;
+            }
+
+            if (shouldSuppressMessage) {
+                return;
             }
 
             // --- VĂN MẪU BỰA (Như cũ) ---
@@ -73,7 +174,7 @@ module.exports = {
             ];
 
             let msg = "";
-            if (author != leftID) {
+            if (!isSelfLeave) {
                 const random = kickMessages[Math.floor(Math.random() * kickMessages.length)];
                 msg = random.replace("{name}", name);
             } else {

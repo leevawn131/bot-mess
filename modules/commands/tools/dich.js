@@ -4,13 +4,13 @@ const { checkCooldown } = require('../../utils/cooldown');
 module.exports = {
     name: "dich",
     description: "Dịch mọi ngôn ngữ sang tiếng Việt",
-    usage: "!dich [doan can dich] hoac reply tin nhan va go !dich",
+    usage: "!dich [đoạn cần dịch] hoặc reply tin nhắn và gõ !dich",
     execute: async ({ api, event, args }) => {
         const { messageID, messageReply, senderID } = event;
         const threadID = String(event.threadID);
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "dich", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "dich", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
@@ -51,7 +51,7 @@ module.exports = {
             const msg = `🌐 Dịch (${sourceLang} -> vi):\n${translated}`;
             return api.sendMessage(msg, threadID, messageID);
         } catch (e) {
-            console.error("Loi dich:", e);
+            console.error("Lỗi dịch:", e);
             return api.sendMessage("❌ Lỗi khi dịch. Vui lòng thử lại sau.", threadID, messageID);
         }
     }

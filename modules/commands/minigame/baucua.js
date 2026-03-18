@@ -3,6 +3,10 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { checkCooldown } = require('../../utils/cooldown');
+const { checkMinigameLimit, recordMinigameSuccess } = require('../../utils/minigameLimiter');
+const { recordAction } = require('../../utils/questSystem');
+
+const TAX_RATE = 0.05;
 
 // Biến lưu trữ phiên (RAM)
 global.baucuaSessions = global.baucuaSessions || {};
@@ -97,11 +101,15 @@ module.exports = {
                     const matchCount = resultNames.filter(name => name === p.choice).length;
                     
                     if (matchCount > 0) {
-                        const winAmount = p.amount * (matchCount + 1);
+                        const grossWinAmount = p.amount * (matchCount + 1);
+                        const winProfit = p.amount * matchCount;
+                        const taxAmount = Math.floor(winProfit * TAX_RATE);
+                        const winAmount = grossWinAmount - taxAmount;
+                        const netProfit = Math.max(0, winProfit - taxAmount);
                         totalPay += winAmount;
 
                         await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [winAmount, p.id]);
-                        msg += `🟢 ${p.name}: ${p.choice.toUpperCase()} x${matchCount} (+${(p.amount * matchCount).toLocaleString()})\n`;
+                        msg += `🟢 ${p.name}: ${p.choice.toUpperCase()} x${matchCount} (+${netProfit.toLocaleString()})\n`;
                     } else {
                         msg += `🔴 ${p.name}: ${p.choice.toUpperCase()} (-${p.amount.toLocaleString()})\n`;
                     }
@@ -170,6 +178,11 @@ module.exports = {
 
         if (senderID === BOSS_ID) return api.sendMessage("❌ Boss không được cược!", threadID, senderID);
 
+        const limitCheck = checkMinigameLimit(senderID);
+        if (!limitCheck.allowed) {
+            return api.sendMessage(limitCheck.message, threadID, messageID);
+        }
+
         const args = body.trim().split(/\s+/);
         const choice = args[0]?.toLowerCase();
         let amountStr = args[1];
@@ -205,9 +218,13 @@ module.exports = {
             );
             if (jailRows.length > 0 && betAmount > 500000) {
                 const remainingMs = new Date(jailRows[0].jail_until) - new Date();
-                const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+                const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+                const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                 return api.sendMessage(
-                    `🔒 Bạn đang trong tù, chỉ được cược tối đa 500k.\n⏰ Còn lại: ${remainingHours} giờ`,
+                    `🔒 Bạn đang trong tù, chỉ được cược tối đa 500k.\n⏰ Còn lại: ${timeStr}`,
                     threadID,
                     messageID
                 );
@@ -235,6 +252,13 @@ module.exports = {
             }
 
             await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [betAmount, senderID]);
+
+            const minigameState = recordMinigameSuccess(senderID);
+
+            try {
+                recordAction(senderID, 'bet_count', 1);
+                recordAction(senderID, 'bet_amount', betAmount);
+            } catch (_) {}
             
             // Tăng games_played nếu cược >= 50k
             if (betAmount >= 50000) {
@@ -249,6 +273,10 @@ module.exports = {
             };
 
             api.setMessageReaction("✅", messageID, () => {}, true);
+
+            if (minigameState.locked) {
+                api.sendMessage(minigameState.message, threadID, messageID);
+            }
 
         } catch (e) {
             console.error("Lỗi Baucua Reply:", e);

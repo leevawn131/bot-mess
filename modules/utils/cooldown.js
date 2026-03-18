@@ -1,4 +1,4 @@
-const DEFAULT_DURATION_MS = 5000;
+const DEFAULT_DURATION_MS = 10000;
 
 function checkCooldown({ command, key, durationMs = DEFAULT_DURATION_MS, now = Date.now() }) {
     if (!command || !key) {

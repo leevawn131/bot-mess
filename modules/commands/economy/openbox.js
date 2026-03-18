@@ -81,35 +81,56 @@ module.exports = {
 
             if (openAll || quantityToOpen > 1) {
                 // Mở nhiều hộp
-                let totalBoxes = openAll ? boxes[0].uses_left : quantityToOpen;
-                
-                // Check xem có đủ hộp không
-                if (totalBoxes > boxes[0].uses_left) {
-                    return api.sendMessage(`❌ Bạn chỉ có ${boxes[0].uses_left} hộp. Không thể mở ${totalBoxes} hộp!`, threadID, messageID);
-                }
-                
+                await connection.beginTransaction();
+
+                let totalBoxes = 0;
                 let totalCredits = 0;
                 const rewards = [];
 
-                // Mở từng hộp
-                for (let i = 0; i < totalBoxes; i++) {
-                    const reward = generateReward();
-                    if (reward.type === 'credits') {
-                        totalCredits += reward.value;
-                        rewards.push(reward.msg);
+                try {
+                    const [lockedBoxes] = await connection.execute(
+                        'SELECT id, uses_left FROM user_inventory WHERE id = ? AND psid = ? FOR UPDATE',
+                        [boxes[0].id, senderID]
+                    );
+
+                    if (lockedBoxes.length === 0 || Number(lockedBoxes[0].uses_left) <= 0) {
+                        await connection.rollback();
+                        return api.sendMessage("❌ Hộp đã hết hoặc không còn tồn tại. Thử lại sau nhé.", threadID, messageID);
                     }
-                }
 
-                // Trừ hộp bí ẩn
-                const remainingBoxes = boxes[0].uses_left - totalBoxes;
-                if (remainingBoxes <= 0) {
-                    await connection.execute('DELETE FROM user_inventory WHERE id = ?', [boxes[0].id]);
-                } else {
-                    await connection.execute('UPDATE user_inventory SET uses_left = ? WHERE id = ?', [remainingBoxes, boxes[0].id]);
-                }
+                    const currentBox = lockedBoxes[0];
+                    totalBoxes = openAll ? Number(currentBox.uses_left) : quantityToOpen;
 
-                // Trao thưởng (credits)
-                await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [totalCredits, senderID]);
+                    if (totalBoxes > Number(currentBox.uses_left)) {
+                        await connection.rollback();
+                        return api.sendMessage(`❌ Bạn chỉ có ${currentBox.uses_left} hộp. Không thể mở ${totalBoxes} hộp!`, threadID, messageID);
+                    }
+
+                    // Mở từng hộp
+                    for (let i = 0; i < totalBoxes; i++) {
+                        const reward = generateReward();
+                        if (reward.type === 'credits') {
+                            totalCredits += reward.value;
+                            rewards.push(reward.msg);
+                        }
+                    }
+
+                    // Trừ hộp bí ẩn
+                    const remainingBoxes = Number(currentBox.uses_left) - totalBoxes;
+                    if (remainingBoxes <= 0) {
+                        await connection.execute('DELETE FROM user_inventory WHERE id = ?', [currentBox.id]);
+                    } else {
+                        await connection.execute('UPDATE user_inventory SET uses_left = ? WHERE id = ?', [remainingBoxes, currentBox.id]);
+                    }
+
+                    // Trao thưởng (credits)
+                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [totalCredits, senderID]);
+
+                    await connection.commit();
+                } catch (txErr) {
+                    await connection.rollback();
+                    throw txErr;
+                }
 
                 // Đặt cooldown (10 giây)
                 // Hiển thị kết quả
@@ -124,35 +145,51 @@ module.exports = {
                 // Mở 1 hộp (cách cũ)
                 const reward = generateReward();
 
-                // Trừ hộp bí ẩn
-                const box = boxes[0];
-                if (box.uses_left <= 1) {
-                    await connection.execute('DELETE FROM user_inventory WHERE id = ?', [box.id]);
-                } else {
-                    await connection.execute('UPDATE user_inventory SET uses_left = uses_left - 1 WHERE id = ?', [box.id]);
-                }
-
-                // Trao thưởng
-                if (reward.type === 'credits') {
-                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [reward.value, senderID]);
-                } else if (reward.type === 'item') {
-                    // Check item đã có chưa
-                    const [existing] = await connection.execute(
-                        'SELECT * FROM user_inventory WHERE psid = ? AND item_key = ?',
-                        [senderID, reward.itemKey]
+                await connection.beginTransaction();
+                try {
+                    const [lockedBoxes] = await connection.execute(
+                        'SELECT id, uses_left FROM user_inventory WHERE id = ? AND psid = ? FOR UPDATE',
+                        [boxes[0].id, senderID]
                     );
-                    
-                    if (existing.length > 0) {
-                        await connection.execute(
-                            'UPDATE user_inventory SET uses_left = uses_left + ? WHERE psid = ? AND item_key = ?',
-                            [reward.uses, senderID, reward.itemKey]
-                        );
-                    } else {
-                        await connection.execute(
-                            'INSERT INTO user_inventory (psid, item_key, uses_left) VALUES (?, ?, ?)',
-                            [senderID, reward.itemKey, reward.uses]
-                        );
+
+                    if (lockedBoxes.length === 0 || Number(lockedBoxes[0].uses_left) <= 0) {
+                        await connection.rollback();
+                        return api.sendMessage("❌ Hộp đã hết hoặc không còn tồn tại. Thử lại sau nhé.", threadID, messageID);
                     }
+
+                    const box = lockedBoxes[0];
+                    if (Number(box.uses_left) <= 1) {
+                        await connection.execute('DELETE FROM user_inventory WHERE id = ?', [box.id]);
+                    } else {
+                        await connection.execute('UPDATE user_inventory SET uses_left = uses_left - 1 WHERE id = ?', [box.id]);
+                    }
+
+                    // Trao thưởng
+                    if (reward.type === 'credits') {
+                        await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [reward.value, senderID]);
+                    } else if (reward.type === 'item') {
+                        const [existing] = await connection.execute(
+                            'SELECT * FROM user_inventory WHERE psid = ? AND item_key = ?',
+                            [senderID, reward.itemKey]
+                        );
+
+                        if (existing.length > 0) {
+                            await connection.execute(
+                                'UPDATE user_inventory SET uses_left = uses_left + ? WHERE psid = ? AND item_key = ?',
+                                [reward.uses, senderID, reward.itemKey]
+                            );
+                        } else {
+                            await connection.execute(
+                                'INSERT INTO user_inventory (psid, item_key, uses_left) VALUES (?, ?, ?)',
+                                [senderID, reward.itemKey, reward.uses]
+                            );
+                        }
+                    }
+
+                    await connection.commit();
+                } catch (txErr) {
+                    await connection.rollback();
+                    throw txErr;
                 }
 
                 return api.sendMessage(

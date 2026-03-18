@@ -2,29 +2,55 @@ const { checkCooldown } = require('../../utils/cooldown');
 
 module.exports = {
     name: "help",
-    description: "Xem danh sách lệnh",
+    description: "Xem danh sách lệnh theo nhóm",
     usage: "[tên lệnh]",
-    execute: async ({ api, event, args }) => {
+    execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
-        const prefix = "!"; 
+        const prefix = config?.prefix || "!";
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "help", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "help", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
 
         try {
             // 1. Lấy danh sách lệnh từ Map global
-            const commandList = Array.from(global.commands.keys());
+            const commandList = Array.from(global.commands.keys()).sort();
+            const commandSet = new Set(commandList);
+
+            const sections = [
+                { title: "💰 Kinh tế", commands: ["tien", "bank", "lamviec", "diemdanh", "vay", "shop", "buy", "inv", "use", "openbox", "cuop", "daigia", "quest"] },
+                { title: "🎮 Minigame", commands: ["taixiu", "baucua", "lode", "duoihinhbatchu"] },
+                { title: "👥 Nhóm", commands: ["admingr", "kick", "grinfo", "checkout", "antiout", "checktt", "checkbd", "ghepdoi", "setbd"] },
+                { title: "🛠️ Công cụ", commands: ["help", "ai", "dich", "say", "mp3", "vidgai", "đấm", "reset"] },
+                { title: "⚙️ Hệ thống", commands: ["ping", "uid", "tu", "go", "mode"] }
+            ];
+
+            const grouped = sections
+                .map((section) => {
+                    const available = section.commands.filter((name) => commandSet.has(name));
+                    return { title: section.title, commands: available };
+                })
+                .filter((section) => section.commands.length > 0);
+
+            const groupedNames = new Set(grouped.flatMap((section) => section.commands));
+            const others = commandList.filter((name) => !groupedNames.has(name));
             
             if (!args[0]) {
-                // TẠO TIN NHẮN GỌN GÀNG (Tránh quá dài gây lỗi Facebook)
-                let msg = "📜 DANH SÁCH LỆNH\n━━━━━━━━━━━━━\n";
-                msg += commandList.join(", "); // Dùng dấu phẩy cho gọn để tránh quá nhiều dòng
-                msg += `\n\n👉 Gõ ${prefix}help [tên lệnh] để xem chi tiết.`;
+                let msg = `📜 DANH SÁCH LỆNH (${commandList.length})\n━━━━━━━━━━━━━\n`;
 
-                // CHỈ GỬI 2 THAM SỐ ĐỂ AN TOÀN TUYỆT ĐỐI
+                grouped.forEach((section) => {
+                    msg += `${section.title}: ${section.commands.join(", ")}\n`;
+                });
+
+                if (others.length > 0) {
+                    msg += `📦 Khác: ${others.join(", ")}\n`;
+                }
+
+                msg += "━━━━━━━━━━━━━\n";
+                msg += `👉 Chi tiết: ${prefix}help [tên lệnh]`;
+
                 return api.sendMessage(msg, threadID);
             }
 
@@ -38,7 +64,7 @@ module.exports = {
 
             const detailMsg = `ℹ️ LỆNH: ${commandName.toUpperCase()}\n` +
                               `📝 Mô tả: ${command.description || "Chưa có"}\n` +
-                              `🛠️ Cách dùng: ${prefix}${commandName} ${command.usage || ""}`;
+                              `🛠️ Cách dùng: ${prefix}${commandName}${command.usage ? ` ${command.usage}` : ""}`;
 
             return api.sendMessage(detailMsg, threadID);
 

@@ -1,5 +1,6 @@
 const mysql = require('mysql2/promise');
 const { checkCooldown } = require('../../utils/cooldown');
+const { checkMinigameLimit, recordMinigameSuccess } = require('../../utils/minigameLimiter');
 
 // ID CỦA BOSS (Nhà cái ôm lô)
 const BOSS_ID = "100037351338722";
@@ -21,6 +22,11 @@ module.exports = {
 
         // Boss không được chơi (để tránh tự lấy tiền túi bỏ túi mình)
         if (senderID === BOSS_ID) return api.sendMessage("❌ Boss là chủ lô, không được đánh!", threadID, messageID);
+
+        const limitCheck = checkMinigameLimit(senderID);
+        if (!limitCheck.allowed) {
+            return api.sendMessage(limitCheck.message, threadID, messageID);
+        }
 
         // Validate đầu vào
         const pick = args[0];
@@ -55,9 +61,13 @@ module.exports = {
             );
             if (jailRows.length > 0 && amount > 500000) {
                 const remainingMs = new Date(jailRows[0].jail_until) - new Date();
-                const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+                const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+                const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                 return api.sendMessage(
-                    `🔒 Bạn đang trong tù, chỉ được cược tối đa 500k.\n⏰ Còn lại: ${remainingHours} giờ`,
+                    `🔒 Bạn đang trong tù, chỉ được cược tối đa 500k.\n⏰ Còn lại: ${timeStr}`,
                     threadID,
                     messageID
                 );
@@ -93,6 +103,8 @@ module.exports = {
 
             // TRỪ TIỀN NGƯỜI CHƠI TRƯỚC (Coi như đã đóng tiền cho Boss)
             await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [amount, senderID]);
+
+            const minigameState = recordMinigameSuccess(senderID);
             
             // Tăng games_played nếu cược >= 50k
             if (amount >= 50000) {
@@ -175,6 +187,10 @@ module.exports = {
                     );
                     await connection.execute('DELETE FROM active_effects WHERE uses_left <= 0');
                 }
+            }
+
+            if (minigameState.locked) {
+                msg += `\n\n${minigameState.message}`;
             }
 
             return api.sendMessage(msg, threadID, messageID);

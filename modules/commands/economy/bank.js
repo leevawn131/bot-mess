@@ -2,6 +2,7 @@ const mysql = require('mysql2/promise');
 const path = require('path');
 const fs = require('fs');
 const { checkCooldown } = require('../../utils/cooldown');
+const { syncBankPool } = require('../../utils/bankPool');
 
 // ID CỦA BOSS (Trả tiền lãi cho người gửi tiết kiệm)
 const BOSS_ID = "100037351338722";
@@ -16,7 +17,7 @@ function getDateString(date) {
 module.exports = {
     name: "bank",
     description: "Quản lý tiền gửi ngân hàng (lãi 5%/ngày)",
-    usage: "!bank gui [số_tiền] | !bank rut [số_tiền] | !bank check\n⚠️ Chỉ gửi 1 lần/ngày, rút phải chờ sang ngày mới + check lãi",
+    usage: "!bank gui [số_tiền] | !bank rut [số_tiền] | !bank check | !bank sync\n⚠️ Chỉ gửi 1 lần/ngày, rút phải chờ sang ngày mới + check lãi",
     
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -53,6 +54,33 @@ module.exports = {
 
             const userCredits = parseInt(userRows[0].credits);
             const userName = userRows[0].name;
+
+            // Đồng bộ pool thường xuyên để luôn chính xác
+            await syncBankPool(connection);
+
+            // === SYNC BANK POOL THỦ CÔNG (ADMIN/BOSS) ===
+            if (["sync"].includes(command)) {
+                const isBoss = senderID === BOSS_ID;
+                let isThreadAdmin = false;
+
+                try {
+                    const threadInfo = await api.getThreadInfo(threadID);
+                    if (threadInfo?.isGroup && Array.isArray(threadInfo.adminIDs)) {
+                        isThreadAdmin = threadInfo.adminIDs.some(admin => String(admin.id) === String(senderID));
+                    }
+                } catch (err) {}
+
+                if (!isBoss && !isThreadAdmin) {
+                    return api.sendMessage("❌ Chỉ Boss hoặc Admin nhóm mới dùng được !bank sync.", threadID, messageID);
+                }
+
+                const totalBalance = await syncBankPool(connection);
+                return api.sendMessage(
+                    `✅ ĐỒNG BỘ BANK_POOL THÀNH CÔNG!\n🏦 Tổng quỹ hiện tại: ${totalBalance.toLocaleString()} credits`,
+                    threadID,
+                    messageID
+                );
+            }
 
             // === GỬI TIỀN VÀO BANK ===
             if (["gui", "deposit", "save"].includes(command)) {
@@ -117,8 +145,8 @@ module.exports = {
                         );
                     }
 
-                    // Cộng vào bank pool
-                    await connection.execute('UPDATE bank_pool SET total_balance = total_balance + ? WHERE id = 1', [amount]);
+                    // Đồng bộ bank pool theo tổng thực tế
+                    await syncBankPool(connection);
 
                     await connection.commit();
 
@@ -201,8 +229,8 @@ module.exports = {
                     // Trừ tiền từ bank
                     await connection.execute('UPDATE bank_accounts SET balance = balance - ? WHERE psid = ?', [amount, senderID]);
 
-                    // Trừ từ bank pool
-                    await connection.execute('UPDATE bank_pool SET total_balance = total_balance - ? WHERE id = 1', [amount]);
+                    // Đồng bộ bank pool theo tổng thực tế
+                    await syncBankPool(connection);
 
                     await connection.commit();
 
@@ -261,11 +289,8 @@ module.exports = {
                                 [newBalance, now, senderID]
                             );
 
-                            // Boss trả tiền lãi (thêm vào bank pool)
-                            await connection.execute(
-                                'UPDATE bank_pool SET total_balance = total_balance + ? WHERE id = 1',
-                                [interestEarned]
-                            );
+                            // Đồng bộ bank pool theo tổng thực tế
+                            await syncBankPool(connection);
 
                             // Trừ tiền boss
                             await connection.execute(
@@ -309,7 +334,7 @@ module.exports = {
             // HƯỚNG DẪN
             else {
                 return api.sendMessage(
-                    `🏦 NGÂN HÀNG - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n📥 !bank gui [số_tiền] - Gửi tiền\n📤 !bank rut [số_tiền] - Rút tiền\n🔍 !bank check - Kiểm tra & cập nhật lãi\n━━━━━━━━━━━━━━━━━━\n💰 Lãi suất: 5%/ngày (lãi kép)\n⚠️ Quy tắc rút tiền:\n  • Phải chờ sang ngày tiếp theo (00:00 UTC+7)\n  • Phải dùng !bank check để cập nhật lãi\n  • Sau đó mới có thể rút\n📝 Chỉ được gửi 1 lần/ngày (tính theo ngày lịch)`,
+                    `🏦 NGÂN HÀNG - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n📥 !bank gui [số_tiền] - Gửi tiền\n📤 !bank rut [số_tiền] - Rút tiền\n🔍 !bank check - Kiểm tra & cập nhật lãi\n🛠️ !bank sync - Đồng bộ bank_pool (Boss/Admin)\n━━━━━━━━━━━━━━━━━━\n💰 Lãi suất: 5%/ngày (lãi kép)\n⚠️ Quy tắc rút tiền:\n  • Phải chờ sang ngày tiếp theo (00:00 UTC+7)\n  • Phải dùng !bank check để cập nhật lãi\n  • Sau đó mới có thể rút\n📝 Chỉ được gửi 1 lần/ngày (tính theo ngày lịch)`,
                     threadID,
                     messageID
                 );

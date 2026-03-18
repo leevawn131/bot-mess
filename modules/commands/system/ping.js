@@ -7,7 +7,7 @@ module.exports = {
         const { threadID, messageID, senderID } = event;
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "ping", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "ping", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }

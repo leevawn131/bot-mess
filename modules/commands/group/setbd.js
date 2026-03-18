@@ -2,13 +2,14 @@ module.exports = {
     name: "setbd",
     description: "Đổi biệt danh",
     usage: "[@tag/reply] [tên]",
-    execute: async ({ api, event, args, config }) => {
+    execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID, mentions, messageReply } = event;
-        const botID = api.getCurrentUserID();
+        const botID = String(api.getCurrentUserID());
         const { checkCooldown } = require('../../utils/cooldown');
+        const { ADMIN_BOT_UIDS } = require('../../utils/checkPermission');
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "setbd", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "setbd", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
@@ -57,11 +58,16 @@ module.exports = {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm để kiểm tra quyền.", threadID);
         }
 
-        const adminIDs = threadInfo.adminIDs.map(item => item.id); // Danh sách ID Quản trị viên
+        const adminIDs = (threadInfo.adminIDs || []).map(item => String(item.id)); // Danh sách ID Quản trị viên
         const isBotAdmin = adminIDs.includes(botID);              // Bot có phải Admin không?
-        const isSenderAdmin = adminIDs.includes(senderID);        // Người dùng lệnh có phải Admin không?
+        const isSenderAdmin = adminIDs.includes(String(senderID)); // Người dùng lệnh có phải Admin không?
+        const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
 
         // 3. KIỂM TRA QUYỀN (LOGIC BẢO MẬT)
+
+        if (!isSenderAdmin && !isSenderBotAdmin) {
+            return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh setbd!", threadID);
+        }
 
         // Rule 1: Bot bắt buộc phải là Admin mới đổi được tên (để tránh lỗi permission)
         if (!isBotAdmin) {
@@ -70,10 +76,7 @@ module.exports = {
 
         // Rule 2: Nếu đổi tên cho NGƯỜI KHÁC, người dùng lệnh phải là Admin
         if (targetID !== senderID) {
-            // Cho phép Admin Bot (trong config) được ngoại lệ
-            const isBotOwner = config.adminIDs && config.adminIDs.includes(senderID);
-            
-            if (!isSenderAdmin && !isBotOwner) {
+            if (!isSenderAdmin && !isSenderBotAdmin) {
                 return api.sendMessage("⚠️ Chỉ Quản trị viên mới được đổi biệt danh cho người khác!", threadID);
             }
         }

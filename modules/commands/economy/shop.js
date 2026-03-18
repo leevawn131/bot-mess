@@ -1,5 +1,7 @@
 const mysql = require('mysql2/promise');
 const { checkCooldown } = require('../../utils/cooldown');
+const { ensureEnergyPotionItem } = require('../../utils/energySystem');
+
 
 module.exports = {
     name: "shop",
@@ -10,7 +12,7 @@ module.exports = {
         const { threadID, messageID, senderID } = event;
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "shop", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "shop", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
@@ -21,6 +23,7 @@ module.exports = {
         let connection;
         try {
             connection = await mysql.createConnection(dbConfig);
+            await ensureEnergyPotionItem(connection);
 
             const [items] = await connection.execute('SELECT * FROM shop_items ORDER BY price ASC');
             

@@ -1,3 +1,5 @@
+const { removeLeaveHistoryEntries } = require("../utils/leaveHistory");
+
 module.exports = {
     name: "welcome",
     eventType: ["log:subscribe"], // Sự kiện thêm người vào nhóm
@@ -13,6 +15,13 @@ module.exports = {
         try {
             // 2. Lấy danh sách toàn bộ người mới
             const newParticipants = event.logMessageData.addedParticipants;
+            const joinedUIDs = newParticipants
+                .map(user => String(user.userFbId || "").trim())
+                .filter(Boolean);
+
+            if (joinedUIDs.length > 0) {
+                removeLeaveHistoryEntries(threadID, joinedUIDs);
+            }
             
             // Lấy ra mảng tên: ["Nguyễn Văn A", "Trần Thị B", "Lê Văn C", ...]
             const namesArray = newParticipants.map(user => user.fullName);

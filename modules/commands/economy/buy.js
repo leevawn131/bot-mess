@@ -1,5 +1,6 @@
 const mysql = require('mysql2/promise');
 const { checkCooldown } = require('../../utils/cooldown');
+const { ensureEnergyPotionItem } = require('../../utils/energySystem');
 
 module.exports = {
     name: "buy",
@@ -35,6 +36,7 @@ module.exports = {
         let connection;
         try {
             connection = await mysql.createConnection(dbConfig);
+            await ensureEnergyPotionItem(connection);
 
             // Check item tồn tại trong shop
             const [items] = await connection.execute('SELECT * FROM shop_items WHERE item_key = ?', [itemKey]);
@@ -59,6 +61,10 @@ module.exports = {
                 return api.sendMessage(`💸 Không đủ tiền!\nGiá: ${totalPrice.toLocaleString()} xu\nBạn có: ${user.credits.toLocaleString()} xu`, threadID, messageID);
             }
 
+            await connection.beginTransaction();
+
+            try {
+
             // Xử lý VIP riêng
             if (item.type === 'vip') {
                 // Trừ tiền
@@ -80,6 +86,8 @@ module.exports = {
                 }
                 
                 await connection.execute('UPDATE messenger_users SET vip_until = ? WHERE psid = ?', [vipUntil, senderID]);
+
+                await connection.commit();
                 
                 return api.sendMessage(
                     `✅ MUA THÀNH CÔNG!\n${item.name} x${quantity}\n💰 Trừ: ${totalPrice.toLocaleString()} xu\n👑 VIP đến: ${vipUntil.toLocaleString('vi-VN')}\n💳 Còn lại: ${(user.credits - totalPrice).toLocaleString()} xu`,
@@ -122,10 +130,17 @@ module.exports = {
             // Trừ tiền
             await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [totalPrice, senderID]);
 
+            await connection.commit();
+
             return api.sendMessage(
                 `✅ MUA THÀNH CÔNG!\n${item.name} x${quantity}\n💰 Trừ: ${totalPrice.toLocaleString()} xu\n📦 Tổng lượng: ${item.uses * quantity}\n💳 Còn lại: ${(user.credits - totalPrice).toLocaleString()} xu`,
                 threadID, messageID
             );
+
+            } catch (txErr) {
+                await connection.rollback();
+                throw txErr;
+            }
 
         } catch (e) {
             console.error(e);

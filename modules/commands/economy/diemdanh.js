@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise');
+const { recordAction } = require('../../utils/questSystem');
 
 // Bộ nhớ đệm để chống spam race condition (ngăn gửi nhiều lệnh trong 1 giây)
 global.diemdanhLock = global.diemdanhLock || new Set();
@@ -65,6 +66,10 @@ module.exports = {
                 'UPDATE messenger_users SET credits = credits + ?, last_checkin = ? WHERE psid = ?', 
                 [reward, todayStr, senderID]
             );
+
+            try {
+                recordAction(senderID, 'checkin', 1);
+            } catch (_) {}
 
             let msg = `📅 ĐIỂM DANH THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n` +
                 `🎁 Quà tặng: +${reward.toLocaleString()} xu\n`;

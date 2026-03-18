@@ -2,6 +2,9 @@ const mysql = require('mysql2/promise');
 const path = require('path');
 const fs = require('fs');
 const { checkCooldown } = require('../../utils/cooldown');
+const { recordAction } = require('../../utils/questSystem');
+
+const TRANSFER_TAX_RATE = 0.02;
 
 // ID CỦA BOSS (Không giới hạn hạn mức)
 const BOSS_ID = "100037351338722";
@@ -13,7 +16,7 @@ module.exports = {
         const { threadID, messageID, senderID, mentions, type, messageReply } = event;
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "tien", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "tien", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
@@ -142,9 +145,11 @@ module.exports = {
                 try {
                     const [sRows] = await connection.execute('SELECT credits, games_played, vip_until FROM messenger_users WHERE psid = ?', [senderID]);
                     const sBalance = parseInt(sRows[0]?.credits || 0);
-                    if (sBalance < amount) {
+                    const taxAmount = Math.floor(amount * TRANSFER_TAX_RATE);
+                    const totalDebit = amount + taxAmount;
+                    if (sBalance < totalDebit) {
                         await connection.rollback();
-                        return api.sendMessage(`💸 Thiếu tiền! Có: ${sBalance.toLocaleString()}`, threadID, messageID);
+                        return api.sendMessage(`💸 Thiếu tiền! Có: ${sBalance.toLocaleString()} | Cần: ${totalDebit.toLocaleString()} (gồm thuế 2%)`, threadID, messageID);
                     }
 
                     // Variables for limit tracking
@@ -208,8 +213,11 @@ module.exports = {
                         return api.sendMessage(`❌ ${targetName} chưa đăng ký TK.`, threadID, messageID);
                     }
                     
-                    await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [amount, senderID]);
+                    await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [totalDebit, senderID]);
                     await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [amount, targetID]);
+                    if (taxAmount > 0) {
+                        await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [taxAmount, BOSS_ID]);
+                    }
                     
                     // Cập nhật transferred_today (trừ Boss)
                     if (senderID !== BOSS_ID) {
@@ -218,10 +226,15 @@ module.exports = {
                     
                     await connection.commit();
 
+                    try {
+                        recordAction(senderID, 'transfer', 1);
+                        recordAction(senderID, 'transfer_amount', amount);
+                    } catch (_) {}
+
                     // Thông báo thành công
                     if (senderID === BOSS_ID) {
                         return api.sendMessage(
-                            `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName} 👑\n📥 Nhận: ${targetName}\n💰 Tiền: ${amount.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🔓 Không giới hạn (Boss)`, 
+                            `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName} 👑\n📥 Nhận: ${targetName}\n💰 Tiền chuyển: ${amount.toLocaleString()}\n🧾 Thuế chuyển (2%): ${taxAmount.toLocaleString()}\n💸 Tổng trừ: ${totalDebit.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🔓 Không giới hạn (Boss)`, 
                             threadID, 
                             messageID
                         );
@@ -229,7 +242,7 @@ module.exports = {
                         const newTransferred = transferredToday + amount;
                         const remaining = dailyLimit - newTransferred;
                         return api.sendMessage(
-                            `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName}\n📥 Nhận: ${targetName}\n💰 Tiền: ${amount.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n💳 Hạn mức còn lại: ${remaining.toLocaleString()}/${dailyLimit.toLocaleString()}`, 
+                            `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName}\n📥 Nhận: ${targetName}\n💰 Tiền chuyển: ${amount.toLocaleString()}\n🧾 Thuế chuyển (2%): ${taxAmount.toLocaleString()}\n💸 Tổng trừ: ${totalDebit.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n💳 Hạn mức còn lại: ${remaining.toLocaleString()}/${dailyLimit.toLocaleString()}`, 
                             threadID, 
                             messageID
                         );

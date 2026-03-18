@@ -1,0 +1,14 @@
+{
+  "24947224841545380": [
+    {
+      "time": "01:15",
+      "mode": "admingr",
+      "enabled": true
+    },
+    {
+      "time": "08:00",
+      "mode": "user",
+      "enabled": true
+    }
+  ]
+}

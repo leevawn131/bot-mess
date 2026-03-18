@@ -1,4 +1,5 @@
 const { checkCooldown } = require('../../utils/cooldown');
+const { ADMIN_BOT_UIDS } = require('../../utils/checkPermission');
 
 module.exports = {
     name: "kick",
@@ -8,7 +9,7 @@ module.exports = {
         const { threadID, messageID, senderID, mentions } = event;
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "kick", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "kick", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
@@ -28,14 +29,16 @@ module.exports = {
 
             // 2. Lấy thông tin nhóm và danh sách Admin
             const threadInfo = await api.getThreadInfo(threadID);
-            const adminIDs = threadInfo.adminIDs.map(i => i.id);
-            const botID = api.getCurrentUserID();
+            const adminIDs = (threadInfo.adminIDs || []).map(i => String(i.id));
+            const botID = String(api.getCurrentUserID());
+            const isSenderAdmin = adminIDs.includes(String(senderID));
+            const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
 
             // --- KIỂM TRA QUYỀN HẠN ---
 
             // A. Kiểm tra quyền của NGƯỜI DÙNG LỆNH (Sender)
-            if (!adminIDs.includes(senderID)) {
-                return api.sendMessage("⚠️ Bạn không phải là Quản Trị Viên, không thể kick người khác!", threadID, messageID);
+            if (!isSenderAdmin && !isSenderBotAdmin) {
+                return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh kick!", threadID, messageID);
             }
 
             // B. Kiểm tra quyền của BOT
@@ -71,13 +74,13 @@ module.exports = {
             
             for (const targetID of targetIDs) {
                 // Kiểm tra không kick Admin
-                if (adminIDs.includes(targetID)) {
+                if (adminIDs.includes(String(targetID))) {
                     skipCount++;
                     continue;
                 }
                 
                 // Không kick bot
-                if (targetID === botID) {
+                if (String(targetID) === botID) {
                     skipCount++;
                     continue;
                 }

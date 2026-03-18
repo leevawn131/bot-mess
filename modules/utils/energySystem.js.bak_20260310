@@ -1,0 +1,277 @@
+const fs = require("fs");
+const path = require("path");
+
+const DEFAULT_MAX_ENERGY = 100;
+const VIP_MAX_ENERGY = 150;
+const NORMAL_REGEN_PER_SEC = 1 / 60;
+const VIP_REGEN_PER_SEC = 1.5 / 60;
+
+const ENERGY_POTION_ITEM = {
+    item_key: "energy_potion",
+    name: "Binh hoi the luc",
+    price: 75000,
+    type: "energy_restore",
+    effect_value: 50,
+    uses: 1,
+    stackable: 1,
+    description: "Hoi ngay 50 the luc"
+};
+
+function getDBConfigFromRuntime(config) {
+    const db = config?.database;
+    if (db?.host && db?.user && db?.name) {
+        return {
+            host: db.host,
+            port: db.port,
+            user: db.user,
+            password: db.password,
+            database: db.name
+        };
+    }
+
+    try {
+        const configPath = path.resolve(process.cwd(), "config.json");
+        if (!fs.existsSync(configPath)) return null;
+        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        const fileDb = fileConfig?.database;
+        if (!fileDb) return null;
+        return {
+            host: fileDb.host,
+            port: fileDb.port,
+            user: fileDb.user,
+            password: fileDb.password,
+            database: fileDb.name
+        };
+    } catch {
+        return null;
+    }
+}
+
+async function ensureEnergyColumns(connection) {
+    const [columns] = await connection.execute(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'messenger_users'
+           AND COLUMN_NAME IN ('energy', 'max_energy', 'last_energy_update')`
+    );
+
+    const existing = new Set(columns.map((row) => String(row.COLUMN_NAME)));
+
+    if (!existing.has("energy")) {
+        await connection.execute(
+            "ALTER TABLE messenger_users ADD COLUMN energy INT NOT NULL DEFAULT 100"
+        );
+    }
+
+    if (!existing.has("max_energy")) {
+        await connection.execute(
+            "ALTER TABLE messenger_users ADD COLUMN max_energy INT NOT NULL DEFAULT 100"
+        );
+    }
+
+    if (!existing.has("last_energy_update")) {
+        await connection.execute(
+            "ALTER TABLE messenger_users ADD COLUMN last_energy_update TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"
+        );
+    }
+}
+
+function normalizeTimestampMs(dateValue, nowMs) {
+    const parsedMs = dateValue ? new Date(dateValue).getTime() : nowMs;
+    if (!Number.isFinite(parsedMs)) return nowMs;
+    if (parsedMs > nowMs) return nowMs;
+    return parsedMs;
+}
+
+function computeRegeneratedState(row, nowMs = Date.now()) {
+    const nowDate = new Date(nowMs);
+    const hasVip = !!(row.vip_until && new Date(row.vip_until) > nowDate);
+    const maxEnergy = hasVip ? VIP_MAX_ENERGY : DEFAULT_MAX_ENERGY;
+    const regenPerSec = hasVip ? VIP_REGEN_PER_SEC : NORMAL_REGEN_PER_SEC;
+
+    let energy = Number(row.energy);
+    if (!Number.isFinite(energy)) energy = maxEnergy;
+    energy = Math.max(0, Math.min(Math.floor(energy), maxEnergy));
+
+    let lastUpdateMs = normalizeTimestampMs(row.last_energy_update, nowMs);
+
+    if (energy >= maxEnergy) {
+        return {
+            hasVip,
+            maxEnergy,
+            regenPerSec,
+            energy: maxEnergy,
+            lastUpdateMs: nowMs
+        };
+    }
+
+    const elapsedMs = Math.max(0, nowMs - lastUpdateMs);
+    const recovered = Math.floor((elapsedMs / 1000) * regenPerSec);
+
+    if (recovered > 0) {
+        energy = Math.min(maxEnergy, energy + recovered);
+        const consumedMs = Math.floor((recovered / regenPerSec) * 1000);
+        lastUpdateMs += consumedMs;
+    }
+
+    if (energy >= maxEnergy) {
+        lastUpdateMs = nowMs;
+    }
+
+    return {
+        hasVip,
+        maxEnergy,
+        regenPerSec,
+        energy,
+        lastUpdateMs
+    };
+}
+
+function formatWaitSeconds(totalSeconds) {
+    const sec = Math.max(1, Math.ceil(totalSeconds));
+    const minutes = Math.floor(sec / 60);
+    const seconds = sec % 60;
+    if (minutes <= 0) return `${seconds}s`;
+    if (seconds === 0) return `${minutes}p`;
+    return `${minutes}p ${seconds}s`;
+}
+
+function buildNotEnoughEnergyMessage(cost, state) {
+    const deficit = Math.max(0, cost - state.energy);
+    const waitSeconds = deficit <= 0 ? 0 : deficit / state.regenPerSec;
+    return {
+        waitSeconds,
+        message:
+            `😵 Khong du the luc, nghi ngoi di!\n` +
+            `⚡ Hien tai: ${state.energy}/${state.maxEnergy}\n` +
+            `🔋 Can: ${cost} the luc\n` +
+            `⏳ Uoc tinh hoi du: ${formatWaitSeconds(waitSeconds)}`
+    };
+}
+
+async function readAndSyncEnergy(connection, userID, nowMs = Date.now()) {
+    await ensureEnergyColumns(connection);
+
+    const [rows] = await connection.execute(
+        "SELECT psid, vip_until, energy, max_energy, last_energy_update FROM messenger_users WHERE psid = ?",
+        [String(userID)]
+    );
+
+    if (rows.length === 0) {
+        return { ok: false, reason: "no_account" };
+    }
+
+    const current = rows[0];
+    const state = computeRegeneratedState(current, nowMs);
+
+    const rowEnergy = Number(current.energy);
+    const rowMax = Number(current.max_energy);
+    const rowLastMs = normalizeTimestampMs(current.last_energy_update, nowMs);
+
+    const changed =
+        !Number.isFinite(rowEnergy) || rowEnergy !== state.energy ||
+        !Number.isFinite(rowMax) || rowMax !== state.maxEnergy ||
+        rowLastMs !== state.lastUpdateMs;
+
+    if (changed) {
+        await connection.execute(
+            "UPDATE messenger_users SET energy = ?, max_energy = ?, last_energy_update = ? WHERE psid = ?",
+            [state.energy, state.maxEnergy, new Date(state.lastUpdateMs), String(userID)]
+        );
+    }
+
+    return { ok: true, ...state };
+}
+
+async function consumeEnergy(connection, userID, cost, nowMs = Date.now()) {
+    const required = Math.max(0, Math.floor(Number(cost) || 0));
+    const synced = await readAndSyncEnergy(connection, userID, nowMs);
+    if (!synced.ok) return synced;
+
+    if (synced.energy < required) {
+        const notEnough = buildNotEnoughEnergyMessage(required, synced);
+        return {
+            ok: false,
+            reason: "not_enough",
+            ...synced,
+            waitSeconds: notEnough.waitSeconds,
+            message: notEnough.message
+        };
+    }
+
+    const nextEnergy = Math.max(0, synced.energy - required);
+    await connection.execute(
+        "UPDATE messenger_users SET energy = ?, max_energy = ?, last_energy_update = ? WHERE psid = ?",
+        [nextEnergy, synced.maxEnergy, new Date(synced.lastUpdateMs), String(userID)]
+    );
+
+    return {
+        ok: true,
+        energy: nextEnergy,
+        maxEnergy: synced.maxEnergy,
+        hasVip: synced.hasVip,
+        regenPerSec: synced.regenPerSec
+    };
+}
+
+async function restoreEnergy(connection, userID, amount, nowMs = Date.now()) {
+    const restoreAmount = Math.max(0, Math.floor(Number(amount) || 0));
+    const synced = await readAndSyncEnergy(connection, userID, nowMs);
+    if (!synced.ok) return synced;
+
+    const before = synced.energy;
+    const after = Math.min(synced.maxEnergy, before + restoreAmount);
+
+    await connection.execute(
+        "UPDATE messenger_users SET energy = ?, max_energy = ?, last_energy_update = ? WHERE psid = ?",
+        [after, synced.maxEnergy, new Date(synced.lastUpdateMs), String(userID)]
+    );
+
+    return {
+        ok: true,
+        before,
+        after,
+        maxEnergy: synced.maxEnergy,
+        restored: Math.max(0, after - before),
+        hasVip: synced.hasVip
+    };
+}
+
+async function ensureEnergyPotionItem(connection) {
+    const item = ENERGY_POTION_ITEM;
+    await connection.execute(
+        `INSERT INTO shop_items (item_key, name, price, type, effect_value, uses, stackable, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            price = VALUES(price),
+            type = VALUES(type),
+            effect_value = VALUES(effect_value),
+            uses = VALUES(uses),
+            stackable = VALUES(stackable),
+            description = VALUES(description)`,
+        [
+            item.item_key,
+            item.name,
+            item.price,
+            item.type,
+            item.effect_value,
+            item.uses,
+            item.stackable,
+            item.description
+        ]
+    );
+}
+
+module.exports = {
+    DEFAULT_MAX_ENERGY,
+    VIP_MAX_ENERGY,
+    NORMAL_REGEN_PER_SEC,
+    VIP_REGEN_PER_SEC,
+    ENERGY_POTION_ITEM,
+    getDBConfigFromRuntime,
+    ensureEnergyColumns,
+    readAndSyncEnergy,
+    consumeEnergy,
+    restoreEnergy,
+    ensureEnergyPotionItem
+};

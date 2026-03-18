@@ -20,6 +20,54 @@ const MAX_LOAN = 1000000;
 // Lãi suất mỗi ngày
 const DAILY_INTEREST_RATE = 0.075; // 7.5%
 
+function normalizeDate(value, fallback = new Date()) {
+    const d = value ? new Date(value) : new Date(fallback);
+    if (Number.isNaN(d.getTime())) return new Date(fallback);
+    return d;
+}
+
+function getElapsedLoanDays(lastCheckAt, now = new Date()) {
+    const lastCheckDate = normalizeDate(lastCheckAt, now);
+    const lastCheckDay = getDateString(lastCheckDate);
+    const nowDay = getDateString(now);
+
+    if (lastCheckDay === nowDay) return 0;
+    return Math.max(0, Math.floor((now - lastCheckDate) / (1000 * 60 * 60 * 24)));
+}
+
+function previewCompoundedPrincipal(loan, now = new Date()) {
+    const principal = Math.max(0, Math.floor(Number(loan?.principal) || 0));
+    const rate = Number(loan?.interest_rate) || DAILY_INTEREST_RATE;
+    const lastCheckAt = loan?.last_loan_check || loan?.taken_at || now;
+    const daysElapsed = getElapsedLoanDays(lastCheckAt, now);
+
+    if (daysElapsed <= 0) {
+        return {
+            principal,
+            daysElapsed
+        };
+    }
+
+    return {
+        principal: Math.floor(principal * Math.pow(1 + rate, daysElapsed)),
+        daysElapsed
+    };
+}
+
+async function syncLoanWithCompoundInterest(connection, loan, psid, now = new Date()) {
+    const preview = previewCompoundedPrincipal(loan, now);
+    const currentPrincipal = Math.max(0, Math.floor(Number(loan?.principal) || 0));
+
+    if (preview.daysElapsed > 0 || preview.principal !== currentPrincipal) {
+        await connection.execute(
+            'UPDATE bank_loans SET principal = ?, last_loan_check = ? WHERE psid = ?',
+            [preview.principal, now, psid]
+        );
+    }
+
+    return preview;
+}
+
 module.exports = {
     name: "vay",
     description: "Vay tiền từ Boss (lãi 7.5%/ngày)",
@@ -29,7 +77,7 @@ module.exports = {
         const { threadID, messageID, senderID } = event;
 
         // Cooldown 5s
-        const cooldown = checkCooldown({ command: "vay", key: senderID, durationMs: 5000 });
+        const cooldown = checkCooldown({ command: "vay", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
@@ -61,9 +109,13 @@ module.exports = {
                 const jailUntil = new Date(jailRows[0].jail_until);
                 const now = new Date();
                 const remainingMs = jailUntil - now;
-                const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+                const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+                const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                 return api.sendMessage(
-                    `🔒 BẠN ĐANG TRONG TÙ!\n━━━━━━━━━━━━━━━━━━\n⏰ Còn lại: ${remainingHours} giờ\n❌ Không thể vay tiền trong tù`,
+                    `🔒 BẠN ĐANG TRONG TÙ!\n━━━━━━━━━━━━━━━━━━\n⏰ Còn lại: ${timeStr}\n❌ Không thể vay tiền trong tù`,
                     threadID,
                     messageID
                 );
@@ -102,19 +154,11 @@ module.exports = {
 
                 loanRows.forEach((loan, idx) => {
                     const principal = parseInt(loan.principal);
-                    const interestRate = parseFloat(loan.interest_rate);
                     const takenAt = new Date(loan.taken_at);
-                    const lastCheck = loan.last_loan_check ? new Date(loan.last_loan_check) : takenAt;
                     const dueDate = new Date(takenAt.getTime() + loan.due_days * 24 * 60 * 60 * 1000);
 
-                    const lastCheckDay = getDateString(lastCheck);
-                    const nowDay = getDateString(now);
-                    const daysSinceLastCheck = Math.max(0, Math.floor((now - lastCheck) / (1000 * 60 * 60 * 24)));
-
-                    let totalDebt = principal;
-                    if (lastCheckDay !== nowDay && daysSinceLastCheck >= 1) {
-                        totalDebt = principal + principal * interestRate * daysSinceLastCheck;
-                    }
+                    const preview = previewCompoundedPrincipal(loan, now);
+                    const totalDebt = preview.principal;
 
                     const isOverdue = now > dueDate;
                     const daysOverdue = isOverdue ? Math.floor((now - dueDate) / (1000 * 60 * 60 * 24)) : 0;
@@ -147,31 +191,14 @@ module.exports = {
                 }
 
                 const loan = loanRows[0];
-                const principal = parseInt(loan.principal);
                 const interestRate = parseFloat(loan.interest_rate);
                 const takenAt = new Date(loan.taken_at);
-                const lastCheck = loan.last_loan_check ? new Date(loan.last_loan_check) : takenAt;
                 const now = new Date();
                 const dueDate = new Date(takenAt.getTime() + loan.due_days * 24 * 60 * 60 * 1000);
 
-                // Tính số ngày từ lần check cuối (dựa trên ngày lịch)
-                const lastCheckDay = getDateString(lastCheck);
-                const nowDay = getDateString(now);
-                const daysSinceLastCheck = Math.max(0, Math.floor((now - lastCheck) / (1000 * 60 * 60 * 24)));
-                
-                // Tính lãi tích lũy (chỉ tính nếu đã sang ngày tiếp theo)
-                let totalDebt = principal;
-                if (lastCheckDay !== nowDay && daysSinceLastCheck >= 1) {
-                    // Lãi đơn giản: mỗi ngày = principal × rate
-                    const newInterest = principal * interestRate * daysSinceLastCheck;
-                    totalDebt = principal + newInterest;
-
-                    // Cập nhật last_loan_check
-                    await connection.execute(
-                        'UPDATE bank_loans SET last_loan_check = ? WHERE psid = ?',
-                        [now, senderID]
-                    );
-                }
+                const syncedLoan = await syncLoanWithCompoundInterest(connection, loan, senderID, now);
+                const principal = syncedLoan.principal;
+                const totalDebt = principal;
 
                 // Kiểm tra quá hạn
                 const isOverdue = now > dueDate;
@@ -207,7 +234,7 @@ module.exports = {
                 const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
                 
                 let msg = `💳 THÔNG TIN KHOẢN VAY\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n`;
-                msg += `💰 Gốc: ${principal.toLocaleString()}\n`;
+                msg += `💰 Gốc hiện tại: ${principal.toLocaleString()}\n`;
                 msg += `📈 Lãi suất: ${(interestRate * 100).toFixed(1)}%/ngày\n`;
                 msg += `💵 Tổng nợ hiện tại: ${totalDebt.toLocaleString()}\n`;
                 msg += `━━━━━━━━━━━━━━━━━━\n`;
@@ -236,7 +263,6 @@ module.exports = {
                 }
 
                 const loan = loanRows[0];
-                const principal = parseInt(loan.principal);
                 const takenAt = new Date(loan.taken_at);
                 const now = new Date();
 
@@ -259,40 +285,27 @@ module.exports = {
                     );
                 }
 
-                // Tính tổng nợ
-                const lastCheck = loan.last_loan_check ? new Date(loan.last_loan_check) : takenAt;
-                const daysSinceLastCheck = Math.max(0, Math.floor((now - lastCheck) / (1000 * 60 * 60 * 24)));
-                const newInterest = principal * DAILY_INTEREST_RATE * daysSinceLastCheck;
-                const totalDebt = principal + newInterest;
+                const syncedLoan = await syncLoanWithCompoundInterest(connection, loan, senderID, now);
+                const totalDebt = syncedLoan.principal;
 
                 const userCredits = parseInt(userRows[0].credits);
 
-                // Hỏi user muốn trả cả hay một phần
-                global.vayReplyHandlers = global.vayReplyHandlers || {};
-                global.vayReplyHandlers[senderID] = {
-                    totalDebt: totalDebt,
-                    principal: principal,
-                    userCredits: userCredits
-                };
+                const replyMsg = `💳 TRẢ NỢ\n━━━━━━━━━━━━━━━━━━\n💰 Tổng nợ: ${totalDebt.toLocaleString()}\n💵 Tiền có: ${userCredits.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\nReply:\n1️⃣ - Trả toàn bộ\n2️⃣ - Trả một phần (gõ số tiền trực tiếp)`;
+                const info = await api.sendMessage(replyMsg, threadID, messageID);
 
-                return api.sendMessage(
-                    `💳 TRẢ NỢ\n━━━━━━━━━━━━━━━━━━\n💰 Tổng nợ: ${totalDebt.toLocaleString()}\n💵 Tiền có: ${userCredits.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\nReply:\n1️⃣ - Trả toàn bộ\n2️⃣ - Trả một phần (gõ số tiền)`,
-                    threadID,
-                    (err, info) => {
-                        if (!err) {
-                            global.client.handleReply.push({
-                                name: "vay_repay",
-                                messageID: info.messageID,
-                                author: senderID,
-                                totalDebt: totalDebt,
-                                principal: principal,
-                                userCredits: userCredits,
-                                userName: userName
-                            });
-                        }
-                    },
-                    messageID
-                );
+                global.vayReplyContexts = global.vayReplyContexts || {};
+                if (info?.messageID) {
+                    global.vayReplyContexts[info.messageID] = {
+                        author: String(senderID),
+                        threadID: String(threadID),
+                        totalDebt,
+                        principal: totalDebt,
+                        userName,
+                        createdAt: Date.now()
+                    };
+                }
+
+                return;
             }
 
             // === VAY TIỀN ===
@@ -339,8 +352,8 @@ module.exports = {
                 }
 
                 // Tính tổng lãi dự kiến
-                const estimatedInterest = amount * DAILY_INTEREST_RATE * days;
-                const estimatedTotal = amount + estimatedInterest;
+                const estimatedTotal = Math.floor(amount * Math.pow(1 + DAILY_INTEREST_RATE, days));
+                const estimatedInterest = estimatedTotal - amount;
 
                 await connection.beginTransaction();
                 try {
@@ -361,7 +374,7 @@ module.exports = {
                     await connection.commit();
 
                     return api.sendMessage(
-                        `✅ VAY TIỀN THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số tiền vay: ${amount.toLocaleString()}\n📅 Thời hạn: ${days} ngày\n📈 Lãi suất: 7.5%/ngày\n━━━━━━━━━━━━━━━━━━\n💵 Dự kiến trả: ~${Math.floor(estimatedTotal).toLocaleString()}\n⏰ Trả từ ngày mai (00:00 UTC+7)\n━━━━━━━━━━━━━━━━━━\n⚠️ Quá hạn 3 ngày = Vào tù!`,
+                        `✅ VAY TIỀN THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số tiền vay: ${amount.toLocaleString()}\n📅 Thời hạn: ${days} ngày\n📈 Lãi suất: 7.5%/ngày (lãi kép)\n━━━━━━━━━━━━━━━━━━\n💵 Dự kiến lãi: ~${Math.floor(estimatedInterest).toLocaleString()}\n💸 Dự kiến trả: ~${Math.floor(estimatedTotal).toLocaleString()}\n⏰ Trả từ ngày mai (00:00 UTC+7)\n━━━━━━━━━━━━━━━━━━\n⚠️ Quá hạn 3 ngày = Vào tù!`,
                         threadID,
                         messageID
                     );
@@ -380,10 +393,18 @@ module.exports = {
     },
 
     // Handle reply cho trả nợ
-    handleReply: async ({ api, event, handleReply, config }) => {
+    handleReply: async ({ api, event }) => {
         const { threadID, messageID, senderID, body } = event;
 
-        if (!handleReply || handleReply.name !== "vay_repay" || handleReply.author !== senderID) return;
+        if (event.type !== "message_reply") return;
+
+        const replyContexts = global.vayReplyContexts || {};
+        const context = replyContexts[event.messageReply?.messageID];
+        if (!context) return;
+        if (String(context.threadID) !== String(threadID)) return;
+        if (String(context.author) !== String(senderID)) {
+            return api.sendMessage("⚠️ Chỉ người đã mở trả nợ mới được reply.", threadID, messageID);
+        }
 
         const configPath = path.resolve(__dirname, '../../../config.json');
         let dbConfig = {};
@@ -395,8 +416,8 @@ module.exports = {
             return api.sendMessage("❌ Lỗi config.json", threadID);
         }
 
-        const reply = body.trim();
-        const { totalDebt, principal, userCredits, userName } = handleReply;
+        const reply = String(body || "").trim();
+        const userName = context.userName || "Người dùng";
 
         let connection;
         try {
@@ -404,7 +425,22 @@ module.exports = {
 
             // Cập nhật lại credits hiện tại
             const [userRows] = await connection.execute('SELECT credits FROM messenger_users WHERE psid = ?', [senderID]);
+            if (userRows.length === 0) {
+                delete replyContexts[event.messageReply?.messageID];
+                return api.sendMessage("❌ Bạn chưa có tài khoản.", threadID, messageID);
+            }
+
             const currentCredits = parseInt(userRows[0].credits);
+
+            const [loanRows] = await connection.execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+            if (loanRows.length === 0) {
+                delete replyContexts[event.messageReply?.messageID];
+                return api.sendMessage("✅ Khoản vay đã được tất toán trước đó.", threadID, messageID);
+            }
+
+            const now = new Date();
+            const syncedLoan = await syncLoanWithCompoundInterest(connection, loanRows[0], senderID, now);
+            const totalDebt = syncedLoan.principal;
 
             if (reply === "1") {
                 // Trả toàn bộ
@@ -432,6 +468,7 @@ module.exports = {
 
                     await connection.commit();
 
+                    delete replyContexts[event.messageReply?.messageID];
                     return api.sendMessage(
                         `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${totalDebt.toLocaleString()}\n💵 Còn lại: ${(currentCredits - totalDebt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
                         threadID,
@@ -441,6 +478,8 @@ module.exports = {
                     await connection.rollback();
                     throw err;
                 }
+            } else if (reply === "2") {
+                return api.sendMessage("💡 Gõ trực tiếp số tiền bạn muốn trả (ví dụ: 200000).", threadID, messageID);
             } else if (!isNaN(reply)) {
                 // Trả một phần
                 const partialAmount = parseInt(reply);
@@ -462,7 +501,7 @@ module.exports = {
                     await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [partialAmount, BOSS_ID]);
 
                     // Giảm gốc
-                    const newPrincipal = principal - partialAmount;
+                    const newPrincipal = totalDebt - partialAmount;
                     
                     if (newPrincipal <= 0) {
                         // Trả hết
@@ -470,6 +509,7 @@ module.exports = {
                         await connection.execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
                         
                         await connection.commit();
+                        delete replyContexts[event.messageReply?.messageID];
                         
                         return api.sendMessage(
                             `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Còn lại: ${(currentCredits - partialAmount).toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
@@ -488,6 +528,14 @@ module.exports = {
                         await connection.execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
                         
                         await connection.commit();
+
+                        if (event.messageReply?.messageID) {
+                            replyContexts[event.messageReply.messageID] = {
+                                ...context,
+                                principal: newPrincipal,
+                                totalDebt: newPrincipal
+                            };
+                        }
                         
                         return api.sendMessage(
                             `✅ TRẢ NỢ 1 PHẦN THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Nợ còn lại: ${newPrincipal.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n💡 Dùng !vay check để xem chi tiết`,

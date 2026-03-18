@@ -1,5 +1,8 @@
 const mysql = require('mysql2/promise');
 const { checkCooldown } = require('../../utils/cooldown');
+const { syncBankPool } = require('../../utils/bankPool');
+
+const ROB_TAX_RATE = 0.08;
 
 // ID CỦA BOSS (Hưởng lợi từ tiền phạt)
 const BOSS_ID = "100037351338722";
@@ -83,6 +86,8 @@ module.exports = {
                     return api.sendMessage("❌ Bạn cần ít nhất 10,000 credits để cướp ngân hàng!", threadID, messageID);
                 }
 
+                await syncBankPool(connection);
+
                 const [poolRows] = await connection.execute(
                     'SELECT total_balance FROM bank_pool WHERE id = 1'
                 );
@@ -101,6 +106,7 @@ module.exports = {
                 if (isSuccess) {
                     const percent = Math.floor(Math.random() * 11) + 5; // 5-15%
                     const stealAmount = Math.min(Math.floor((poolBalance * percent) / 100), poolBalance);
+                    let totalStolen = 0;
 
                     // Lấy danh sách tất cả users có tài khoản ngân hàng
                     const [bankUsers] = await connection.execute(
@@ -109,8 +115,6 @@ module.exports = {
 
                     await connection.beginTransaction();
                     try {
-                        let totalStolen = 0; // Tính tổng tiền THỰC TẾ bị cướp
-                        
                         // Chia đều số tiền bị cướp cho tất cả users có tiền trong ngân hàng
                         if (bankUsers.length > 0) {
                             const sharePerUser = Math.floor(stealAmount / bankUsers.length);
@@ -125,17 +129,24 @@ module.exports = {
                             }
                         }
 
-                        // Cập nhật pool với số tiền THỰC TẾ bị cướp
-                        await connection.execute(
-                            'UPDATE bank_pool SET total_balance = total_balance - ? WHERE id = 1',
-                            [totalStolen]
-                        );
+                        // Đồng bộ pool theo tổng thực tế
+                        await syncBankPool(connection);
+
+                        const taxAmount = Math.floor(totalStolen * ROB_TAX_RATE);
+                        const finalGain = Math.max(0, totalStolen - taxAmount);
 
                         // Thêm tiền cho kẻ cướp với số tiền THỰC TẾ
                         await connection.execute(
                             'UPDATE messenger_users SET credits = credits + ? WHERE psid = ?',
-                            [totalStolen, senderID]
+                            [finalGain, senderID]
                         );
+
+                        if (taxAmount > 0 && senderID !== BOSS_ID) {
+                            await connection.execute(
+                                'UPDATE messenger_users SET credits = credits + ? WHERE psid = ?',
+                                [taxAmount, BOSS_ID]
+                            );
+                        }
 
                         await connection.commit();
                     } catch (err) {
@@ -143,8 +154,11 @@ module.exports = {
                         throw err;
                     }
 
+                    const taxAmount = Math.floor(totalStolen * ROB_TAX_RATE);
+                    const finalGain = Math.max(0, totalStolen - taxAmount);
+
                     api.sendMessage(
-                        `🏦 **CƯỚP NGÂN HÀNG THÀNH CÔNG!**\n👤 ${senderName}\n💰 Lấy được: ${totalStolen.toLocaleString()}\n🔥 Thoát khỏi truy nã... tạm thời!`,
+                        `🏦 **CƯỚP NGÂN HÀNG THÀNH CÔNG!**\n👤 ${senderName}\n💰 Lấy được: ${totalStolen.toLocaleString()}\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n🔥 Thoát khỏi truy nã... tạm thời!`,
                         threadID,
                         messageID
                     );
@@ -252,8 +266,15 @@ module.exports = {
                     stealAmount = Math.floor(stealAmount * 0.95);
                 }
 
-                await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [stealAmount, senderID]);
+                const taxAmount = Math.floor(stealAmount * ROB_TAX_RATE);
+                const finalGain = Math.max(0, stealAmount - taxAmount);
+
+                await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [finalGain, senderID]);
                 await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [stealAmount, targetID]);
+
+                if (taxAmount > 0 && senderID !== BOSS_ID) {
+                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [taxAmount, BOSS_ID]);
+                }
                 
                 // Tru luot dung shield neu co
                 if (hasShield) {
@@ -264,7 +285,7 @@ module.exports = {
                     await connection.execute('DELETE FROM active_effects WHERE uses_left <= 0');
                 }
 
-                let msg = `🔫 **CƯỚP THÀNH CÔNG!**\nBạn đã trấn lột ${stealAmount.toLocaleString()} credits từ ${targetName}.\n(Nạn nhân khóc thét 😭)`;
+                let msg = `🔫 **CƯỚP THÀNH CÔNG!**\nBạn đã trấn lột ${stealAmount.toLocaleString()} credits từ ${targetName}.\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n(Nạn nhân khóc thét 😭)`;
                 if (hasShield) msg += `\n🛡️ Khien bao ve da giam sat thuong!`;
                 if (targetHasVIP) msg += `\n👑 VIP da giam 5% tien mat!`;
                 

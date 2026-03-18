@@ -2,6 +2,10 @@ const mysql = require('mysql2/promise');
 const path = require("path");
 const fs = require("fs");
 const { checkCooldown } = require('../../utils/cooldown');
+const { checkMinigameLimit, recordMinigameSuccess } = require('../../utils/minigameLimiter');
+const { recordAction } = require('../../utils/questSystem');
+
+const TAX_RATE = 0.05;
 
 // Biến lưu trữ phiên (RAM)
 global.taixiuSessions = global.taixiuSessions || {};
@@ -116,11 +120,17 @@ module.exports = {
                     
                     const isWin = (p.choice === resultText);
                     let statusIcon = "🔴";
+                    let changeText = `-${p.amount.toLocaleString()}`;
                     
                     if (isWin) {
                         statusIcon = "🟢";
-                        const payout = p.amount * 2; 
-                        totalPay += payout; 
+                        const grossPayout = p.amount * 2;
+                        const winProfit = p.amount;
+                        const taxAmount = Math.floor(winProfit * TAX_RATE);
+                        const payout = grossPayout - taxAmount;
+                        const netProfit = Math.max(0, winProfit - taxAmount);
+                        changeText = `+${netProfit.toLocaleString()}`;
+                        totalPay += payout;
 
                         await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [payout, p.id]);
                         
@@ -135,7 +145,9 @@ module.exports = {
                         // Thua, VIP hoan 5%
                         let refund = 0;
                         if (hasVIP) {
-                            refund = Math.floor(p.amount * 0.05);
+                            const grossRefund = Math.floor(p.amount * 0.05);
+                            const refundTax = Math.floor(grossRefund * TAX_RATE);
+                            refund = Math.max(0, grossRefund - refundTax);
                             await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [refund, p.id]);
                             totalPay += refund;
                         }
@@ -151,9 +163,14 @@ module.exports = {
                     
                     let extraInfo = '';
                     if (hasLucky) extraInfo += ' 🍀';
-                    if (hasVIP && !isWin) extraInfo += ` (+${Math.floor(p.amount * 0.05).toLocaleString()})`;
+                    if (hasVIP && !isWin) {
+                        const grossRefund = Math.floor(p.amount * 0.05);
+                        const refundTax = Math.floor(grossRefund * TAX_RATE);
+                        const netRefund = Math.max(0, grossRefund - refundTax);
+                        extraInfo += ` (+${netRefund.toLocaleString()})`;
+                    }
                     
-                    msg += `${statusIcon} ${p.name}: ${p.choice.toUpperCase()} (${isWin ? '+' : '-'}${p.amount.toLocaleString()})${extraInfo}\n`;
+                    msg += `${statusIcon} ${p.name}: ${p.choice.toUpperCase()} (${changeText})${extraInfo}\n`;
                 }
                 
                 // Xoa lucky het luot
@@ -224,6 +241,11 @@ module.exports = {
         
         if (senderID === BOSS_ID) return api.sendMessage("❌ Boss không được cược!", threadID, senderID);
 
+        const limitCheck = checkMinigameLimit(senderID);
+        if (!limitCheck.allowed) {
+            return api.sendMessage(limitCheck.message, threadID, messageID);
+        }
+
         const args = body.trim().split(/\s+/);
         const choice = args[0]?.toLowerCase();
         let amountStr = args[1];
@@ -268,9 +290,13 @@ module.exports = {
             );
             if (jailRows.length > 0 && betAmount > 500000) {
                 const remainingMs = new Date(jailRows[0].jail_until) - new Date();
-                const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+                const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+                const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                 return api.sendMessage(
-                    `🔒 Bạn đang trong tù, chỉ được cược tối đa 500k.\n⏰ Còn lại: ${remainingHours} giờ`,
+                    `🔒 Bạn đang trong tù, chỉ được cược tối đa 500k.\n⏰ Còn lại: ${timeStr}`,
                     threadID,
                     messageID
                 );
@@ -299,6 +325,13 @@ module.exports = {
 
             // Trừ tiền
             await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [betAmount, senderID]);
+
+            const minigameState = recordMinigameSuccess(senderID);
+
+            try {
+                recordAction(senderID, 'bet_count', 1);
+                recordAction(senderID, 'bet_amount', betAmount);
+            } catch (_) {}
             
             // Tăng games_played nếu cược >= 50k
             if (betAmount >= 50000) {
@@ -319,6 +352,10 @@ module.exports = {
             if (hasVIP) reactionMsg = "👑";
             
             api.setMessageReaction(reactionMsg, messageID, () => {}, true);
+
+            if (minigameState.locked) {
+                api.sendMessage(minigameState.message, threadID, messageID);
+            }
 
         } catch (e) {
             console.error("Lỗi HandleReply:", e);
