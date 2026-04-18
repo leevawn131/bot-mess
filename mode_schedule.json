@@ -1,14 +1,18 @@
 {
   "24947224841545380": [
     {
-      "time": "01:15",
+      "time": "02:00",
       "mode": "admingr",
-      "enabled": true
+      "enabled": true,
+      "updatedAt": 1774375055357,
+      "updatedBy": "100037351338722"
     },
     {
       "time": "08:00",
       "mode": "user",
-      "enabled": true
+      "enabled": true,
+      "updatedAt": 1774201667640,
+      "updatedBy": ""
     }
   ]
 }

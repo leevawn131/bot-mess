@@ -1,0 +1,73 @@
+{
+  "entries": [
+    {
+      "version": "v1.2.5",
+      "date": "2026-03-30",
+      "title": "Hỗ trợ tải nhạc từ SoundCloud",
+      "changes": [
+        "Lệnh !mp3 giờ hoạt động được với link SoundCloud.",
+        "Tự động lấy tên bài hát từ SoundCloud và hiển thị khi gửi file.",
+        "Hỗ trợ đầy đủ cả YouTube lẫn SoundCloud với cùng giao diện thống nhất.",
+        "Tải nhanh hơn bằng cách sử dụng yt-dlp-exec hoặc system yt-dlp."
+      ]
+    },
+    {
+      "version": "v1.2.5",
+      "date": "2026-03-30",
+      "title": "Cải thiện giao diện lệnh mp3",
+      "changes": [
+        "Thay đổi hiển thị: chỉ hiển thị tên bài hát + thể lực, bỏ loại file và dung lượng.",
+        "Giao diện tin nhắn gọn gàng và dễ đọc hơn."
+      ]
+    },
+    {
+      "version": "v1.2.3",
+      "date": "2026-03-25",
+      "title": "Cải thiện lệnh add thành viên",
+      "changes": [
+        "Bổ sung lệnh !add để mời thành viên vào nhóm bằng UID hoặc link Facebook."
+      ]
+    },
+    {
+      "version": "v1.2.2",
+      "date": "2026-03-23",
+      "title": "Sửa lỗi lệnh quest",
+      "changes": [
+        "Sửa lỗi database không tương thích ở lệnh quest.",
+        "Quest giờ hoạt động ổn định trên tất cả version MySQL.",
+        "Bot không còn bị dừng khi dùng lệnh quest."
+      ]
+    },
+    {
+      "version": "v1.2.1",
+      "date": "2026-03-23",
+      "title": "Nâng cấp nhỏ lệnh làm việc",
+      "changes": [
+        "Bổ sung thêm nhiều nghề mới cho lệnh !lamviec để nội dung đa dạng hơn.",
+        "Bổ sung thêm nhiều tình huống fail cho lệnh !lamviec để tăng độ vui.",
+        "Tạo mới lệnh !huongdan để hướng dẫn người chơi mới cách bắt đầu.",
+        "Thêm cơ chế thưởng tăng ca ngẫu nhiên khi làm việc thành công.",
+        "Sửa lỗi trừ tiền vượt số dư khi gặp xui trong lệnh làm việc."
+      ]
+    },
+    {
+      "version": "v1.2.0",
+      "date": "2026-03-23",
+      "title": "Cập nhật hệ thống lệnh quan trọng",
+      "changes": [
+        "Checktt đã hỗ trợ xem top theo ngày, tuần, tháng.",
+        "Tách chức năng chuyển tiền thành lệnh riêng: !chuyentien.",
+        "Bổ sung lệnh changelog để xem lịch sử cập nhật theo phiên bản."
+      ]
+    },
+    {
+      "version": "v1.1.0",
+      "date": "2026-03-10",
+      "title": "Tối ưu thống kê và dữ liệu",
+      "changes": [
+        "Nâng cấp hệ thống thống kê tin nhắn theo tổng/khung thời gian.",
+        "Tối ưu ghi và đồng bộ dữ liệu trong message_stats."
+      ]
+    }
+  ]
+}
