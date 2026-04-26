@@ -1,13 +1,16 @@
-const mysql = require("mysql2/promise");
-const path = require("path");
-const fs = require("fs");
+const { getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 const { recordAction } = require("../../utils/questSystem");
+const { getBotConfig } = require("../../utils/envConfig");
+const { info, warn, error } = require("../../utils/logger");
 
 const TRANSFER_TAX_RATE = 0.02;
 
 // ID CỦA BOSS (Không giới hạn hạn mức)
-const BOSS_ID = "100037351338722";
+function getBossID() {
+  const config = getBotConfig();
+  return config.adminIDs?.[0] || "100037351338722";
+}
 
 module.exports = {
   name: "tien",
@@ -30,26 +33,11 @@ module.exports = {
       );
     }
 
-    // 1. ĐỌC CONFIG
-    const configPath = path.resolve(__dirname, "../../../config.json");
-    let dbConfig = {};
-    try {
-      const configFile = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      const db = configFile.database;
-      dbConfig = {
-        host: db.host,
-        port: db.port,
-        user: db.user,
-        password: db.password,
-        database: db.name,
-      };
-    } catch (err) {
-      return api.sendMessage("❌ Lỗi config.json", threadID);
-    }
+    const bossID = getBossID();
 
     let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
+      connection = await getConnection();
 
       // 2. HÀM LẤY TÊN (CHIÊU CUỐI: USER INFO + THREAD SCAN)
       const getName = async (uid) => {
@@ -235,7 +223,7 @@ module.exports = {
           let dailyLimit = 0;
 
           // NGOẠI LỆ: Boss không bị giới hạn hạn mức
-          if (senderID !== BOSS_ID) {
+          if (senderID !== bossID) {
             // Check VIP status
             const now = new Date();
             const hasVIP =

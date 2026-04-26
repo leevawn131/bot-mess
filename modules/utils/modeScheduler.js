@@ -3,7 +3,7 @@ const path = require("path");
 
 const SETTINGS_PATH = path.join(__dirname, "../../mode_settings.json");
 const SCHEDULE_PATH = path.join(__dirname, "../../mode_schedule.json");
-const VALID_MODES = new Set(["user", "admingr", "adminbot"]);
+const VALID_MODES = new Set(["user", "qtv", "adminbot"]);
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 
 let intervalHandle = null;

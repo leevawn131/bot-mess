@@ -1,23 +1,28 @@
 {
-  "botName": "DarkWin",
-  "prefix": "!",
-  "language": "vi",
+  "_note": "For production use, set environment variables instead of hardcoded values. See .env.example for reference.",
+  "adminID": [],
+  "adminIDs": [],
   "adminOnly": false,
-  "adminID": ["100050609227874"],
+  "ai": {
+    "autoReplyOnlyGroups": false
+  },
+  "botName": "DarkWin",
   "database": {
-    "type": "mysql",
-    "host": "localhost",
-    "port": 3306,
+    "host": "127.0.0.1",
     "name": "goatbot",
-    "user": "root",
-    "password": ""
+    "password": "123456",
+    "port": 3306,
+    "type": "mysql",
+    "user": "bot"
   },
-  "adminIDs": ["100037351338722", "61578017290778"],
   "fca": {
-    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "autoMarkDelivery": false,
     "forceLogin": true,
-    "autoMarkDelivery": false
+    "selfListen": true,
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   },
+  "language": "vi",
+  "prefix": "!",
   "server": {
     "port": 3000
   }

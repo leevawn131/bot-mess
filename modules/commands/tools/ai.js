@@ -1,54 +1,71 @@
-const axios = require('axios');
-const { usage } = require('../group/kick');
-const { checkCooldown } = require('../../utils/cooldown');
+const fs = require('fs');
+const path = require('path');
+const { runAiConversation } = require('../../utils/aiAssistant');
+
+const CONFIG_PATH = path.resolve(__dirname, '../../../config.json');
+const DEFAULT_OLLAMA_MODEL = 'llama3:latest';
+
+function loadAiConfig() {
+    try {
+        if (!fs.existsSync(CONFIG_PATH)) {
+            return {};
+        }
+
+        const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        return config.ai || {};
+    } catch (error) {
+        console.error('Không thể đọc cấu hình AI:', error);
+        return {};
+    }
+}
 
 module.exports = {
     name: "ai",
     description: "Chat AI",
-    usage : "\nCó 5 model, gpt, gemini, claude, mistral,llama (mặc định là GPT) \n!ai [lệnh] dể dùng.\n!ai [tên model] [lệnh] để dùng 4 model còn lại.",
+    usage : "\nDùng AI local Ollama (mặc định model llama3:latest).\n!ai [câu hỏi]\n!ai -m [tên_model_ollama] [câu hỏi]",
     execute: async ({ api, event, args }) => {
         const threadID = String(event.threadID); // Ép kiểu chuỗi để tránh lỗi
-        const { senderID, messageID } = event;
+        const displayLabel = 'AI local';
+        const aiConfig = loadAiConfig();
+        const defaultModel = process.env.OLLAMA_MODEL || aiConfig.model || DEFAULT_OLLAMA_MODEL;
 
-        // Cooldown 5s
-        const cooldown = checkCooldown({ command: "ai", key: senderID, durationMs: 10000 });
-        if (!cooldown.allowed) {
-            return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
+        let model = defaultModel;
+        let queryArgs = args;
+
+        if (args[0] === '-m' || args[0] === '--model') {
+            model = args[1] || defaultModel;
+            queryArgs = args.slice(2);
+        } else if (args[0] && args[0].startsWith('--model=')) {
+            model = args[0].slice('--model='.length) || defaultModel;
+            queryArgs = args.slice(1);
         }
-        let query = args.join(" ");
+
+        let query = queryArgs.join(" ").trim();
 
         if (!query) return api.sendMessage("🤖 Nhập câu hỏi đi bạn.\nVD: !ai Kể chuyện ma", threadID);
 
-        // --- XỬ LÝ CHỌN MODEL ---
-        let model = 'openai'; 
-        let displayModel = 'GPT-4o';
+        api.sendMessage(`🔍 ${displayLabel} đang suy nghĩ...`, threadID);
 
-        const firstWord = args[0].toLowerCase();
-        if (["gemini", "claude", "mistral", "llama"].includes(firstWord)) {
-            model = firstWord;
-            displayModel = firstWord.toUpperCase();
-            query = args.slice(1).join(" "); 
+        const result = await runAiConversation({
+            api,
+            event,
+            query,
+            source: 'manual',
+            modelOverride: model,
+        });
+
+        if (result.ok && result.answer) {
+            return api.sendMessage(`🤖 [${displayLabel}]:\n━━━━━━━━━━━━━━━━━━\n${result.answer}`, threadID);
         }
 
-        if (!query) return api.sendMessage(`🤖 Bạn muốn hỏi ${displayModel} gì?`, threadID);
-
-        // 1. Gửi tin nhắn "Đang nghĩ" (Không dùng callback để tránh lỗi)
-        api.sendMessage(`🔍 ${displayModel} đang suy nghĩ...`, threadID);
-
-        // 2. Gọi API
-        try {
-            const encodedQuery = encodeURIComponent(query);
-            const url = `https://text.pollinations.ai/${encodedQuery}?model=${model}`;
-
-            const res = await axios.get(url);
-            const answer = res.data;
-
-            // 3. Gửi câu trả lời (Gửi tin mới, không reply tin cũ để tránh lỗi 1545012)
-            api.sendMessage(`🤖 [${displayModel}]:\n━━━━━━━━━━━━━━━━━━\n${answer}`, threadID);
-
-        } catch (e) {
-            console.error(e);
-            api.sendMessage("❌ AI đang quá tải hoặc lỗi mạng.", threadID);
+        if (result.reason === 'cooldown' && result.errorMessage) {
+            return api.sendMessage(result.errorMessage, threadID);
         }
+
+        if (result.errorMessage) {
+            return api.sendMessage(result.errorMessage, threadID);
+        }
+
+        return api.sendMessage(`❌ Không xử lý được yêu cầu AI.`, threadID);
     }
 };

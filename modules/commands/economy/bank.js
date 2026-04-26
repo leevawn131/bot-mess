@@ -1,11 +1,14 @@
-const mysql = require('mysql2/promise');
-const path = require('path');
-const fs = require('fs');
+const { getConnection } = require('../../utils/database');
 const { checkCooldown } = require('../../utils/cooldown');
 const { syncBankPool } = require('../../utils/bankPool');
+const { getBotConfig } = require('../../utils/envConfig');
+const { info, warn, error } = require('../../utils/logger');
 
 // ID CỦA BOSS (Trả tiền lãi cho người gửi tiết kiệm)
-const BOSS_ID = "100037351338722";
+function getBossID() {
+  const config = getBotConfig();
+  return config.adminIDs?.[0] || "100037351338722";
+}
 
 // Hàm lấy ngày từ Date object (dùng giờ hệ thống đã là UTC+7)
 function getDateString(date) {
@@ -28,23 +31,13 @@ module.exports = {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
 
-        // Đọc config
-        const configPath = path.resolve(__dirname, '../../../config.json');
-        let dbConfig = {};
-        try {
-            const configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            const db = configFile.database;
-            dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
-        } catch (err) {
-            return api.sendMessage("❌ Lỗi config.json", threadID);
-        }
-
         const command = args[0]?.toLowerCase();
         const amountStr = args[1];
+        const bossID = getBossID();
 
         let connection;
         try {
-            connection = await mysql.createConnection(dbConfig);
+            connection = await getConnection();
 
             // Lấy thông tin user
             const [userRows] = await connection.execute('SELECT credits, name FROM messenger_users WHERE psid = ?', [senderID]);
@@ -60,7 +53,7 @@ module.exports = {
 
             // === SYNC BANK POOL THỦ CÔNG (ADMIN/BOSS) ===
             if (["sync"].includes(command)) {
-                const isBoss = senderID === BOSS_ID;
+                const isBoss = senderID === bossID;
                 let isThreadAdmin = false;
 
                 try {
@@ -295,7 +288,7 @@ module.exports = {
                             // Trừ tiền boss
                             await connection.execute(
                                 'UPDATE messenger_users SET credits = credits - ? WHERE psid = ?',
-                                [interestEarned, BOSS_ID]
+                                [interestEarned, bossID]
                             );
 
                             await connection.commit();
@@ -341,10 +334,10 @@ module.exports = {
             }
 
         } catch (e) {
-            console.error("Lỗi Bank:", e);
+            error("Bank system error", { error: e.message, command, senderID });
             return api.sendMessage("❌ Lỗi hệ thống ngân hàng.", threadID, messageID);
         } finally {
-            if (connection) await connection.end();
+            if (connection) connection.release();
         }
     }
 };

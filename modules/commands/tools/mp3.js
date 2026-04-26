@@ -46,18 +46,31 @@ function getExecErrorDetails(error) {
 
 let ytDlpCliHealthCache = null;
 
+function getYtDlpBaseCommand() {
+  const envBin = String(process.env.YTDLP_BIN || "").trim();
+  if (envBin) return `\"${envBin}\"`;
+
+  const venvPython = path.resolve(__dirname, "../../../.venv/bin/python");
+  if (fs.existsSync(venvPython)) {
+    return `\"${venvPython}\" -m yt_dlp`;
+  }
+
+  return "yt-dlp";
+}
+
+function buildYtDlpCommand(mainArgs) {
+  const extra = getYtDlpExtraArgs();
+  const base = getYtDlpBaseCommand();
+  return `${base} ${extra} ${mainArgs}`.trim();
+}
+
 function canUseYtDlpCli() {
   if (ytDlpCliHealthCache !== null) {
     return ytDlpCliHealthCache;
   }
 
-  if (!hasCommand("yt-dlp")) {
-    ytDlpCliHealthCache = false;
-    return false;
-  }
-
   try {
-    execSync("yt-dlp --version", {
+    execSync(`${getYtDlpBaseCommand()} --version`, {
       stdio: "pipe",
       timeout: 8000,
       maxBuffer: 1024 * 1024,
@@ -77,6 +90,79 @@ function getYtDlpExec() {
   } catch (_) {
     return null;
   }
+}
+
+function getYtDlpCookieArg() {
+  const cookieFileCandidates = [
+    process.env.YTDLP_COOKIES_FILE,
+    path.resolve(process.cwd(), "cache/youtube_cookies.txt"),
+    path.resolve(process.env.HOME || "", ".config/yt-dlp/cookies.txt"),
+  ].filter(Boolean);
+
+  for (const cookieFile of cookieFileCandidates) {
+    try {
+      if (fs.existsSync(cookieFile) && fs.statSync(cookieFile).size > 0) {
+        return `--cookies "${cookieFile}"`;
+      }
+    } catch (_) {}
+  }
+
+  const preferredBrowser = String(process.env.YTDLP_COOKIES_BROWSER || "chrome:Default").trim();
+  const browserOrder = [
+    preferredBrowser,
+    "chrome:Default",
+    "chrome",
+    "chromium:Default",
+    "chromium",
+    "firefox",
+    "edge",
+  ];
+  const uniqBrowsers = [...new Set(browserOrder)];
+
+  const browserCommands = {
+    chrome: ["google-chrome", "google-chrome-stable", "chrome"],
+    chromium: ["chromium", "chromium-browser"],
+    firefox: ["firefox"],
+    edge: ["microsoft-edge", "edge"],
+  };
+
+  for (const browserSpec of uniqBrowsers) {
+    const browserType = String(browserSpec).split(":")[0].toLowerCase();
+    const commands = browserCommands[browserType] || [];
+    if (commands.some((cmd) => hasCommand(cmd))) {
+      return `--cookies-from-browser "${browserSpec}"`;
+    }
+  }
+
+  return "";
+}
+
+function getYtDlpJsRuntimeArg() {
+  const nodeBin = String(process.env.YTDLP_NODE_BIN || process.execPath || "").trim();
+  if (nodeBin && fs.existsSync(nodeBin)) {
+    return `--js-runtimes "node:${nodeBin}"`;
+  }
+  if (hasCommand("node")) return "--js-runtimes node";
+  if (hasCommand("deno")) return "--js-runtimes deno";
+  return "";
+}
+
+function getYtDlpExtraArgs() {
+  const args = [];
+  const cookieArg = getYtDlpCookieArg();
+  const jsRuntimeArg = getYtDlpJsRuntimeArg();
+
+  if (cookieArg) args.push(cookieArg);
+  if (jsRuntimeArg) args.push(jsRuntimeArg);
+  if (jsRuntimeArg) args.push("--remote-components ejs:github");
+  args.push("--ignore-config");
+  args.push("--no-download-archive");
+  args.push("--force-overwrites");
+
+  // Nhẹ nhàng giảm tần suất request để hạn chế 429
+  args.push("--sleep-requests 1", "--sleep-interval 1", "--max-sleep-interval 5");
+
+  return args.join(" ");
 }
 
 module.exports = {
@@ -219,6 +305,7 @@ module.exports = {
             attachment: fs.createReadStream(result.audioPath),
           },
           threadID,
+          messageID,
         );
 
         // Xóa file sau khi gửi
@@ -278,6 +365,7 @@ module.exports = {
             attachment: fs.createReadStream(result.audioPath),
           },
           threadID,
+          messageID,
         );
 
         setTimeout(() => {
@@ -303,18 +391,52 @@ module.exports = {
  */
 async function searchYouTube(query) {
   try {
-    const response = await axios.get(`https://www.youtube.com/results`, {
-      params: { search_query: query },
-    });
+    // Thử phương pháp 1: HTTP scraping
+    try {
+      const response = await axios.get(`https://www.youtube.com/results`, {
+        params: { search_query: query },
+        timeout: 5000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
 
-    // Tìm video ID từ HTML
-    const videoIdMatch = response.data.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
-    if (videoIdMatch) {
-      return `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
+      // Tìm video ID từ HTML - cải thiện regex
+      const videoIdMatch = response.data.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+      if (videoIdMatch && videoIdMatch[1]) {
+        const url = `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
+        console.log("✅ Tìm thấy video YouTube:", url);
+        return url;
+      }
+    } catch (httpError) {
+      console.log("⚠️ Phương pháp HTTP scraping thất bại:", httpError.message);
     }
+
+    // Fallback: Thử yt-dlp để search
+    if (canUseYtDlpCli()) {
+      try {
+        const result = execSync(`${buildYtDlpCommand(`"ytsearch:${query}" --dump-json -j`)} | head -1`, {
+          stdio: "pipe",
+          timeout: 10000,
+          encoding: "utf8",
+        });
+        if (result) {
+          const info = JSON.parse(result);
+          if (info?.url || info?.webpage_url) {
+            const url = info.url || info.webpage_url;
+            console.log("✅ Tìm thấy video từ yt-dlp:", url);
+            return url;
+          }
+        }
+      } catch (e) {
+        console.log("⚠️ yt-dlp search thất bại:", e.message);
+      }
+    }
+
+    console.log("❌ Không thể tìm kiếm video cho:", query);
     return null;
   } catch (error) {
-    console.error("Lỗi tìm kiếm YouTube:", error);
+    console.error("Lỗi tìm kiếm YouTube:", error.message);
     return null;
   }
 }
@@ -338,7 +460,7 @@ async function getYouTubeTitle(url) {
 
     if (canUseYtDlpCli()) {
       try {
-        const result = execSync(`yt-dlp -j "${url}"`, {
+        const result = execSync(buildYtDlpCommand(`-j "${url}"`), {
           stdio: "pipe",
           timeout: 10000,
           encoding: "utf8",
@@ -353,12 +475,51 @@ async function getYouTubeTitle(url) {
   return null;
 }
 
+function extractPrintedTitle(output) {
+  const text = String(output || "");
+  if (!text) return null;
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    if (line.startsWith("title:")) {
+      const title = line.slice("title:".length).trim();
+      if (title) return title;
+    }
+  }
+
+  return null;
+}
+
+function extractPrintedFilePath(output) {
+  const text = String(output || "");
+  if (!text) return null;
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    if (line.startsWith("filepath:")) {
+      const filePath = line.slice("filepath:".length).trim();
+      if (filePath) return filePath;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Tải video từ YouTube và convert thành MP3 bằng youtube-dl hoặc yt-dlp
  */
 async function downloadYouTubeToMP3(url, cacheDir) {
   return new Promise((resolve, reject) => {
     try {
+      const downloadStartMs = Date.now();
       const videoId = url.match(
         /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
       )?.[1];
@@ -368,6 +529,7 @@ async function downloadYouTubeToMP3(url, cacheDir) {
 
       const audioPath = path.join(cacheDir, `${videoId}.mp3`);
       const m4aPath = path.join(cacheDir, `${videoId}.m4a`);
+      const outputBase = path.join(cacheDir, videoId);
 
       // Nếu file đã tồn tại (MP3 hoặc M4A), trả về luôn
       if (fs.existsSync(audioPath)) {
@@ -386,6 +548,15 @@ async function downloadYouTubeToMP3(url, cacheDir) {
           })
           .catch(() => resolve({ audioPath: m4aPath, title: null }));
       }
+      const cachedAnyAudio = findFirstExistingAudio(outputBase);
+      if (cachedAnyAudio) {
+        console.log("✅ Sử dụng audio cache:", cachedAnyAudio);
+        return getYouTubeTitle(url)
+          .then((title) => {
+            resolve({ audioPath: cachedAnyAudio, title });
+          })
+          .catch(() => resolve({ audioPath: cachedAnyAudio, title: null }));
+      }
 
       console.log("📥 Tải audio từ YouTube...");
 
@@ -395,28 +566,42 @@ async function downloadYouTubeToMP3(url, cacheDir) {
       try {
         if (canUseYtDlpCli()) {
           // Tải trực tiếp dạng M4A thay vì convert từ MP3
-          command = `yt-dlp -f "bestaudio[ext=m4a]/bestaudio" -o "${m4aPath}" "${url}"`;
+          command = buildYtDlpCommand(`-f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${m4aPath}" "${url}"`);
           console.log("📦 Sử dụng yt-dlp (M4A format)");
 
           try {
-            execSync(command, {
+            const m4aOutput = execSync(command, {
               stdio: "pipe",
               timeout: 120000,
               maxBuffer: 10 * 1024 * 1024,
+              encoding: "utf8",
             });
+            const m4aTitle = extractPrintedTitle(m4aOutput);
+            const printedPath = extractPrintedFilePath(m4aOutput);
 
-            if (fs.existsSync(m4aPath)) {
-              console.log("✅ Tải M4A thành công:", m4aPath);
-              return getYouTubeTitle(url)
-                .then((title) => resolve({ audioPath: m4aPath, title }))
-                .catch(() => resolve({ audioPath: m4aPath, title: null }));
+            const m4aResultPath = fs.existsSync(m4aPath)
+              ? m4aPath
+              : findFirstExistingAudio(outputBase);
+            const recentAudioPath = m4aResultPath
+              ? null
+              : findRecentAudioInDir(cacheDir, downloadStartMs - 10000, videoId);
+            const printedAudioPath = printedPath && fs.existsSync(printedPath)
+              ? printedPath
+              : null;
+
+            if (m4aResultPath || recentAudioPath || printedAudioPath) {
+              const finalPath = m4aResultPath || recentAudioPath || printedAudioPath;
+              console.log("✅ Tải audio thành công:", finalPath);
+              return Promise.resolve(m4aTitle || null)
+                .then((title) => resolve({ audioPath: finalPath, title }))
+                .catch(() => resolve({ audioPath: finalPath, title: null }));
             }
           } catch (e) {
-            console.log("⚠️ Tải M4A thất bại, thử MP3...");
+            console.log("⚠️ Tải M4A thất bại, thử MP3...", getExecErrorDetails(e));
           }
 
           // Nếu M4A thất bại, thử MP3
-          command = `yt-dlp -x --audio-format mp3 --audio-quality 128K -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`;
+          command = buildYtDlpCommand(`-x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`);
           console.log("📦 Sử dụng yt-dlp (MP3 format)");
         } else {
           const ytDlpExec = getYtDlpExec();
@@ -447,11 +632,14 @@ async function downloadYouTubeToMP3(url, cacheDir) {
       }
 
       try {
-        execSync(command, {
+        const dlOutput = execSync(command, {
           stdio: "pipe",
           timeout: 120000,
           maxBuffer: 10 * 1024 * 1024,
+          encoding: "utf8",
         });
+        const printedTitle = extractPrintedTitle(dlOutput);
+        const printedPath = extractPrintedFilePath(dlOutput);
 
         // Kiểm tra file nào được tạo (M4A hoặc MP3)
         let resultPath = null;
@@ -462,11 +650,36 @@ async function downloadYouTubeToMP3(url, cacheDir) {
           console.log("✅ Tải và chuyển đổi thành công:", audioPath);
           resultPath = audioPath;
         } else {
+          const anyAudioPath = findFirstExistingAudio(outputBase);
+          const recentAudioPath = anyAudioPath
+            ? null
+            : findRecentAudioInDir(cacheDir, downloadStartMs - 10000, videoId);
+          const printedAudioPath = printedPath && fs.existsSync(printedPath)
+            ? printedPath
+            : null;
+          if (anyAudioPath || recentAudioPath || printedAudioPath) {
+            resultPath = anyAudioPath || recentAudioPath || printedAudioPath;
+            console.log("✅ Tải audio thành công:", resultPath);
+          } else {
+            try {
+              const dirEntries = fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir).slice(-30) : [];
+              console.log("⚠️ Không tìm thấy output theo base:", outputBase);
+              if (printedPath) {
+                console.log("⚠️ yt-dlp in ra filepath nhưng không tồn tại:", printedPath);
+              }
+              console.log("⚠️ Cache files gần đây:", dirEntries);
+            } catch (_) {}
+            reject(new Error("Không tạo được file audio"));
+            return;
+          }
+        }
+
+        if (!resultPath) {
           reject(new Error("Không tạo được file audio"));
           return;
         }
 
-        getYouTubeTitle(url)
+        Promise.resolve(printedTitle || null)
           .then((title) => {
             resolve({ audioPath: resultPath, title });
           })
@@ -474,6 +687,19 @@ async function downloadYouTubeToMP3(url, cacheDir) {
       } catch (execError) {
         const detailed = getExecErrorDetails(execError);
         console.error("Lỗi tải video:", detailed || execError.message);
+
+        const details = String(detailed || execError.message || "");
+        if (
+          details.includes("Sign in to confirm you’re not a bot") ||
+          details.includes("Sign in to confirm you're not a bot")
+        ) {
+          return reject(
+            new Error(
+              "YouTube yêu cầu xác thực. Hãy đăng nhập browser và cấu hình cookie cho bot. Gợi ý: export cookies ra file cache/youtube_cookies.txt rồi đặt ENV YTDLP_COOKIES_FILE=cache/youtube_cookies.txt"
+            )
+          );
+        }
+
         reject(new Error("Lỗi tải video: " + (detailed || execError.message)));
       }
     } catch (error) {
@@ -554,7 +780,7 @@ async function getSoundCloudTitle(url) {
 
     if (canUseYtDlpCli()) {
       try {
-        const result = execSync(`yt-dlp -j "${url}"`, {
+        const result = execSync(buildYtDlpCommand(`-j "${url}"`), {
           stdio: "pipe",
           timeout: 10000,
           encoding: "utf8",
@@ -620,7 +846,7 @@ async function downloadSoundCloudToMP3(url, cacheDir) {
 
     // Fallback to command line yt-dlp
     if (canUseYtDlpCli()) {
-      const command = `yt-dlp -f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`;
+      const command = buildYtDlpCommand(`-f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`);
       console.log("📦 Sử dụng yt-dlp command");
 
       execSync(command, {
@@ -654,5 +880,65 @@ function findFirstExistingAudio(outputBase) {
       return filePath;
     }
   }
+
+  // Fallback: lấy file bất kỳ có cùng base name (phòng trường hợp yt-dlp tạo đuôi khác)
+  try {
+    const dir = path.dirname(outputBase);
+    const base = path.basename(outputBase);
+    if (!fs.existsSync(dir)) return null;
+
+    const entries = fs
+      .readdirSync(dir)
+      .filter((name) => name.startsWith(`${base}.`))
+      .filter((name) => !name.endsWith(".part") && !name.endsWith(".ytdl"))
+      .map((name) => ({
+        name,
+        fullPath: path.join(dir, name),
+        stat: fs.statSync(path.join(dir, name)),
+      }))
+      .filter((item) => item.stat.isFile() && item.stat.size > 0)
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+
+    if (entries.length > 0) {
+      return entries[0].fullPath;
+    }
+  } catch (_) {}
+
   return null;
+}
+
+function findRecentAudioInDir(dirPath, minMtimeMs, preferredBaseName) {
+  try {
+    if (!fs.existsSync(dirPath)) return null;
+
+    const extensions = new Set(["mp3", "m4a", "opus", "webm", "ogg", "aac", "mp4", "flac", "wav"]);
+    const entries = fs
+      .readdirSync(dirPath)
+      .map((name) => {
+        const fullPath = path.join(dirPath, name);
+        const stat = fs.statSync(fullPath);
+        return { name, fullPath, stat };
+      })
+      .filter((item) => item.stat.isFile() && item.stat.size > 0)
+      .filter((item) => item.stat.mtimeMs >= minMtimeMs)
+      .filter((item) => {
+        const lower = item.name.toLowerCase();
+        if (lower.endsWith(".part") || lower.endsWith(".ytdl")) return false;
+        const dot = lower.lastIndexOf(".");
+        if (dot < 0) return false;
+        return extensions.has(lower.slice(dot + 1));
+      })
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+
+    if (!entries.length) return null;
+
+    if (preferredBaseName) {
+      const preferred = entries.find((item) => item.name.startsWith(`${preferredBaseName}.`));
+      if (preferred) return preferred.fullPath;
+    }
+
+    return entries[0].fullPath;
+  } catch (_) {
+    return null;
+  }
 }

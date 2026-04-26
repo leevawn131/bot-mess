@@ -1,8 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 const { login } = require("ws3-fca");
-const { checkPermission } = require("./modules/utils/checkPermission");
+const { checkPermission, getGroupMode } = require("./modules/utils/checkPermission");
 const { startModeScheduler } = require("./modules/utils/modeScheduler");
+const { runAiConversation, normalizeText } = require("./modules/utils/aiAssistant");
 
 const DAILY_TOP_STATE_PATH = path.join(
   __dirname,
@@ -78,13 +79,20 @@ login(
   {
     online: true,
     listenEvents: true,
-    selfListen: false,
+    selfListen: config.fca?.selfListen ?? false,
     userAgent:
       config.fca?.userAgent ||
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   },
   async (err, api) => {
     if (err) return console.error("❌ LOGIN ERROR:", err);
+
+    if (typeof api.setOptions === "function") {
+      api.setOptions({
+        selfListen: config.fca?.selfListen ?? true,
+        listenEvents: true,
+      });
+    }
 
     const botID = api.getCurrentUserID();
     console.log(`✅ Đăng nhập thành công ID: ${botID}`);
@@ -137,7 +145,12 @@ login(
     getAllFiles(eventsDir).forEach((file) => {
       try {
         const ev = require(file);
-        if (ev.name) events.set(ev.name, ev);
+        if (!ev.name) return;
+
+        // AI auto reply is handled inline below to avoid duplicated/conflicting logic.
+        if (ev.name === "aiAutoReply") return;
+
+        events.set(ev.name, ev);
       } catch {}
     });
 
@@ -391,7 +404,34 @@ login(
       }
     };
 
-    const updateMessageStats = (senderID, threadID) => {
+    // --- HÀM XÁC ĐỊNH LOẠI TIN NHẮN ---
+    const getMessageType = (event) => {
+      if (!event.attachments || event.attachments.length === 0) {
+        return "text";
+      }
+
+      const attachment = event.attachments[0];
+      const type = attachment.type || "";
+
+      switch (type) {
+        case "sticker":
+          return "sticker";
+        case "animated_image":
+          return "gif";
+        case "video":
+          return "video";
+        case "image":
+          return "image";
+        case "audio":
+          return "audio";
+        case "file":
+          return "file";
+        default:
+          return "attachment";
+      }
+    };
+
+    const updateMessageStats = (senderID, threadID, event = null) => {
       try {
         let stats = {};
         if (fs.existsSync(statsPath)) {
@@ -406,6 +446,7 @@ login(
         const entry = normalizeEntry(stats[threadID][uid]);
         const { dayKey, weekKey, monthKey } = getTimeKeys();
 
+        // Cập nhật tổng số tin nhắn
         entry.total = Number(entry.total || 0) + 1;
         entry.daily[dayKey] = Number(entry.daily[dayKey] || 0) + 1;
         entry.weekly[weekKey] = Number(entry.weekly[weekKey] || 0) + 1;
@@ -453,14 +494,14 @@ login(
         });
       }
 
-      // 2. Đếm tin nhắn (bỏ qua bot và tin nhắn không có body)
+      // 2. Đếm tin nhắn (bao gồm cả tin nhắn có attachments)
       if (
-        event.body &&
+        (event.body || event.attachments) &&
         event.senderID &&
         event.senderID != botID &&
         event.threadID
       ) {
-        const threadStats = updateMessageStats(event.senderID, event.threadID);
+        const threadStats = updateMessageStats(event.senderID, event.threadID, event);
         await maybeSendDailyTop10({
           api,
           threadID: event.threadID,
@@ -523,18 +564,79 @@ login(
 
       if (!event.body) return;
 
-      if (
-        String(event.body).trim() === "!" &&
-        String(event.senderID) !== String(botID)
-      ) {
-        return api.sendMessage(
-          "kêu ccj vậy, dùng !help để biết danh sách lệnh",
-          event.threadID,
-          event.messageID,
-        );
+      const body = String(event.body || "").trim();
+      const senderID = String(event.senderID || "");
+      const threadID = String(event.threadID || "");
+      const prefix = config.prefix || "!";
+
+      if (body) {
+        console.log(`📩 [MSG] type=${event.type || "unknown"} tid=${threadID} sid=${senderID} body=${body.slice(0, 120)}`);
       }
 
-      const prefix = config.prefix || "!";
+      const isBotSender = senderID === String(botID);
+      const isInbox = threadID && senderID && threadID === senderID;
+      const normalizedBody = normalizeText(body);
+      const isBangTrigger = body === "!";
+      const isBotCallTrigger = /(?:^|\s)bot\s*(dau|oi)(?:\s|$)/.test(normalizedBody);
+      const autoAiEnabled = config?.ai?.autoReplyEnabled !== false;
+      const isBotGeneratedOutput =
+        body.startsWith("🤖 [AI local]:") || body.startsWith("🤖 Có đây.");
+      const allowSelfInboxInput = isBotSender && isInbox && !isBotGeneratedOutput;
+      const canProcessAiInput = !isBotSender || allowSelfInboxInput;
+
+      const aiHelpMessage =
+        "🤖 Có đây. Cách dùng nhanh:\n" +
+        "• Gõ !ai <câu hỏi> để hỏi bot.\n" +
+        "• Gõ !help để có danh sách lệnh.";
+
+      if (canProcessAiInput && (isBangTrigger || isBotCallTrigger)) {
+        await api.sendMessage(aiHelpMessage, event.threadID, event.messageID);
+      }
+
+      // Inline AI auto-reply fallback: inbox trả lời trực tiếp, group chỉ trả lời khi reply vào bot.
+      if (canProcessAiInput && autoAiEnabled && body && !body.startsWith(prefix)) {
+        let allowAutoReply = false;
+
+        if (isInbox) {
+          allowAutoReply = true;
+        } else if (event.type === "message_reply") {
+          const currentMode = getGroupMode(event.threadID);
+          if (currentMode !== "user") {
+            return;
+          }
+
+          const repliedMessage = event.messageReply || {};
+          const repliedSenderID = String(
+            repliedMessage.senderID || repliedMessage.author || repliedMessage.userID || "",
+          );
+          if (repliedSenderID === String(botID)) {
+            allowAutoReply = true;
+          }
+        }
+
+        if (allowAutoReply && !isBangTrigger && !isBotCallTrigger) {
+          try {
+            const result = await runAiConversation({
+              api,
+              event,
+              query: body,
+              source: "auto",
+            });
+
+            if (result.ok && result.answer) {
+              await api.sendMessage(
+                `🤖 [AI local]:\n━━━━━━━━━━━━━━━━━━\n${result.answer}`,
+                event.threadID,
+                event.messageID,
+              );
+            } else if (result.reason && result.reason !== "cooldown") {
+              console.log(`ℹ️ [inlineAutoAI] skipped reason=${result.reason}`);
+            }
+          } catch (e) {
+            console.error("❌ [inlineAutoAI]", e);
+          }
+        }
+      }
 
       // Lệnh không cần check quyền (tự trong lệnh xử lý)
       const FREE_COMMANDS = ["mode"];

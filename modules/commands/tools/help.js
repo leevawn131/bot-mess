@@ -64,6 +64,8 @@ module.exports = {
             "checkbd",
             "ghepdoi",
             "setbd",
+            "setwelcome",
+            "luatnhom",
           ],
         },
         {
@@ -78,6 +80,7 @@ module.exports = {
             "mp3",
             "vidgai",
             "đấm",
+            "kiss",
             "reset",
           ],
         },

@@ -1,60 +1,73 @@
 const fs = require('fs');
 const path = require('path');
-const { ADMIN_BOT_UIDS } = require('../../utils/checkPermission');
+const { getAdminBotUIDs, readSettings } = require('../../utils/checkPermission');
+const { writeJsonFile } = require('../../utils/secureFileOps');
+const { info, warn } = require('../../utils/logger');
 
 // Đường dẫn file lưu mode settings
 const SETTINGS_PATH = path.join(__dirname, '../../../mode_settings.json');
 const SCHEDULE_PATH = path.join(__dirname, '../../../mode_schedule.json');
-const VALID_MODES = ["user", "admingr", "adminbot"];
+const VALID_MODES = ["user", "qtv", "adminbot"];
 const MAX_SCHEDULES_PER_THREAD = 2;
 
-const modeEmoji = { user: "👥", admingr: "🔐", adminbot: "🔒" };
+const modeEmoji = { user: "👥", qtv: "🔐", adminbot: "🔒" };
 const modeDesc = {
     user: "Ai cũng dùng được",
-    admingr: "Chỉ admin nhóm dùng được",
+    qtv: "chỉ QTV nhóm dùng được",
     adminbot: "Chỉ chủ bot dùng được"
 };
 
+function normalizeMode(rawMode) {
+    const mode = String(rawMode || "").toLowerCase();
+    if (mode === "admingr") return "qtv";
+    return mode;
+}
+
+function toAdminIdList(threadInfo) {
+    const list = Array.isArray(threadInfo?.adminIDs) ? threadInfo.adminIDs : [];
+    return list
+        .map(item => String(item?.id || item?.userID || item?.adminID || "").trim())
+        .filter(Boolean);
+}
+
 // Hàm đọc settings
-function readSettings() {
-    try {
-        if (fs.existsSync(SETTINGS_PATH)) {
-            return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
-        }
-    } catch (e) {
-        console.error("❌ Lỗi đọc mode_settings.json:", e);
-    }
+async function readModeSettings() {
+  try {
+    return await readJsonFile(SETTINGS_PATH, {});
+  } catch (e) {
+    warn("Error reading mode_settings.json", { error: e.message });
     return {};
+  }
 }
 
 // Hàm đọc timer mode
-function readSchedules() {
-    try {
-        if (fs.existsSync(SCHEDULE_PATH)) {
-            return JSON.parse(fs.readFileSync(SCHEDULE_PATH, 'utf8'));
-        }
-    } catch (e) {
-        console.error("❌ Lỗi đọc mode_schedule.json:", e);
-    }
+async function readSchedules() {
+  try {
+    return await readJsonFile(SCHEDULE_PATH, {});
+  } catch (e) {
+    warn("Error reading mode_schedule.json", { error: e.message });
     return {};
+  }
 }
 
 // Hàm lưu settings
-function writeSettings(settings) {
-    try {
-        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
-    } catch (e) {
-        console.error("❌ Lỗi ghi mode_settings.json:", e);
-    }
+async function writeSettings(settings) {
+  try {
+    await writeJsonFile(SETTINGS_PATH, settings);
+    info("Mode settings saved", { threadCount: Object.keys(settings).length });
+  } catch (e) {
+    warn("Error writing mode_settings.json", { error: e.message });
+  }
 }
 
 // Hàm lưu timer mode
-function writeSchedules(schedules) {
-    try {
-        fs.writeFileSync(SCHEDULE_PATH, JSON.stringify(schedules, null, 2));
-    } catch (e) {
-        console.error("❌ Lỗi ghi mode_schedule.json:", e);
-    }
+async function writeSchedules(schedules) {
+  try {
+    await writeJsonFile(SCHEDULE_PATH, schedules);
+    info("Mode schedules saved", { threadCount: Object.keys(schedules).length });
+  } catch (e) {
+    warn("Error writing mode_schedule.json", { error: e.message });
+  }
 }
 
 function isValidTimeHHMM(timeText) {
@@ -205,37 +218,38 @@ function saveThreadSchedules(schedules, threadID, list, inTask) {
 module.exports = {
     name: "mode",
     description: "Quản lý mode quyền của nhóm và hẹn giờ đổi mode",
-    usage: "\n!mode - Xem mode hiện tại\n!mode <user|admingr|adminbot> - Đổi mode ngay\n!mode <user|admingr|adminbot> <HH:MM> - Lịch hằng ngày\n!mode in <HH:MM> <user|admingr|adminbot> - Đổi mode ngay, hết thời gian sẽ quay về mode cũ\n!mode off - Tắt toàn bộ lịch\n!mode off <mode|HH:MM|in> - Xóa 1 lịch",
+    usage: "\n!mode - Xem mode hiện tại\n!mode <user|qtv|adminbot> - Đổi mode ngay\n!mode <user|qtv|adminbot> <HH:MM> - Lịch hằng ngày\n!mode in <HH:MM> <user|qtv|adminbot> - Đổi mode ngay, hết thời gian sẽ quay về mode cũ\n!mode off - Tắt toàn bộ lịch\n!mode off <mode|HH:MM|in> - Xóa 1 lịch",
 
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID } = event;
         const senderID = String(event.senderID);
         const threadIDStr = String(threadID);
 
-        const settings = readSettings();
-        const schedules = readSchedules();
-        const currentMode = settings[threadIDStr] || "adminbot";
+        const settings = await readModeSettings();
+        const schedules = await readSchedules();
+        const currentMode = normalizeMode(settings[threadIDStr] || "adminbot");
 
-        const newMode = args[0]?.toLowerCase();
+        const newMode = normalizeMode(args[0]?.toLowerCase());
         const secondArg = args[1]?.toLowerCase();
 
-        // === KIỂM TRA QUYỀN: Chỉ admin nhóm + chủ bot mới được thay đổi mode ===
+        // === KIỂM TRA QUYỀN: chỉ QTV nhóm + chủ bot mới được thay đổi mode ===
         let isAdmin = false;
-        let isBotAdmin = ADMIN_BOT_UIDS.includes(senderID);
+        const adminBotUIDs = getAdminBotUIDs();
+        let isBotAdmin = adminBotUIDs.includes(senderID);
 
         if (!isBotAdmin) {
             try {
                 const threadInfo = await api.getThreadInfo(threadIDStr);
-                const adminIDs = (threadInfo.adminIDs || []).map(a => String(a.id));
+                const adminIDs = toAdminIdList(threadInfo);
                 isAdmin = adminIDs.includes(senderID);
             } catch (e) {
-                console.error("Lỗi lấy thông tin nhóm:", e);
+                warn("Error getting thread info", { error: e.message, threadID });
             }
         }
 
         if (!isAdmin && !isBotAdmin) {
             return api.sendMessage(
-                "❌ Chỉ admin nhóm hoặc chủ bot mới được dùng lệnh mode!",
+                "❌ chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh mode!",
                 threadID,
                 messageID
             );
@@ -255,7 +269,7 @@ module.exports = {
                     : `\n⌛ Chuyển sau khoảng thời gian (dữ liệu cũ):\n   ${inTask.mode.toUpperCase()} sau ${inTask.duration || "--:--"} (dự kiến ${formatDateTimeVN(inTask.executeAt)})\n   Còn lại khoảng: ${formatCountdown(inTask.executeAt - Date.now())}`;
 
             return api.sendMessage(
-                `🎛️ MODE HIỆN TẠI\n━━━━━━━━━━━━━━━━━━\n${modeEmoji[currentMode]} Mode: ${currentMode.toUpperCase()}\n📝 ${modeDesc[currentMode]}${timerLine}${inLine}\n━━━━━━━━━━━━━━━━━━\n💡 !mode user - Đổi mode ngay\n💡 !mode admingr 23:00 - Lịch hằng ngày\n💡 !mode in 00:30 user - Đổi ngay, 30 phút sau quay về mode cũ\n💡 !mode off hoặc !mode off admingr hoặc !mode off in`,
+                `🎛️ MODE HIỆN TẠI\n━━━━━━━━━━━━━━━━━━\n${modeEmoji[currentMode]} Mode: ${currentMode.toUpperCase()}\n📝 ${modeDesc[currentMode]}${timerLine}${inLine}\n━━━━━━━━━━━━━━━━━━\n💡 !mode user - Đổi mode ngay\n💡 !mode qtv 23:00 - Lịch hằng ngày\n💡 !mode in 00:30 user - Đổi ngay, 30 phút sau quay về mode cũ\n💡 !mode off hoặc !mode off qtv hoặc !mode off in`,
                 threadID,
                 messageID
             );
@@ -264,7 +278,7 @@ module.exports = {
         // !mode in HH:MM <mode> -> đổi mode ngay, hết thời gian quay về mode cũ
         if (newMode === "in") {
             const durationArg = args[1]?.toLowerCase();
-            const targetMode = args[2]?.toLowerCase();
+            const targetMode = normalizeMode(args[2]?.toLowerCase());
 
             if (currentMode === "adminbot" && !isBotAdmin) {
                 return api.sendMessage(
@@ -276,7 +290,7 @@ module.exports = {
 
             if (!durationArg || !targetMode) {
                 return api.sendMessage(
-                    "⚠️ Thiếu tham số!\n💡 Dùng: !mode in <HH:MM> <user|admingr|adminbot>",
+                    "⚠️ Thiếu tham số!\n💡 Dùng: !mode in <HH:MM> <user|qtv|adminbot>",
                     threadID,
                     messageID
                 );
@@ -293,7 +307,7 @@ module.exports = {
 
             if (!VALID_MODES.includes(targetMode)) {
                 return api.sendMessage(
-                    "⚠️ Mode không hợp lệ!\n💡 Hợp lệ: user, admingr, adminbot",
+                    "⚠️ Mode không hợp lệ!\n💡 Hợp lệ: user, qtv, adminbot",
                     threadID,
                     messageID
                 );
@@ -321,10 +335,10 @@ module.exports = {
 
             // Đổi mode ngay lập tức
             settings[threadIDStr] = targetMode;
-            writeSettings(settings);
+            await writeSettings(settings);
 
             saveThreadSchedules(schedules, threadIDStr, existingDaily, inTask);
-            writeSchedules(schedules);
+            await writeSchedules(schedules);
 
             return api.sendMessage(
                 `✅ ĐÃ ĐỔI MODE TẠM THỜI!\n━━━━━━━━━━━━━━━━━━\n🎛️ Mode hiện tại: ${targetMode.toUpperCase()}\n⌛ Sau ${durationArg} sẽ tự quay về: ${currentMode.toUpperCase()}\n🕒 Dự kiến quay về: ${formatDateTimeVN(restoreAt)}\n━━━━━━━━━━━━━━━━━━\n💡 Hủy lịch quay về: !mode off in`,
@@ -356,7 +370,7 @@ module.exports = {
 
             if (!secondArg) {
                 delete schedules[threadIDStr];
-                writeSchedules(schedules);
+                await writeSchedules(schedules);
 
                 return api.sendMessage(
                     "✅ Đã tắt toàn bộ hẹn giờ mode cho nhóm này.",
@@ -376,7 +390,7 @@ module.exports = {
                 nextInTask = null;
             } else {
                 return api.sendMessage(
-                    "⚠️ Cú pháp xóa lịch không hợp lệ!\n💡 Dùng: !mode off <user|admingr|adminbot|HH:MM|in>",
+                    "⚠️ Cú pháp xóa lịch không hợp lệ!\n💡 Dùng: !mode off <user|qtv|adminbot|HH:MM|in>",
                     threadID,
                     messageID
                 );
@@ -391,7 +405,7 @@ module.exports = {
             }
 
             saveThreadSchedules(schedules, threadIDStr, filtered, nextInTask);
-            writeSchedules(schedules);
+            await writeSchedules(schedules);
 
             const remainLine = [];
             if (filtered.length > 0) {
@@ -426,7 +440,7 @@ module.exports = {
         // Kiểm tra quyền
         if (!isAdmin && !isBotAdmin) {
             return api.sendMessage(
-                "❌ Chỉ admin nhóm hoặc chủ bot mới được đổi mode!",
+                "❌ chỉ QTV nhóm hoặc chủ bot mới được đổi mode!",
                 threadID,
                 messageID
             );
@@ -435,7 +449,7 @@ module.exports = {
         // Kiểm tra mode hợp lệ
         if (!VALID_MODES.includes(newMode)) {
             return api.sendMessage(
-                `⚠️ Mode không hợp lệ!\n━━━━━━━━━━━━━━━━━━\n💡 Hợp lệ: user, admingr, adminbot\n💡 Ví dụ: !mode admingr`,
+                `⚠️ Mode không hợp lệ!\n━━━━━━━━━━━━━━━━━━\n💡 Hợp lệ: user, qtv, adminbot\n💡 Ví dụ: !mode qtv`,
                 threadID,
                 messageID
             );
@@ -492,7 +506,7 @@ module.exports = {
 
             const keepInTask = getThreadInTask(schedules, threadIDStr);
             saveThreadSchedules(schedules, threadIDStr, timerList, keepInTask);
-            writeSchedules(schedules);
+            await writeSchedules(schedules);
 
             const finalList = getThreadSchedules(schedules, threadIDStr);
 
@@ -514,7 +528,7 @@ module.exports = {
 
         // Lưu mode mới
         settings[threadIDStr] = newMode;
-        writeSettings(settings);
+        await writeSettings(settings);
 
         return api.sendMessage(
             `✅ ĐỔI MODE THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n${modeEmoji[newMode]} Mode: ${newMode.toUpperCase()}\n📝 ${modeDesc[newMode]}\n━━━━━━━━━━━━━━━━━━\n💡 Mode này áp dụng ngay cho tất cả lệnh!`,

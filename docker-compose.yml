@@ -1,0 +1,46 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: messenger-bot-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: goatbot
+      MYSQL_USER: bot
+      MYSQL_PASSWORD: 123456
+      MYSQL_ROOT_PASSWORD: root123456
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./1.sql:/docker-entrypoint-initdb.d/1.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: messenger-bot
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: ["node", "index.js"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./appstate.json:/app/appstate.json
+      - ./cache:/app/cache
+      - ./message_stats.json:/app/message_stats.json
+      - ./mode_settings.json:/app/mode_settings.json
+      - ./mode_schedule.json:/app/mode_schedule.json
+      - ./antiout_settings.json:/app/antiout_settings.json
+      - ./changelog.json:/app/changelog.json
+      - ./youtube_cookies.txt:/app/youtube_cookies.txt
+
+volumes:
+  mysql_data:

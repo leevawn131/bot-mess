@@ -167,7 +167,6 @@ module.exports = {
                 }, 60000);
             } catch (err) {
                 console.error("Lỗi gửi video:", err);
-                await connection.end();
                 
                 // Hoàn tiền nếu gửi video lỗi
                 let refundConnection;

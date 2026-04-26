@@ -90,6 +90,10 @@ module.exports = {
             return api.sendMessage('⚠️ Hãy reply hoặc tag người bạn muốn đấm.', threadID, messageID);
         }
 
+        if (String(targetID) === String(senderID)) {
+            return api.sendMessage('😳 Đấm bản thân hả? Tag người khác đi nè.', threadID, messageID);
+        }
+
         const dbConfig = getDBConfigFromRuntime(config);
         if (!dbConfig) {
             return api.sendMessage('❌ Lỗi cấu hình Database.', threadID, messageID);

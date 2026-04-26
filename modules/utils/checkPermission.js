@@ -1,21 +1,44 @@
-const fs = require("fs");
 const path = require("path");
+const { getBotConfig } = require('./envConfig');
+const { readJsonFile } = require('./secureFileOps');
+const { debug } = require('./logger');
 
 const SETTINGS_PATH = path.join(__dirname, "../../mode_settings.json");
-const ADMIN_BOT_UIDS = ["100037351338722", "61578017290778"]; // ID của chủ bot
+
+function normalizeMode(rawMode) {
+  const mode = String(rawMode || "").toLowerCase();
+  if (mode === "admingr") return "qtv"; // Tương thích dữ liệu cũ
+  return mode;
+}
+
+function toAdminIdList(threadInfo) {
+  const list = Array.isArray(threadInfo?.adminIDs) ? threadInfo.adminIDs : [];
+  return list
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      return String(item.id || item.userID || item.adminID || "").trim();
+    })
+    .filter(Boolean);
+}
 
 /**
- * Đọc mode settings từ file
+ * Get admin bot UIDs from config
  */
-function readSettings() {
+function getAdminBotUIDs() {
+  const config = getBotConfig();
+  return config.adminIDs || [];
+}
+
+/**
+ * Read mode settings from file
+ */
+async function readSettings() {
   try {
-    if (fs.existsSync(SETTINGS_PATH)) {
-      return JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf8"));
-    }
+    return await readJsonFile(SETTINGS_PATH, {});
   } catch (e) {
-    console.error("❌ Lỗi đọc mode_settings.json:", e);
+    debug('Error reading mode settings', { error: e.message });
+    return {};
   }
-  return {};
 }
 
 /**
@@ -27,11 +50,12 @@ function readSettings() {
  */
 async function checkPermission(threadID, senderID, api) {
   threadID = String(threadID); // Convert sang string để match settings
-  const settings = readSettings();
-  const mode = settings[threadID] || "adminbot";
+  const settings = await readSettings();
+  const mode = normalizeMode(settings[threadID] || "adminbot");
 
   // Chủ bot luôn được dùng
-  if (ADMIN_BOT_UIDS.includes(String(senderID))) {
+  const adminBotUIDs = getAdminBotUIDs();
+  if (adminBotUIDs.includes(String(senderID))) {
     return { allowed: true, reason: "Bot admin" };
   }
 
@@ -40,11 +64,11 @@ async function checkPermission(threadID, senderID, api) {
     return { allowed: true, reason: "User mode" };
   }
 
-  // Mode ADMINGR: Chủ bot + admin nhóm
-  if (mode === "admingr") {
+  // Mode QTV: Chủ bot + admin nhóm
+  if (mode === "qtv") {
     try {
       const threadInfo = await api.getThreadInfo(threadID);
-      const adminIDs = (threadInfo.adminIDs || []).map((a) => String(a.id));
+      const adminIDs = toAdminIdList(threadInfo);
 
       if (adminIDs.includes(String(senderID))) {
         return { allowed: true, reason: "Group admin" };
@@ -71,14 +95,15 @@ async function checkPermission(threadID, senderID, api) {
 /**
  * Lấy mode hiện tại của nhóm
  */
-function getGroupMode(threadID) {
+async function getGroupMode(threadID) {
   threadID = String(threadID);
-  const settings = readSettings();
+  const settings = await readSettings();
   return settings[threadID] || "adminbot";
 }
 
 module.exports = {
   checkPermission,
   getGroupMode,
-  ADMIN_BOT_UIDS,
+  getAdminBotUIDs,
+  readSettings
 };
