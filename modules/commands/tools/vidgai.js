@@ -1,4 +1,4 @@
-const mysql = require('mysql2/promise');
+const { execute, getConnection } = require("../../utils/database");
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -29,7 +29,7 @@ function getDBConfig() {
 module.exports = {
     name: "vidgai",
     description: "Mua video gái TikTok (1,000,000 credits)",
-    usage: "!vidgai",
+    usage: "\n!vidgai → Mua và nhận video ngẫu nhiên\n━━━━━━━━━━━━━━━━━━\n💰 Giá: 1,000,000 xu/lần\n⚡ Tốn năng lượng mỗi lần dùng\n🎬 Gửi video TikTok ngẫu nhiên",
 
     execute: async ({ api, event, config }) => {
         const { threadID, senderID, messageID } = event;
@@ -61,7 +61,7 @@ module.exports = {
 
         let connection;
         try {
-            connection = await mysql.createConnection(dbConfig);
+            connection = await getConnection();
 
             // Lấy thông tin người dùng
             const [userRows] = await connection.execute(
@@ -132,7 +132,7 @@ module.exports = {
 
             if (videoFiles.length === 0) {
                 api.sendMessage("❌ Không có video nào trong kho. Vui lòng thử lại sau!", threadID);
-                await connection.end();
+                connection.release();
                 return;
             }
 
@@ -145,7 +145,7 @@ module.exports = {
 
             const filePath = path.join(VIDEO_DIR, randomFileName);
 
-            await connection.end();
+            if (connection) { connection.release(); connection = null; }
 
             // Gửi video
             try {
@@ -171,7 +171,7 @@ module.exports = {
                 // Hoàn tiền nếu gửi video lỗi
                 let refundConnection;
                 try {
-                    refundConnection = await mysql.createConnection(dbConfig);
+                    refundConnection = await getConnection();
                     await refundConnection.execute(
                         'UPDATE messenger_users SET credits = credits + ? WHERE psid = ?',
                         [PRICE, senderID]
@@ -180,14 +180,14 @@ module.exports = {
                 } catch (e) {
                     api.sendMessage("❌ Lỗi xử lý. Vui lòng liên hệ admin!", threadID);
                 } finally {
-                    if (refundConnection) await refundConnection.end();
+                    if (refundConnection) refundConnection.release();
                 }
             }
 
         } catch (error) {
             console.error("Lỗi vidgai:", error);
             api.sendMessage("❌ Lỗi xử lý lệnh. Vui lòng thử lại!", threadID);
-            if (connection) await connection.end();
+            if (connection) connection.release();
         }
     }
 };

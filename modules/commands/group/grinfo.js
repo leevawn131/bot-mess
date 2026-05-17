@@ -5,7 +5,8 @@ const { checkCooldown } = require('../../utils/cooldown');
 
 module.exports = {
     name: "grinfo",
-    description: "Xem thông tin nhóm (Fix MessageID Error)",
+    description: "Xem thông tin nhóm",
+    usage: "\n!grinfo → Xem thông tin chi tiết nhóm hiện tại\n━━━━━━━━━━━━━━━━━━\n📌 Hiển thị: Tên nhóm, số thành viên, QTV, ảnh nhóm",
     execute: async ({ api, event }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -19,22 +20,28 @@ module.exports = {
             // 1. Lấy dữ liệu nhóm
             const threadInfo = await api.getThreadInfo(threadID);
             
+            // Check if threadInfo is null or invalid
+            if (!threadInfo || typeof threadInfo !== 'object') {
+                return api.sendMessage("⚠️ Không thể lấy thông tin nhóm. Vui lòng thử lại.", threadID, messageID);
+            }
+            
             // 2. Xử lý thông tin
             const name = threadInfo.threadName || "Chưa đặt tên";
-            const totalMembers = threadInfo.participantIDs.length;
-            const totalAdmins = threadInfo.adminIDs.length;
+            const totalMembers = (threadInfo.participantIDs || []).length;
+            const totalAdmins = (threadInfo.adminIDs || []).length;
             const approvalMode = threadInfo.approvalMode ? "Bật" : "Tắt";
             const emoji = threadInfo.emoji || "👍";
             
             // Đếm Nam/Nữ
-            const boy = threadInfo.userInfo.filter(u => u.gender === "MALE").length;
-            const girl = threadInfo.userInfo.filter(u => u.gender === "FEMALE").length;
+            const boy = (threadInfo.userInfo || []).filter(u => u.gender === "MALE").length;
+            const girl = (threadInfo.userInfo || []).filter(u => u.gender === "FEMALE").length;
             const other = totalMembers - boy - girl;
 
             // 3. Soạn nội dung
             let msg = `📂 === HỒ SƠ NHÓM === 📂\n`;
             msg += `━━━━━━━━━━━━━━━━━━\n`;
             msg += `📛 Tên: ${name}\n`;
+            msg += `🆔 ID Nhóm: ${threadID}\n`;
             msg += `🛡️ Phê duyệt: ${approvalMode}\n`;
             msg += `👑 Quản trị viên: ${totalAdmins}\n`;
             msg += `👥 Tổng thành viên: ${totalMembers}\n`;

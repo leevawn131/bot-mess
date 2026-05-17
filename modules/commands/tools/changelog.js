@@ -45,7 +45,7 @@ function normalizeEntry(raw) {
 module.exports = {
   name: "changelog",
   description: "Xem lịch sử cập nhật: all hoặc newest",
-  usage: "[all | newest]",
+  usage: "\n!changelog → Xem bản cập nhật mới nhất\n!changelog all → Xem toàn bộ lịch sử cập nhật\n━━━━━━━━━━━━━━━━━━\n📝 Hiển thị phiên bản, ngày, và nội dung thay đổi",
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
 
@@ -62,7 +62,7 @@ module.exports = {
       );
     }
 
-    const mode = String(args?.[0] || "all").toLowerCase();
+    const mode = String(args?.[0] || "newest").toLowerCase();
     const entries = loadEntries().map(normalizeEntry);
 
     if (entries.length === 0) {
@@ -93,7 +93,7 @@ module.exports = {
 
     if (mode !== "all") {
       return api.sendMessage(
-        "⚠️ Dùng: changelog (xem all) hoặc changelog newest",
+        "⚠️ Dùng: changelog (xem bản mới nhất) hoặc changelog all (xem tất cả)",
         threadID,
         messageID,
       );

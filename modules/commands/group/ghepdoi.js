@@ -1,11 +1,13 @@
 const { checkCooldown } = require('../../utils/cooldown');
+const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
 
 module.exports = {
     name: "ghepdoi",
     description: "Ghép đôi (Hỗ trợ ghép 2 người cụ thể)",
-    usage: "\n- !ghepdoi: Random\n- !ghepdoi tao: Tìm duyên\n- !ghepdoi @A @B: Ghép A với B",
+    usage: "\n!ghepdoi → Ghép đôi ngẫu nhiên 2 người\n!ghepdoi tao → Tìm duyên cho bản thân\n!ghepdoi @A @B → Ghép đôi 2 người chỉ định\n━━━━━━━━━━━━━━━━━━\n💘 Hiển thị tỉ lệ hợp đôi và nhận xét vui\n💡 Hỗ trợ: tag, reply, hoặc tìm tên",
 
     async execute({ api, event, args }) {
+        await ensureMentionsFromHistory(api, event);
         const { threadID, senderID, mentions, messageReply } = event;
 
         // Cooldown 3s
@@ -17,6 +19,11 @@ module.exports = {
         try {
             // 1. Lấy danh sách thành viên
             const threadInfo = await api.getThreadInfo(threadID);
+            
+            if (!threadInfo || typeof threadInfo !== 'object' || !threadInfo.userInfo) {
+                return api.sendMessage("❌ Không thể lấy danh sách thành viên nhóm.", threadID);
+            }
+            
             const participants = threadInfo.userInfo;
             const botID = api.getCurrentUserID();
 

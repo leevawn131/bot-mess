@@ -1,4 +1,4 @@
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 const {
   checkMinigameLimit,
@@ -12,7 +12,7 @@ const RATE = 70; // Tỉ lệ 1 ăn 70
 module.exports = {
   name: "lode",
   description: "Ghi lô đề (1 ăn 70) - Xổ ngay lập tức",
-  usage: "\n!lode [số 00-99] [tiền cược] (tối đa 5 con)",
+  usage: "\n!lode [số 00-99] [tiền_cược] → Ghi lô đề\n━━━━━━━━━━━━━━━━━━\n🎰 Tỉ lệ: 1 ăn 70 | Tối đa 5 con/lần\n🎲 Xổ ngay lập tức sau khi ghi\n💡 Ví dụ: !lode 69 10000\n💡 Nhiều con: !lode 12 5000 45 3000",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID, messageID } = event;
@@ -67,7 +67,7 @@ module.exports = {
 
     let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
+      connection = await getConnection();
 
       // Check tiền
       const [rows] = await connection.execute(
@@ -275,7 +275,7 @@ module.exports = {
       console.error(e);
       api.sendMessage("❌ Lỗi Database.", threadID, messageID);
     } finally {
-      if (connection) await connection.end();
+      if (connection) connection.release();
     }
   },
 };

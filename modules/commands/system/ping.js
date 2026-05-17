@@ -3,6 +3,8 @@ const { checkCooldown } = require('../../utils/cooldown');
 
 module.exports = {
     name: "ping",
+    description: "Kiểm tra trạng thái bot",
+    usage: "\n!ping → Kiểm tra độ trễ, RAM, uptime của bot\n━━━━━━━━━━━━━━━━━━\n📊 Hiển thị: Ping, bộ nhớ, thời gian hoạt động",
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
 

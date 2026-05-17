@@ -1,4 +1,4 @@
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -105,7 +105,7 @@ async function finalizeBaucuaSession({
 
   let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
+    connection = await getConnection();
     for (const p of players) {
       totalBet += p.amount;
 
@@ -151,7 +151,7 @@ async function finalizeBaucuaSession({
     console.error(e);
     msg += "\n❌ Lỗi Database trả thưởng!";
   } finally {
-    if (connection) await connection.end();
+    if (connection) connection.release();
   }
 
   clearBaucuaTimer(key);
@@ -189,7 +189,8 @@ function scheduleBaucuaAutoClose({ api, threadID, config }) {
 
 module.exports = {
   name: "baucua",
-  description: "Bầu Cua (Anti-Spam Edition)",
+  description: "Bầu Cua",
+  usage: "\n!baucua → Mở sòng Bầu Cua mới\n!baucua lac → Lắc đĩa kết thúc phiên (chủ sòng)\n━━━━━━━━━━━━━━━━━━\n🎲 Cược: Reply tin nhắn sòng + [bầu/cua/tôm/cá/gà/nai] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → cua 30000",
 
   execute: async ({ api, event, args, config }) => {
     const threadID = String(event.threadID);
@@ -278,7 +279,7 @@ module.exports = {
     if (session.status !== "open") return;
 
     if (senderID === BOSS_ID)
-      return api.sendMessage("❌ Boss không được cược!", threadID, senderID);
+      return api.sendMessage("❌ Boss không được cược!", threadID, messageID);
 
     const limitCheck = checkMinigameLimit(senderID);
     if (!limitCheck.allowed) {
@@ -297,7 +298,7 @@ module.exports = {
 
     let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
+      connection = await getConnection();
 
       const [rows] = await connection.execute(
         "SELECT credits, name FROM messenger_users WHERE psid = ?",

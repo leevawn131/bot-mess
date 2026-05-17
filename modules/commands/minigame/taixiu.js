@@ -1,4 +1,4 @@
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 const path = require("path");
 const fs = require("fs");
 const { checkCooldown } = require("../../utils/cooldown");
@@ -29,7 +29,8 @@ function normalizeChoice(str) {
   return str
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d");
 }
 
 
@@ -200,7 +201,7 @@ async function finalizeTaixiuSession({
 
   let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
+    connection = await getConnection();
 
     for (const p of players) {
       totalBet += p.amount;
@@ -308,7 +309,7 @@ async function finalizeTaixiuSession({
     console.error(e);
     msg += "\n❌ Lỗi Database!";
   } finally {
-    if (connection) await connection.end();
+    if (connection) connection.release();
   }
 
   clearTaixiuTimer(key);
@@ -346,7 +347,7 @@ function scheduleTaixiuAutoClose({ api, threadID, config }) {
 module.exports = {
   name: "taixiu",
   description: "Tài Xỉu (Anti-Spam Edition)",
-  usage: "\n!taixiu: Mở sòng\nreply bot [tai/xiu] [tien]: để cược",
+  usage: "\n!taixiu → Mở sòng Tài Xỉu mới\n!taixiu xoc → Xóc đĩa kết thúc phiên (chủ sòng)\n!taixiu soicau → Xem lịch sử kết quả gần nhất\n━━━━━━━━━━━━━━━━━━\n🎲 Cược: Reply tin nhắn sòng + [tài/xỉu] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → tai 50000",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID } = event;
@@ -451,7 +452,7 @@ module.exports = {
     if (session.status !== "open") return;
 
     if (senderID === BOSS_ID)
-      return api.sendMessage("❌ Boss không được cược!", threadID, senderID);
+      return api.sendMessage("❌ Boss không được cược!", threadID, messageID);
 
     const limitCheck = checkMinigameLimit(senderID);
     if (!limitCheck.allowed) {
@@ -470,7 +471,7 @@ module.exports = {
 
     let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
+      connection = await getConnection();
 
       const [rows] = await connection.execute(
         "SELECT credits, name, vip_until FROM messenger_users WHERE psid = ?",
@@ -592,9 +593,10 @@ module.exports = {
         api.sendMessage(minigameState.message, threadID, messageID);
       }
     } catch (e) {
-      console.error("Lỗi HandleReply:", e);
+      console.error(e);
+      return api.sendMessage("❌ Lỗi CSDL tài xỉu.", threadID);
     } finally {
-      if (connection) await connection.end();
+      if (connection) connection.release();
     }
   },
 };

@@ -1,5 +1,5 @@
 const mysql = require('mysql2/promise');
-const { getConnectionPoolConfig } = require('./envConfig');
+const { getConnectionPoolConfig, getDatabaseConfig } = require('./envConfig');
 
 // Connection pool instance
 let pool = null;
@@ -12,16 +12,17 @@ function initializePool() {
         return pool;
     }
 
-    const config = getConnectionPoolConfig();
+    const dbConfig = getDatabaseConfig();
+    const poolConfig = getConnectionPoolConfig();
 
     pool = mysql.createPool({
-        host: config.host,
-        port: config.port,
-        user: config.user,
-        password: config.password,
-        database: config.database,
+        host: dbConfig.host,
+        port: dbConfig.port,
+        user: dbConfig.user,
+        password: dbConfig.password,
+        database: dbConfig.database,
         waitForConnections: true,
-        connectionLimit: config.max,
+        connectionLimit: poolConfig.max,
         queueLimit: 0,
         enableKeepAlive: true,
         keepAliveInitialDelay: 0

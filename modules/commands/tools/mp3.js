@@ -2,7 +2,7 @@ const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 const {
   consumeEnergy,
@@ -58,6 +58,19 @@ function getYtDlpBaseCommand() {
   return "yt-dlp";
 }
 
+function getBundledYtDlpBinaryCommand() {
+  try {
+    const packageJsonPath = require.resolve("yt-dlp-exec/package.json");
+    const packageRoot = path.dirname(packageJsonPath);
+    const binaryPath = path.resolve(packageRoot, "bin/yt-dlp");
+    if (fs.existsSync(binaryPath)) {
+      return `\"${binaryPath}\"`;
+    }
+  } catch (_) {}
+
+  return null;
+}
+
 function buildYtDlpCommand(mainArgs) {
   const extra = getYtDlpExtraArgs();
   const base = getYtDlpBaseCommand();
@@ -79,7 +92,10 @@ function canUseYtDlpCli() {
     return true;
   } catch (error) {
     ytDlpCliHealthCache = false;
-    console.log("⚠️ yt-dlp CLI không dùng được, chuyển fallback:", getExecErrorDetails(error));
+    console.log(
+      "⚠️ yt-dlp CLI không dùng được, chuyển fallback:",
+      getExecErrorDetails(error),
+    );
     return false;
   }
 }
@@ -95,6 +111,7 @@ function getYtDlpExec() {
 function getYtDlpCookieArg() {
   const cookieFileCandidates = [
     process.env.YTDLP_COOKIES_FILE,
+    path.resolve(process.cwd(), "youtube_cookies.txt"),
     path.resolve(process.cwd(), "cache/youtube_cookies.txt"),
     path.resolve(process.env.HOME || "", ".config/yt-dlp/cookies.txt"),
   ].filter(Boolean);
@@ -107,7 +124,9 @@ function getYtDlpCookieArg() {
     } catch (_) {}
   }
 
-  const preferredBrowser = String(process.env.YTDLP_COOKIES_BROWSER || "chrome:Default").trim();
+  const preferredBrowser = String(
+    process.env.YTDLP_COOKIES_BROWSER || "chrome:Default",
+  ).trim();
   const browserOrder = [
     preferredBrowser,
     "chrome:Default",
@@ -138,7 +157,9 @@ function getYtDlpCookieArg() {
 }
 
 function getYtDlpJsRuntimeArg() {
-  const nodeBin = String(process.env.YTDLP_NODE_BIN || process.execPath || "").trim();
+  const nodeBin = String(
+    process.env.YTDLP_NODE_BIN || process.execPath || "",
+  ).trim();
   if (nodeBin && fs.existsSync(nodeBin)) {
     return `--js-runtimes "node:${nodeBin}"`;
   }
@@ -160,7 +181,11 @@ function getYtDlpExtraArgs() {
   args.push("--force-overwrites");
 
   // Nhẹ nhàng giảm tần suất request để hạn chế 429
-  args.push("--sleep-requests 1", "--sleep-interval 1", "--max-sleep-interval 5");
+  args.push(
+    "--sleep-requests 1",
+    "--sleep-interval 1",
+    "--max-sleep-interval 5",
+  );
 
   return args.join(" ");
 }
@@ -168,7 +193,8 @@ function getYtDlpExtraArgs() {
 module.exports = {
   name: "mp3",
   description: "Tải nhạc từ YouTube hoặc SoundCloud",
-  usage: "[song name] hoặc [link YouTube/SoundCloud]",
+  usage:
+    "\n!mp3 [tên bài hát] → Tìm và tải nhạc\n!mp3 [link YouTube/SoundCloud] → Tải từ link\n━━━━━━━━━━━━━━━━━━\n🎧 Hỗ trợ: YouTube, SoundCloud\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: !mp3 See You Again",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
 
@@ -204,7 +230,7 @@ module.exports = {
     let energyUse;
     let energyConnection;
     try {
-      energyConnection = await mysql.createConnection(dbConfig);
+      energyConnection = await getConnection();
       energyUse = await consumeEnergy(energyConnection, senderID, 20);
       if (!energyUse.ok) {
         if (energyUse.reason === "not_enough") {
@@ -220,7 +246,7 @@ module.exports = {
       console.error("Energy check error (mp3):", error);
       return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, messageID);
     } finally {
-      if (energyConnection) await energyConnection.end();
+      if (energyConnection) energyConnection.release();
     }
 
     const cacheDir = path.resolve(__dirname, "../../../cache/mp3");
@@ -397,12 +423,15 @@ async function searchYouTube(query) {
         params: { search_query: query },
         timeout: 5000,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
       });
 
       // Tìm video ID từ HTML - cải thiện regex
-      const videoIdMatch = response.data.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+      const videoIdMatch = response.data.match(
+        /"videoId":"([a-zA-Z0-9_-]{11})"/,
+      );
       if (videoIdMatch && videoIdMatch[1]) {
         const url = `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
         console.log("✅ Tìm thấy video YouTube:", url);
@@ -415,11 +444,14 @@ async function searchYouTube(query) {
     // Fallback: Thử yt-dlp để search
     if (canUseYtDlpCli()) {
       try {
-        const result = execSync(`${buildYtDlpCommand(`"ytsearch:${query}" --dump-json -j`)} | head -1`, {
-          stdio: "pipe",
-          timeout: 10000,
-          encoding: "utf8",
-        });
+        const result = execSync(
+          `${buildYtDlpCommand(`"ytsearch:${query}" --dump-json -j`)} | head -1`,
+          {
+            stdio: "pipe",
+            timeout: 10000,
+            encoding: "utf8",
+          },
+        );
         if (result) {
           const info = JSON.parse(result);
           if (info?.url || info?.webpage_url) {
@@ -566,7 +598,9 @@ async function downloadYouTubeToMP3(url, cacheDir) {
       try {
         if (canUseYtDlpCli()) {
           // Tải trực tiếp dạng M4A thay vì convert từ MP3
-          command = buildYtDlpCommand(`-f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${m4aPath}" "${url}"`);
+          command = buildYtDlpCommand(
+            `-f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${m4aPath}" "${url}"`,
+          );
           console.log("📦 Sử dụng yt-dlp (M4A format)");
 
           try {
@@ -584,29 +618,168 @@ async function downloadYouTubeToMP3(url, cacheDir) {
               : findFirstExistingAudio(outputBase);
             const recentAudioPath = m4aResultPath
               ? null
-              : findRecentAudioInDir(cacheDir, downloadStartMs - 10000, videoId);
-            const printedAudioPath = printedPath && fs.existsSync(printedPath)
-              ? printedPath
-              : null;
+              : findRecentAudioInDir(
+                  cacheDir,
+                  downloadStartMs - 10000,
+                  videoId,
+                );
+            const printedAudioPath =
+              printedPath && fs.existsSync(printedPath) ? printedPath : null;
 
             if (m4aResultPath || recentAudioPath || printedAudioPath) {
-              const finalPath = m4aResultPath || recentAudioPath || printedAudioPath;
+              const finalPath =
+                m4aResultPath || recentAudioPath || printedAudioPath;
               console.log("✅ Tải audio thành công:", finalPath);
               return Promise.resolve(m4aTitle || null)
                 .then((title) => resolve({ audioPath: finalPath, title }))
                 .catch(() => resolve({ audioPath: finalPath, title: null }));
             }
           } catch (e) {
-            console.log("⚠️ Tải M4A thất bại, thử MP3...", getExecErrorDetails(e));
+            console.log(
+              "⚠️ Tải M4A thất bại, thử MP3...",
+              getExecErrorDetails(e),
+            );
           }
 
           // Nếu M4A thất bại, thử MP3
-          command = buildYtDlpCommand(`-x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`);
+          command = buildYtDlpCommand(
+            `-x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`,
+          );
           console.log("📦 Sử dụng yt-dlp (MP3 format)");
         } else {
           const ytDlpExec = getYtDlpExec();
           if (!ytDlpExec) {
             throw new Error("yt-dlp not found");
+          }
+
+          const bundledBinary = getBundledYtDlpBinaryCommand();
+          if (bundledBinary) {
+            console.log("📦 Sử dụng yt-dlp-exec binary (CLI mode)");
+            command = `${bundledBinary} ${getYtDlpExtraArgs()} -f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${m4aPath}" "${url}"`;
+
+            try {
+              const m4aOutput = execSync(command, {
+                stdio: "pipe",
+                timeout: 120000,
+                maxBuffer: 10 * 1024 * 1024,
+                encoding: "utf8",
+              });
+              const m4aTitle = extractPrintedTitle(m4aOutput);
+              const printedPath = extractPrintedFilePath(m4aOutput);
+
+              const m4aResultPath = fs.existsSync(m4aPath)
+                ? m4aPath
+                : findFirstExistingAudio(outputBase);
+              const recentAudioPath = m4aResultPath
+                ? null
+                : findRecentAudioInDir(
+                    cacheDir,
+                    downloadStartMs - 10000,
+                    videoId,
+                  );
+              const printedAudioPath =
+                printedPath && fs.existsSync(printedPath) ? printedPath : null;
+
+              if (m4aResultPath || recentAudioPath || printedAudioPath) {
+                const finalPath =
+                  m4aResultPath || recentAudioPath || printedAudioPath;
+                console.log("✅ Tải audio thành công:", finalPath);
+                return Promise.resolve(m4aTitle || null)
+                  .then((title) => resolve({ audioPath: finalPath, title }))
+                  .catch(() => resolve({ audioPath: finalPath, title: null }));
+              }
+            } catch (e) {
+              console.log(
+                "⚠️ yt-dlp-exec binary M4A thất bại, thử MP3...",
+                getExecErrorDetails(e),
+              );
+            }
+
+            command = `${bundledBinary} ${getYtDlpExtraArgs()} -x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`;
+            console.log("📦 Sử dụng yt-dlp-exec binary (MP3 format)");
+
+            try {
+              const dlOutput = execSync(command, {
+                stdio: "pipe",
+                timeout: 120000,
+                maxBuffer: 10 * 1024 * 1024,
+                encoding: "utf8",
+              });
+              const printedTitle = extractPrintedTitle(dlOutput);
+              const printedPath = extractPrintedFilePath(dlOutput);
+
+              let resultPath = null;
+              if (fs.existsSync(m4aPath)) {
+                console.log("✅ Tải và chuyển đổi thành công:", m4aPath);
+                resultPath = m4aPath;
+              } else if (fs.existsSync(audioPath)) {
+                console.log("✅ Tải và chuyển đổi thành công:", audioPath);
+                resultPath = audioPath;
+              } else {
+                const anyAudioPath = findFirstExistingAudio(outputBase);
+                const recentAudioPath = anyAudioPath
+                  ? null
+                  : findRecentAudioInDir(
+                      cacheDir,
+                      downloadStartMs - 10000,
+                      videoId,
+                    );
+                const printedAudioPath =
+                  printedPath && fs.existsSync(printedPath)
+                    ? printedPath
+                    : null;
+                if (anyAudioPath || recentAudioPath || printedAudioPath) {
+                  resultPath =
+                    anyAudioPath || recentAudioPath || printedAudioPath;
+                  console.log("✅ Tải audio thành công:", resultPath);
+                } else {
+                  try {
+                    const dirEntries = fs.existsSync(cacheDir)
+                      ? fs.readdirSync(cacheDir).slice(-30)
+                      : [];
+                    console.log(
+                      "⚠️ Không tìm thấy output theo base:",
+                      outputBase,
+                    );
+                    if (printedPath) {
+                      console.log(
+                        "⚠️ yt-dlp in ra filepath nhưng không tồn tại:",
+                        printedPath,
+                      );
+                    }
+                    console.log("⚠️ Cache files gần đây:", dirEntries);
+                  } catch (_) {}
+                  throw new Error("Không tạo được file audio");
+                }
+              }
+
+              if (!resultPath) {
+                throw new Error("Không tạo được file audio");
+              }
+
+              return Promise.resolve(printedTitle || null)
+                .then((title) => resolve({ audioPath: resultPath, title }))
+                .catch(() => resolve({ audioPath: resultPath, title: null }));
+            } catch (execError) {
+              const detailed = getExecErrorDetails(execError);
+              console.error("Lỗi tải video:", detailed || execError.message);
+
+              const details = String(detailed || execError.message || "");
+              if (
+                details.includes("Sign in to confirm you’re not a bot") ||
+                details.includes("Sign in to confirm you're not a bot")
+              ) {
+                return reject(
+                  new Error(
+                    "YouTube yêu cầu xác thực. Hãy export cookies vào youtube_cookies.txt hoặc cache/youtube_cookies.txt rồi đặt ENV YTDLP_COOKIES_FILE nếu cần.",
+                  ),
+                );
+              }
+
+              return reject(
+                new Error("Lỗi tải video: " + (detailed || execError.message)),
+              );
+            }
           }
 
           console.log("📦 Sử dụng yt-dlp-exec (bundled binary)");
@@ -654,18 +827,22 @@ async function downloadYouTubeToMP3(url, cacheDir) {
           const recentAudioPath = anyAudioPath
             ? null
             : findRecentAudioInDir(cacheDir, downloadStartMs - 10000, videoId);
-          const printedAudioPath = printedPath && fs.existsSync(printedPath)
-            ? printedPath
-            : null;
+          const printedAudioPath =
+            printedPath && fs.existsSync(printedPath) ? printedPath : null;
           if (anyAudioPath || recentAudioPath || printedAudioPath) {
             resultPath = anyAudioPath || recentAudioPath || printedAudioPath;
             console.log("✅ Tải audio thành công:", resultPath);
           } else {
             try {
-              const dirEntries = fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir).slice(-30) : [];
+              const dirEntries = fs.existsSync(cacheDir)
+                ? fs.readdirSync(cacheDir).slice(-30)
+                : [];
               console.log("⚠️ Không tìm thấy output theo base:", outputBase);
               if (printedPath) {
-                console.log("⚠️ yt-dlp in ra filepath nhưng không tồn tại:", printedPath);
+                console.log(
+                  "⚠️ yt-dlp in ra filepath nhưng không tồn tại:",
+                  printedPath,
+                );
               }
               console.log("⚠️ Cache files gần đây:", dirEntries);
             } catch (_) {}
@@ -695,8 +872,8 @@ async function downloadYouTubeToMP3(url, cacheDir) {
         ) {
           return reject(
             new Error(
-              "YouTube yêu cầu xác thực. Hãy đăng nhập browser và cấu hình cookie cho bot. Gợi ý: export cookies ra file cache/youtube_cookies.txt rồi đặt ENV YTDLP_COOKIES_FILE=cache/youtube_cookies.txt"
-            )
+              "YouTube yêu cầu xác thực. Hãy đăng nhập browser và cấu hình cookie cho bot. Gợi ý: export cookies ra file cache/youtube_cookies.txt rồi đặt ENV YTDLP_COOKIES_FILE=cache/youtube_cookies.txt",
+            ),
           );
         }
 
@@ -846,7 +1023,9 @@ async function downloadSoundCloudToMP3(url, cacheDir) {
 
     // Fallback to command line yt-dlp
     if (canUseYtDlpCli()) {
-      const command = buildYtDlpCommand(`-f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`);
+      const command = buildYtDlpCommand(
+        `-f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`,
+      );
       console.log("📦 Sử dụng yt-dlp command");
 
       execSync(command, {
@@ -911,7 +1090,17 @@ function findRecentAudioInDir(dirPath, minMtimeMs, preferredBaseName) {
   try {
     if (!fs.existsSync(dirPath)) return null;
 
-    const extensions = new Set(["mp3", "m4a", "opus", "webm", "ogg", "aac", "mp4", "flac", "wav"]);
+    const extensions = new Set([
+      "mp3",
+      "m4a",
+      "opus",
+      "webm",
+      "ogg",
+      "aac",
+      "mp4",
+      "flac",
+      "wav",
+    ]);
     const entries = fs
       .readdirSync(dirPath)
       .map((name) => {
@@ -933,7 +1122,9 @@ function findRecentAudioInDir(dirPath, minMtimeMs, preferredBaseName) {
     if (!entries.length) return null;
 
     if (preferredBaseName) {
-      const preferred = entries.find((item) => item.name.startsWith(`${preferredBaseName}.`));
+      const preferred = entries.find((item) =>
+        item.name.startsWith(`${preferredBaseName}.`),
+      );
       if (preferred) return preferred.fullPath;
     }
 

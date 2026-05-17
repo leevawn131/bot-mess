@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getAdminBotUIDs, readSettings } = require('../../utils/checkPermission');
-const { writeJsonFile } = require('../../utils/secureFileOps');
+const { readJsonFile, writeJsonFile } = require('../../utils/secureFileOps');
 const { info, warn } = require('../../utils/logger');
 
 // Đường dẫn file lưu mode settings
@@ -232,27 +232,40 @@ module.exports = {
         const newMode = normalizeMode(args[0]?.toLowerCase());
         const secondArg = args[1]?.toLowerCase();
 
-        // === KIỂM TRA QUYỀN: chỉ QTV nhóm + chủ bot mới được thay đổi mode ===
-        let isAdmin = false;
+        // === KIỂM TRA QUYỀN ===
+        // Nếu không có arg: chỉ xem mode (cho phép QTV nhóm hoặc chủ bot)
         const adminBotUIDs = getAdminBotUIDs();
-        let isBotAdmin = adminBotUIDs.includes(senderID);
+        const isBotAdmin = adminBotUIDs.includes(senderID);
+        let isAdmin = false;
 
-        if (!isBotAdmin) {
-            try {
-                const threadInfo = await api.getThreadInfo(threadIDStr);
-                const adminIDs = toAdminIdList(threadInfo);
-                isAdmin = adminIDs.includes(senderID);
-            } catch (e) {
-                warn("Error getting thread info", { error: e.message, threadID });
+        if (!newMode) {
+            // viewing handled above, but keep compatibility: allow QTV or bot admin
+            let isAdmin = false;
+            if (!isBotAdmin) {
+                try {
+                    const threadInfo = await api.getThreadInfo(threadIDStr);
+                    const adminIDs = toAdminIdList(threadInfo);
+                    isAdmin = adminIDs.includes(senderID);
+                } catch (e) {
+                    warn("Error getting thread info", { error: e.message, threadID });
+                }
             }
-        }
-
-        if (!isAdmin && !isBotAdmin) {
-            return api.sendMessage(
-                "❌ chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh mode!",
-                threadID,
-                messageID
-            );
+            if (!isAdmin && !isBotAdmin) {
+                return api.sendMessage(
+                    "❌ chỉ QTV nhóm hoặc chủ bot mới được xem mode!",
+                    threadID,
+                    messageID
+                );
+            }
+        } else {
+            // Changing mode: chỉ CHỦ BOT (adminBotUIDs) mới được thực hiện
+            if (!isBotAdmin) {
+                return api.sendMessage(
+                    "❌ Chỉ chủ bot mới được dùng lệnh mode để đổi mode!",
+                    threadID,
+                    messageID
+                );
+            }
         }
 
         // === KHÔNG CÓ ARG: XEM MODE HIỆN TẠI ===

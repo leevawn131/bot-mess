@@ -1,11 +1,11 @@
 const { checkCooldown } = require('../../utils/cooldown');
-const { ADMIN_BOT_UIDS } = require('../../utils/checkPermission');
+const { getAdminBotUIDs } = require('../../utils/checkPermission');
 const { getJoinGreeting, setJoinGreeting } = require('../../utils/joinGreetingSettings');
 
 module.exports = {
     name: "setwelcome",
     description: "Cài câu chào khi có người vào nhóm",
-    usage: "[check/reset/off/default hoặc nội dung câu chào dùng {name}, {names}, {count}, {@tag}, {@tags}]",
+    usage: "\n!setwelcome [câu chào] → Cài câu chào riêng cho nhóm\n!setwelcome check → Xem câu chào hiện tại\n!setwelcome reset → Quay về câu chào mặc định\n━━━━━━━━━━━━━━━━━━\n📌 Biến hỗ trợ: {name}, {names}, {count}, {@tag}, {@tags}\n💡 VD: !setwelcome Chào {@tag}, nhớ đọc nội quy nha!",
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
         const prefix = "!setwelcome";
@@ -22,10 +22,15 @@ module.exports = {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
         }
 
+        if (!threadInfo || typeof threadInfo !== 'object') {
+            return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
+        }
+
         const adminIDs = (threadInfo.adminIDs || []).map((item) => String(item.id));
         const isBotAdmin = adminIDs.includes(String(api.getCurrentUserID()));
         const isSenderAdmin = adminIDs.includes(String(senderID));
-        const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+        const adminBotUIDs = getAdminBotUIDs();
+        const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
 
         if (!isSenderAdmin && !isSenderBotAdmin) {
             return api.sendMessage("⚠️ Chỉ admin nhóm hoặc chủ bot mới được cài câu chào.", threadID, messageID);

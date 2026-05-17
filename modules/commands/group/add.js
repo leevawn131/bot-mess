@@ -1,9 +1,19 @@
 const { checkCooldown } = require("../../utils/cooldown");
-const { ADMIN_BOT_UIDS } = require("../../utils/checkPermission");
+const { getAdminBotUIDs } = require("../../utils/checkPermission");
 const axios = require("axios");
 
 function isNumericUid(value) {
   return /^\d{6,}$/.test(String(value || "").trim());
+}
+
+function toThreadAdminIdList(threadInfo) {
+  const list = Array.isArray(threadInfo?.adminIDs) ? threadInfo.adminIDs : [];
+  return list
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      return String(item.id || item.userID || item.adminID || "").trim();
+    })
+    .filter(Boolean);
 }
 
 function extractUidFromInput(rawInput) {
@@ -22,8 +32,9 @@ function extractUidFromInput(rawInput) {
     return profileIdMatch[1];
   }
 
+  // Match profile URLs like facebook.com/username or facebook.com/profile.php?id=123 or facebook.com/en/username
   const numericPathMatch = input.match(
-    /facebook\.com\/(?:[a-z]{2,3}\/)?(\d{6,})(?:[/?#]|$)/i,
+    /facebook\.com\/(?:[a-z]{2,5}\/)?(\d{6,})(?:[/?#]|$)/i,
   );
   if (numericPathMatch?.[1]) {
     return numericPathMatch[1];
@@ -219,7 +230,10 @@ async function resolveUidFromLinkOrUsername(api, rawInput, options = {}) {
           }
         }
       } catch (e) {
-        // error handling
+        console.error(
+          "[resolveUID] httpGet failed for authed HTML:",
+          e?.message || String(e),
+        );
       }
 
       normalized = normalizeFacebookUrlForLookup(page.finalUrl);
@@ -228,6 +242,10 @@ async function resolveUidFromLinkOrUsername(api, rawInput, options = {}) {
         return String(fromFinalUrl);
       }
     } catch (e) {
+      console.error(
+        "[resolveUID] fetchFacebookPage HTML parsing failed:",
+        e?.message || String(e),
+      );
       normalized = normalizeFacebookUrlForLookup(input);
     }
   }
@@ -240,7 +258,11 @@ async function resolveUidFromLinkOrUsername(api, rawInput, options = {}) {
       }
     }
   } catch (e) {
-    // error handling
+    console.error(
+      "[resolveUID] api.getUID failed for:",
+      normalized,
+      e?.message || String(e),
+    );
   }
 
   try {
@@ -256,7 +278,11 @@ async function resolveUidFromLinkOrUsername(api, rawInput, options = {}) {
       }
     }
   } catch (e) {
-    // error handling
+    console.error(
+      "[resolveUID] api.getUserID failed for:",
+      normalized,
+      e?.message || String(e),
+    );
   }
 
   const vanity = maybeUrl ? extractVanityFromFacebookUrl(normalized) : input;
@@ -273,7 +299,11 @@ async function resolveUidFromLinkOrUsername(api, rawInput, options = {}) {
         return String(fromVanityPage);
       }
     } catch (e) {
-      // error handling
+      console.error(
+        "[resolveUID] vanity URL fetch failed for:",
+        vanity,
+        e?.message || String(e),
+      );
     }
   }
 
@@ -336,10 +366,28 @@ async function addUserToGroupViaWeb(api, threadID, targetUID) {
   };
 
   try {
-    const raw = await api.httpPost(
+    // httpPost can be callback-based or promise-based
+    let raw;
+    const result = api.httpPost(
       "https://www.facebook.com/messaging/send/",
       form,
     );
+    
+    if (result instanceof Promise) {
+      raw = await result;
+    } else {
+      // If it's callback-based, wrap in Promise
+      raw = await new Promise((resolve, reject) => {
+        // If result is a string/object, assume it's the response
+        if (typeof result === 'string' || typeof result === 'object') {
+          resolve(result);
+        } else {
+          // Otherwise assume the call is async and we need to wait
+          reject(new Error('httpPost returned unexpected result'));
+        }
+      });
+    }
+    
     let parsed = null;
     try {
       parsed = JSON.parse(String(raw || "").replace(/^for \(;;\);/, ""));
@@ -386,7 +434,7 @@ async function detectProfessionalOrPublicProfile(api, targetUID) {
       return { detected: true, reason: `matched:${matched}` };
     }
   } catch (e) {
-    // error handling
+    console.error("[isProfessional]", e?.message || String(e));
   }
 
   return { detected: false, reason: null };
@@ -397,17 +445,37 @@ async function verifyMemberJoined(
   threadID,
   targetUID,
   retry = 5,
-  delayMs = 1800,
+  delayMs = 800,
 ) {
   for (let i = 0; i <= retry; i++) {
     try {
       const info = await api.getThreadInfo(threadID);
       const memberIds = (info?.participantIDs || []).map((id) => String(id));
+      console.log(
+        `[verifyMember] attempt ${i}/${retry}: participantIDs count=${memberIds.length}, target in list=${memberIds.includes(String(targetUID))}`,
+      );
+
       if (memberIds.includes(String(targetUID))) {
+        console.log(`[verifyMember] ✅ Tìm thấy target UID trong nhóm!`);
         return { joined: true, threadInfo: info };
       }
+
+      // Log approval queue và other relevant data
+      const approvalQueue = info?.approvalQueue || [];
+      if (approvalQueue.length > 0) {
+        console.log(
+          `[verifyMember] approval queue:`,
+          approvalQueue.map((q) => ({
+            requesterID: q?.requesterID,
+            status: q?.status,
+          })),
+        );
+      }
     } catch (e) {
-      // error handling
+      console.error(
+        `[verifyMember] attempt ${i}/${retry} failed:`,
+        e?.message || String(e),
+      );
     }
 
     if (i < retry) {
@@ -415,6 +483,7 @@ async function verifyMemberJoined(
     }
   }
 
+  console.log(`[verifyMember] ❌ Sau ${retry + 1} lần thử, user không vào nhóm`);
   return { joined: false, threadInfo: null };
 }
 
@@ -436,32 +505,121 @@ async function performAddToGroup({
 
   let addResult = null;
   let addMethod = null;
+  let targetUserInfo = null;
+  
+  console.log(`[performAdd] Bắt đầu add UID ${targetUID} vào nhóm ${threadID}`);
+
+  // **WARM-UP**: Fetch user profile HTML trước (giống như tự add bằng tay)
+  // Điều này trigger Facebook cache user info và tăng tỉ lệ add thành công
+  try {
+    console.log(`[performAdd] Pre-fetching user profile để warm-up...`);
+    const profileUrl = `https://www.facebook.com/${targetUID}`;
+    const profileFetch = await fetchFacebookPage(profileUrl);
+    console.log(`[performAdd] ✓ Profile fetched, finalUrl=${profileFetch.finalUrl}`);
+    
+    // Thêm delay để Facebook process
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  } catch (e) {
+    console.log(`[performAdd] Profile fetch fail (non-critical):`, e?.message);
+  }
+
+  // Try to get user info to check privacy settings and friendship
+  try {
+    if (typeof api.getUserInfo === "function") {
+      const userInfo = await api.getUserInfo(String(targetUID));
+      if (userInfo && userInfo[String(targetUID)]) {
+        targetUserInfo = userInfo[String(targetUID)];
+        console.log(
+          `[performAdd] Target user info: name="${targetUserInfo.name}", isFriend=${targetUserInfo.isFriend}, gender=${targetUserInfo.gender}, type=${targetUserInfo.type}`,
+        );
+        
+        // Check if user is friend
+        if (!targetUserInfo.isFriend) {
+          console.log(`[performAdd] ⚠️ WARNING: User không phải friend của bot! Có thể cần friend request trước.`);
+        }
+      }
+    }
+  } catch (e) {
+    console.error(
+      `[performAdd] Cannot get user info:`,
+      e?.message || String(e),
+    );
+  }
+  
+    // **FAST-TRACK**: Try add immediately after profile warm-up (bypass friend requirement)
+    if (typeof api.gcmember === "function") {
+      console.log(`[performAdd] Fast-track: Thử add ngay sau warm-up...`);
+      try {
+        const fastAddResult = await api.gcmember(
+          "add",
+          [String(targetUID)],
+          String(threadID),
+        );
+        console.log(`[performAdd] Fast-track result:`, fastAddResult);
+      
+        if (!isAddErrorResult(fastAddResult)) {
+          // Verify fast-track success
+          const fastVerify = await verifyMemberJoined(
+            api,
+            threadID,
+            targetUID,
+            3,
+            600,
+          );
+          if (fastVerify.joined) {
+            console.log(`[performAdd] ✅ Fast-track thành công!`);
+            return api.sendMessage(
+              `✅ Đã thêm UID ${targetUID} vào nhóm thành công.`,
+              threadID,
+              messageID,
+            );
+          }
+        }
+      } catch (e) {
+        console.log(`[performAdd] Fast-track fail:`, e?.message);
+      }
+    }
+
   if (typeof api.addUserToGroup === "function") {
     addMethod = "addUserToGroup";
+    console.log(`[performAdd] Đang thử method: ${addMethod}`);
     addResult = await api.addUserToGroup(String(targetUID), String(threadID));
+    console.log(`[performAdd] Kết quả ${addMethod}:`, addResult);
   } else if (typeof api.addUsersToGroup === "function") {
     addMethod = "addUsersToGroup";
+    console.log(`[performAdd] Đang thử method: ${addMethod}`);
     addResult = await api.addUsersToGroup(
       [String(targetUID)],
       String(threadID),
     );
+    console.log(`[performAdd] Kết quả ${addMethod}:`, addResult);
   } else if (typeof api.gcmember === "function") {
     addMethod = "gcmember";
+    console.log(`[performAdd] Đang thử method: ${addMethod}`);
     addResult = await api.gcmember(
       "add",
       [String(targetUID)],
       String(threadID),
     );
+    console.log(`[performAdd] Kết quả ${addMethod}:`, addResult);
+  } else if (typeof api.addUserToGroupChat === "function") {
+    addMethod = "addUserToGroupChat";
+    console.log(`[performAdd] Đang thử method: ${addMethod}`);
+    addResult = await api.addUserToGroupChat(String(targetUID), String(threadID));
+    console.log(`[performAdd] Kết quả ${addMethod}:`, addResult);
   } else {
     throw new Error("Library missing add group function");
   }
 
   if (isAddErrorResult(addResult)) {
+    console.log(`[performAdd] ❌ ${addMethod} trả về error:`, addResult);
     throw new Error(addResult.error || addResult.err || "add group failed");
   }
 
+  console.log(`[performAdd] ✓ ${addMethod} thành công, đang verify...`);
   const verify = await verifyMemberJoined(api, threadID, targetUID);
   if (verify.joined) {
+    console.log(`[performAdd] ✅ User đã join nhóm!`);
     return api.sendMessage(
       `✅ Đã thêm UID ${targetUID} vào nhóm thành công.`,
       threadID,
@@ -469,18 +627,25 @@ async function performAddToGroup({
     );
   }
 
+  console.log(
+    `[performAdd] ⚠️ ${addMethod} success nhưng verify fail, thử gcmember retry...`,
+  );
+
   // Nhánh ws3-fca gcmember có thể chỉ publish MQTT rồi trả success sớm;
   // thử gửi lại 1 lần để tăng tỉ lệ vào nhóm thực tế.
   if (addMethod === "gcmember" && typeof api.gcmember === "function") {
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
+    console.log(`[performAdd] Retry gcmember...`);
     const retryResult = await api.gcmember(
       "add",
       [String(targetUID)],
       String(threadID),
     );
+    console.log(`[performAdd] Kết quả retry:`, retryResult);
 
     if (isAddErrorResult(retryResult)) {
+      console.log(`[performAdd] ❌ Retry thất bại:`, retryResult);
       throw new Error(
         retryResult.error || retryResult.err || "gcmember retry failed",
       );
@@ -490,10 +655,11 @@ async function performAddToGroup({
       api,
       threadID,
       targetUID,
-      3,
-      2000,
+      5,
+      1000,
     );
     if (verifyAfterRetry.joined) {
+      console.log(`[performAdd] ✅ Retry thành công!`);
       return api.sendMessage(
         `✅ Đã thêm UID ${targetUID} vào nhóm thành công.`,
         threadID,
@@ -502,37 +668,55 @@ async function performAddToGroup({
     }
 
     // Fallback web-form add: thử endpoint messaging/send giống flow add truyền thống.
+    console.log(`[performAdd] Thử web fallback method...`);
     const webFallback = await addUserToGroupViaWeb(api, threadID, targetUID);
-
-    const verifyAfterWeb = await verifyMemberJoined(
-      api,
-      threadID,
-      targetUID,
-      3,
-      2000,
-    );
-    if (verifyAfterWeb.joined) {
-      return api.sendMessage(
-        `✅ Đã thêm UID ${targetUID} vào nhóm thành công.`,
+    console.log(`[performAdd] Web fallback result:`, webFallback);
+    
+    if (webFallback.ok) {
+      console.log(`[performAdd] Web fallback ok, verifying...`);
+      const verifyAfterWeb = await verifyMemberJoined(
+        api,
         threadID,
-        messageID,
+        targetUID,
+        5,
+        1000,
       );
+      if (verifyAfterWeb.joined) {
+        console.log(`[performAdd] ✅ Web fallback thành công!`);
+        return api.sendMessage(
+          `✅ Đã thêm UID ${targetUID} vào nhóm thành công.`,
+          threadID,
+          messageID,
+        );
+      }
+      console.log(`[performAdd] Web fallback verify fail`);
+    } else {
+      console.log(`[performAdd] Web fallback error:`, webFallback.error);
     }
   }
 
   let latestThreadInfo = threadInfo;
   try {
     latestThreadInfo = await api.getThreadInfo(threadID);
+    console.log(
+      `[performAdd] latestThreadInfo: participantIDs count=${latestThreadInfo?.participantIDs?.length || 0}, approvalQueue=${latestThreadInfo?.approvalQueue?.length || 0}, approvalMode=${latestThreadInfo?.approvalMode}`,
+    );
   } catch (e) {
+    console.error(`[performAdd] getThreadInfo error:`, e?.message);
     // giữ threadInfo cũ nếu fetch mới thất bại
   }
 
   const approvalQueue = latestThreadInfo?.approvalQueue || [];
+  console.log(`[performAdd] approval queue:`, JSON.stringify(approvalQueue));
+
   const waitingApproval = approvalQueue.some(
     (q) => String(q?.requesterID) === String(targetUID),
   );
 
   if (waitingApproval || latestThreadInfo?.approvalMode) {
+    console.log(
+      `[performAdd] ⚠️ User pending approval: waitingApproval=${waitingApproval}, approvalMode=${latestThreadInfo?.approvalMode}`,
+    );
     return api.sendMessage(
       `⚠️ Đã gửi lời mời UID ${targetUID}, nhưng chưa vào nhóm ngay.\nCó thể đang chờ duyệt/chờ xác nhận lời mời.`,
       threadID,
@@ -540,17 +724,17 @@ async function performAddToGroup({
     );
   }
 
-  return api.sendMessage(
-    `⚠️ Không thể add UID ${targetUID}.\nTài khoản này có thể đang bật chế độ chuyên nghiệp (trang cá nhân công khai) nên Facebook chặn thêm bằng API.`,
-    threadID,
-    messageID,
-  );
+  console.log(`[performAdd] ❌ Tất cả method đều fail, tài khoản bị chặn`);
+  
+  // Better error message based on user info
+  let errorMsg = `⚠️ Không thể add UID ${targetUID}.\n\n🔍 Có thể nguyên nhân:\n• Tài khoản bật chế độ chuyên nghiệp\n• Cấu hình quyền riêng tư cao\n• Chặn nhóm chat từ người lạ\n\n💡 Hãy thử:\n1. Kết bạn trực tiếp với user trước\n2. Kiểm tra privacy settings của user\n3. Thêm thủ công qua Facebook`;
+  return api.sendMessage(errorMsg, threadID, messageID);
 }
 
 module.exports = {
   name: "add",
   description: "Mời thành viên vào nhóm bằng UID hoặc link Facebook",
-  usage: "[uid | link facebook]",
+  usage: "\n!add [uid] → Thêm bằng User ID\n!add [link Facebook] → Thêm bằng link profile\n━━━━━━━━━━━━━━━━━━\n📌 Hỗ trợ link dạng: facebook.com/username hoặc fb://profile/id\n⚠️ Bot cần quyền QTV nhóm để thêm thành viên\n💡 Ví dụ: !add 100012345678",
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
 
@@ -577,12 +761,11 @@ module.exports = {
         );
       }
 
-      const adminIDs = (threadInfo.adminIDs || []).map((item) =>
-        String(item.id),
-      );
+      const adminIDs = toThreadAdminIdList(threadInfo);
       const botID = String(api.getCurrentUserID());
       const isSenderAdmin = adminIDs.includes(String(senderID));
-      const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+      const adminBotUIDs = getAdminBotUIDs();
+      const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
 
       if (!isSenderAdmin && !isSenderBotAdmin) {
         return api.sendMessage(
@@ -610,6 +793,10 @@ module.exports = {
         );
       }
 
+      console.log(
+        `[add cmd] Execute bắt đầu: sender=${senderID}, group=${threadID}, input="${input}"`,
+      );
+
       const explicitUid = extractUidFromInput(input);
 
       if (explicitUid && String(explicitUid) === botID) {
@@ -625,12 +812,17 @@ module.exports = {
       });
 
       if (!targetUID) {
+        console.log(`[add cmd] Không resolve được UID từ input: ${input}`);
         return api.sendMessage(
           "❌ Không tìm được UID hợp lệ từ dữ liệu bạn nhập. Hãy thử UID số hoặc link profile Facebook.",
           threadID,
           messageID,
         );
       }
+
+      console.log(
+        `[add cmd] Resolve thành công: input="${input}" → UID=${targetUID}`,
+      );
 
       if (String(targetUID) === botID) {
         return api.sendMessage(
@@ -640,6 +832,7 @@ module.exports = {
         );
       }
 
+      console.log(`[add cmd] Gọi performAddToGroup cho UID ${targetUID}`);
       return performAddToGroup({
         api,
         threadID,
@@ -648,7 +841,12 @@ module.exports = {
         threadInfo,
       });
     } catch (e) {
-      console.error("Lỗi add:", e);
+      console.error(
+        "[add cmd] Lỗi execute:",
+        e?.message || String(e),
+        "stack:",
+        e?.stack,
+      );
       return api.sendMessage(
         "❌ Không thể thêm thành viên. Có thể do quyền riêng tư của tài khoản hoặc bot chưa đủ quyền.",
         threadID,

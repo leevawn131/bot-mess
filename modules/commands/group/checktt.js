@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { checkCooldown } = require("../../utils/cooldown");
-const { ADMIN_BOT_UIDS } = require("../../utils/checkPermission");
+const { getBotConfig } = require("../../utils/envConfig");
 
 const STATS_PATH = path.join(__dirname, "../../../message_stats.json");
 
@@ -19,13 +19,14 @@ function writeStats(stats) {
 }
 
 function toDateKeys(now = new Date()) {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
+  const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  const year = vnTime.getFullYear();
+  const month = String(vnTime.getMonth() + 1).padStart(2, "0");
+  const day = String(vnTime.getDate()).padStart(2, "0");
   const dayKey = `${year}-${month}-${day}`;
   const monthKey = `${year}-${month}`;
 
-  const weekDate = new Date(year, now.getMonth(), now.getDate());
+  const weekDate = new Date(year, vnTime.getMonth(), day);
   const weekDay = (weekDate.getDay() + 6) % 7;
   weekDate.setDate(weekDate.getDate() - weekDay + 3);
 
@@ -124,9 +125,9 @@ async function sendMessageSafe(api, body, threadID, replyToMessageID) {
 function buildRankList({ threadInfo, threadStats, threshold }) {
   const memberInfo = threadInfo.userInfo || [];
   const memberMap = new Map(memberInfo.map((u) => [String(u.id), u]));
-  const participantIDs = (threadInfo.participantIDs || []).map((id) =>
-    String(id),
-  );
+  const participantIDs = Array.isArray(threadInfo.participantIDs)
+    ? threadInfo.participantIDs.map((id) => String(id))
+    : [];
   const participantSet = new Set(participantIDs);
   const { dayKey, weekKey, monthKey } = toDateKeys();
 
@@ -182,7 +183,7 @@ module.exports = {
   name: "checktt",
   description: "Kiểm tra tương tác, lọc/kick/reset dữ liệu tin nhắn",
   usage:
-    "[all | ngay | tuan | thang | locmem <số_tin_tổng> | clear | reset | kickdead]",
+    "\n!checktt all → Xem top tương tác tất cả thành viên\n!checktt → Xem top tương tác của 1 người\n!checktt ngay → Top tương tác hôm nay\n!checktt tuan → Top tuần này\n!checktt thang → Top tháng này\n!checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n!checktt kickdead → Kick thành viên bị bay acc\n!checktt clear → Làm sạch dữ liệu tương tác\n!checktt reset → Reset dữ liệu nhóm (Admin)\n━━━━━━━━━━━━━━━━━━\n📊 Thống kê tự động theo ngày/tuần/tháng",
 
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
@@ -201,8 +202,19 @@ module.exports = {
     }
 
     try {
-      const threadInfo = await api.getThreadInfo(threadID);
-      if (!threadInfo.isGroup) {
+      let threadInfo;
+      try {
+        threadInfo = await api.getThreadInfo(threadID);
+      } catch (err) {
+        console.error("Error getting thread info:", err);
+        return api.sendMessage(
+          "⚠️ Không thể lấy thông tin nhóm. Vui lòng thử lại sau.",
+          threadID,
+          messageID,
+        );
+      }
+
+      if (!threadInfo || !threadInfo.isGroup) {
         return api.sendMessage(
           "⚠️ Lệnh này chỉ dùng trong nhóm.",
           threadID,
@@ -210,10 +222,25 @@ module.exports = {
         );
       }
 
-      const adminIDs = (threadInfo.adminIDs || []).map((a) => String(a.id));
+      const adminIDs = Array.isArray(threadInfo.adminIDs)
+        ? threadInfo.adminIDs.map((a) => String(a.id))
+        : [];
       const botID = String(api.getCurrentUserID());
       const isSenderAdmin = adminIDs.includes(String(senderID));
-      const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+
+      // Get admin bot UIDs safely
+      let adminBotUIDs = [];
+      try {
+        const config = getBotConfig();
+        adminBotUIDs = config?.adminIDs || [];
+      } catch (error) {
+        console.error("Error getting admin bot UIDs:", error);
+        adminBotUIDs = [];
+      }
+
+      const isSenderBotAdmin = Array.isArray(adminBotUIDs)
+        ? adminBotUIDs.includes(String(senderID))
+        : false;
       const isBotAdmin = adminIDs.includes(botID);
       const canUseChecktt = isSenderAdmin || isSenderBotAdmin;
 
@@ -260,7 +287,9 @@ module.exports = {
         }
 
         const participantSet = new Set(
-          (threadInfo.participantIDs || []).map((id) => String(id)),
+          Array.isArray(threadInfo.participantIDs)
+            ? threadInfo.participantIDs.map((id) => String(id))
+            : [],
         );
         const allStatIDs = Object.keys(threadStats || {});
         const removedIDs = allStatIDs.filter(
@@ -322,16 +351,39 @@ module.exports = {
         let failed = 0;
         const failedDetails = [];
 
+        if (
+          !(
+            api.removeUserFromGroup ||
+            api.removeParticipant ||
+            api.removeUser ||
+            api.removeUserFromThread ||
+            api.removeParticipantFromThread ||
+            api.gcmember
+          )
+        ) {
+          return api.sendMessage(
+            "❌ Bot hiện tại không hỗ trợ chức năng kick do thư viện thiếu API xóa participant. Vui lòng cập nhật thư viện/phiên bản.",
+            threadID,
+            messageID,
+          );
+        }
+
+        const removeUser = async (uid, tid) => {
+          if (api.removeUserFromGroup) return api.removeUserFromGroup(uid, tid);
+          if (api.removeParticipant) return api.removeParticipant(uid, tid);
+          if (api.gcmember) return api.gcmember("remove", uid, tid);
+          if (api.removeUser) return api.removeUser(uid, tid);
+          if (api.removeUserFromThread)
+            return api.removeUserFromThread(uid, tid);
+          if (api.removeParticipantFromThread)
+            return api.removeParticipantFromThread(uid, tid);
+          throw new Error("Library missing remove function");
+        };
+
         for (const user of candidates) {
           const uid = String(user.uid);
           try {
-            if (api.removeUserFromGroup) {
-              await api.removeUserFromGroup(uid, threadID);
-            } else if (api.removeParticipant) {
-              await api.removeParticipant(uid, threadID);
-            } else {
-              throw new Error("Library missing remove function");
-            }
+            await removeUser(uid, threadID);
             success++;
             await new Promise((r) => setTimeout(r, 300));
           } catch (e) {
@@ -393,16 +445,39 @@ module.exports = {
         let failed = 0;
         const failedDetails = [];
 
+        if (
+          !(
+            api.removeUserFromGroup ||
+            api.removeParticipant ||
+            api.removeUser ||
+            api.removeUserFromThread ||
+            api.removeParticipantFromThread ||
+            api.gcmember
+          )
+        ) {
+          return api.sendMessage(
+            "❌ Bot hiện tại không hỗ trợ chức năng kick do thư viện thiếu API xóa participant. Vui lòng cập nhật thư viện/phiên bản.",
+            threadID,
+            messageID,
+          );
+        }
+
+        const removeUser = async (uid, tid) => {
+          if (api.removeUserFromGroup) return api.removeUserFromGroup(uid, tid);
+          if (api.removeParticipant) return api.removeParticipant(uid, tid);
+          if (api.gcmember) return api.gcmember("remove", uid, tid);
+          if (api.removeUser) return api.removeUser(uid, tid);
+          if (api.removeUserFromThread)
+            return api.removeUserFromThread(uid, tid);
+          if (api.removeParticipantFromThread)
+            return api.removeParticipantFromThread(uid, tid);
+          throw new Error("Library missing remove function");
+        };
+
         for (const user of candidates) {
           const uid = String(user.uid);
           try {
-            if (api.removeUserFromGroup) {
-              await api.removeUserFromGroup(uid, threadID);
-            } else if (api.removeParticipant) {
-              await api.removeParticipant(uid, threadID);
-            } else {
-              throw new Error("Library missing remove function");
-            }
+            await removeUser(uid, threadID);
 
             if (stats[threadID] && stats[threadID][uid] !== undefined) {
               delete stats[threadID][uid];
@@ -685,10 +760,25 @@ module.exports = {
       }
 
       const threadInfo = await api.getThreadInfo(threadID);
-      const adminIDs = (threadInfo.adminIDs || []).map((a) => String(a.id));
+      const adminIDs = Array.isArray(threadInfo.adminIDs)
+        ? threadInfo.adminIDs.map((a) => String(a.id))
+        : [];
       const botID = String(api.getCurrentUserID());
       const isSenderAdmin = adminIDs.includes(String(senderID));
-      const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+
+      // Get admin bot UIDs safely
+      let adminBotUIDs = [];
+      try {
+        const config = getBotConfig();
+        adminBotUIDs = config?.adminIDs || [];
+      } catch (error) {
+        console.error("Error getting admin bot UIDs:", error);
+        adminBotUIDs = [];
+      }
+
+      const isSenderBotAdmin = Array.isArray(adminBotUIDs)
+        ? adminBotUIDs.includes(String(senderID))
+        : false;
 
       if (!isSenderAdmin && !isSenderBotAdmin) {
         return api.sendMessage(
@@ -699,7 +789,9 @@ module.exports = {
       }
 
       const participantSet = new Set(
-        (threadInfo.participantIDs || []).map((id) => String(id)),
+        Array.isArray(threadInfo.participantIDs)
+          ? threadInfo.participantIDs.map((id) => String(id))
+          : [],
       );
 
       const selectedTargets = sttList
@@ -734,6 +826,34 @@ module.exports = {
       let failed = 0;
       const failedDetails = [];
 
+      if (
+        !(
+          api.removeUserFromGroup ||
+          api.removeParticipant ||
+          api.removeUser ||
+          api.removeUserFromThread ||
+          api.removeParticipantFromThread ||
+          api.gcmember
+        )
+      ) {
+        return api.sendMessage(
+          "❌ Bot hiện tại không hỗ trợ chức năng kick do thư viện thiếu API xóa participant. Vui lòng cập nhật thư viện/phiên bản.",
+          threadID,
+          messageID,
+        );
+      }
+
+      const removeUser = async (uid, tid) => {
+        if (api.removeUserFromGroup) return api.removeUserFromGroup(uid, tid);
+        if (api.removeParticipant) return api.removeParticipant(uid, tid);
+        if (api.gcmember) return api.gcmember("remove", uid, tid);
+        if (api.removeUser) return api.removeUser(uid, tid);
+        if (api.removeUserFromThread) return api.removeUserFromThread(uid, tid);
+        if (api.removeParticipantFromThread)
+          return api.removeParticipantFromThread(uid, tid);
+        throw new Error("Library missing remove function");
+      };
+
       for (const target of selectedTargets) {
         const uid = String(target.uid);
 
@@ -744,13 +864,7 @@ module.exports = {
           }
 
           try {
-            if (api.removeUserFromGroup) {
-              await api.removeUserFromGroup(uid, threadID);
-            } else if (api.removeParticipant) {
-              await api.removeParticipant(uid, threadID);
-            } else {
-              throw new Error("Library missing remove function");
-            }
+            await removeUser(uid, threadID);
             kicked++;
             await new Promise((r) => setTimeout(r, 300));
           } catch (e) {

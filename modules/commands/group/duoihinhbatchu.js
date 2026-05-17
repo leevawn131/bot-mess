@@ -147,7 +147,8 @@ const buildAcceptedList = (puzzle) => {
 
 module.exports = {
     name: "duoihinhbatchu",
-    description: "Game Đuổi Hình Bắt Chữ (Reply để trả lời)",
+    description: "Game Đuổi Hình Bắt Chữ",
+    usage: "\n!duoihinhbatchu → Bắt đầu câu đố emoji mới\n━━━━━━━━━━━━━━━━━━\n🎮 Reply đáp án để trả lời\n💡 Gợi ý xuất hiện nếu không ai đoán đúng\n🏆 Trả lời đúng sẽ nhận xu thưởng",
 
     execute: async ({ api, event }) => {
         const { threadID } = event;

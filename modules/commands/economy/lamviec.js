@@ -1,12 +1,12 @@
-const mysql = require("mysql2/promise");
+const { execute, executeTransaction, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 const { recordAction } = require("../../utils/questSystem");
 const { consumeEnergy } = require("../../utils/energySystem");
 
 module.exports = {
   name: "lamviec",
-  description:
-    "Làm việc kiếm tiền (nâng cấp nhẹ: thêm nghề, có thưởng tăng ca)",
+  description: "Làm việc kiếm tiền",
+  usage: "\n!lamviec → Làm việc kiếm xu (nghề ngẫu nhiên)\n━━━━━━━━━━━━━━━━━━\n💼 Mỗi lần làm nhận xu ngẫu nhiên theo nghề\n⚡ Tốn năng lượng mỗi lần làm\n🎰 Có cơ hội thưởng tăng ca x2\n⏳ Cooldown: 60 giây",
   execute: async ({ api, event, config }) => {
     const { threadID, messageID, senderID } = event;
 
@@ -24,22 +24,9 @@ module.exports = {
       );
     }
 
-    // 2. KẾT NỐI DATABASE
-    const db = config.database;
-    const dbConfig = {
-      host: db.host,
-      port: db.port,
-      user: db.user,
-      password: db.password,
-      database: db.name,
-    };
-
-    let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
-
       // Check tài khoản
-      const [rows] = await connection.execute(
+      const rows = await execute(
         "SELECT credits, vip_until FROM messenger_users WHERE psid = ?",
         [senderID],
       );
@@ -50,13 +37,24 @@ module.exports = {
           messageID,
         );
 
-      const energyUse = await consumeEnergy(connection, senderID, 15);
+      let connection;
+      let energyUse;
+      try {
+        connection = await getConnection();
+        energyUse = await consumeEnergy(connection, senderID, 15);
+      } catch (err) {
+        console.error(err);
+        return api.sendMessage("❌ Không thể kiểm tra thể lực lúc này.", threadID, messageID);
+      } finally {
+        if (connection) connection.release();
+      }
+
       if (!energyUse.ok) {
         if (energyUse.reason === "not_enough") {
           return api.sendMessage(energyUse.message, threadID, messageID);
         }
         return api.sendMessage(
-          "❌ Không thể kiểm tra thể lực lúc này.",
+          "❌ Không thể trừ thể lực lúc này.",
           threadID,
           messageID,
         );
@@ -69,7 +67,7 @@ module.exports = {
       const hasVIP = rows[0].vip_until && new Date(rows[0].vip_until) > now;
 
       // Check work_glove effect
-      const [workGlove] = await connection.execute(
+      const workGlove = await execute(
         'SELECT * FROM active_effects WHERE psid = ? AND effect_type = "work_bonus" AND uses_left > 0',
         [senderID],
       );
@@ -117,7 +115,7 @@ module.exports = {
         const lostMoney = Math.min(rawLostMoney, currentBalance);
 
         // Trừ tiền
-        await connection.execute(
+        await execute(
           "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
           [lostMoney, senderID],
         );
@@ -182,29 +180,26 @@ module.exports = {
           salary += overtimeBonus;
         }
 
-        await connection.beginTransaction();
-        try {
-          if (hasWorkGlove) {
-            await connection.execute(
-              'UPDATE active_effects SET uses_left = uses_left - 1 WHERE psid = ? AND effect_type = "work_bonus"',
-              [senderID],
-            );
-            await connection.execute(
-              "DELETE FROM active_effects WHERE uses_left <= 0",
-            );
-          }
-
-          // Cộng tiền
-          await connection.execute(
-            "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-            [salary, senderID],
-          );
-
-          await connection.commit();
-        } catch (txErr) {
-          await connection.rollback();
-          throw txErr;
+        // Build transaction queries
+        const queries = [];
+        if (hasWorkGlove) {
+          queries.push({
+            query: 'UPDATE active_effects SET uses_left = uses_left - 1 WHERE psid = ? AND effect_type = "work_bonus"',
+            params: [senderID],
+          });
+          queries.push({
+            query: "DELETE FROM active_effects WHERE uses_left <= 0",
+            params: [],
+          });
         }
+
+        // Cộng tiền
+        queries.push({
+          query: "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
+          params: [salary, senderID],
+        });
+
+        await executeTransaction(queries);
 
         try {
           recordAction(senderID, "work", 1);
@@ -225,8 +220,6 @@ module.exports = {
     } catch (e) {
       console.error(e);
       return api.sendMessage("❌ Lỗi Database.", threadID, messageID);
-    } finally {
-      if (connection) await connection.end();
     }
   },
 };

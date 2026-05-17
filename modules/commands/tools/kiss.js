@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { checkCooldown } = require("../../utils/cooldown");
+const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
 
 const KISS_MESSAGES = [
   "{actor} nhẹ nhàng hôn {target} một cái thật tình cảm 😘",
@@ -63,8 +64,9 @@ async function getUserName(api, userID, fallback = "Người ấy") {
 module.exports = {
   name: "kiss",
   description: "Hôn người được tag hoặc reply bằng GIF",
-  usage: "@người dùng hoặc reply tin nhắn",
+  usage: "\n!kiss @tag → Hôn người được tag\n!kiss (reply) → Hôn người được reply\n━━━━━━━━━━━━━━━━━━\n💋 Gửi kèm GIF hôn và tin nhắn ngọt ngào\n😘 Không thể hôn chính mình",
   execute: async ({ api, event }) => {
+    await ensureMentionsFromHistory(api, event);
     const { threadID, messageID, senderID, mentions, messageReply } = event;
 
     const cooldown = checkCooldown({

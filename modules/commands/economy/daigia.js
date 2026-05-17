@@ -1,4 +1,4 @@
-const mysql = require('mysql2/promise');
+const { execute } = require('../../utils/database');
 const path = require("path");
 const fs = require("fs");
 const { checkCooldown } = require('../../utils/cooldown');
@@ -9,7 +9,7 @@ const BOSS_ID = "100037351338722";
 module.exports = {
     name: "daigia",
     description: "Xem top 10 đại gia giàu nhất",
-    usage: "",
+    usage: "\n!daigia → Xem bảng xếp hạng Top 10 người giàu nhất\n━━━━━━━━━━━━━━━━━━\n📊 Xếp hạng theo tổng xu hiện có\n🏆 Hiển thị tên, số xu và thứ hạng của bạn",
     execute: async ({ api, event }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -19,21 +19,7 @@ module.exports = {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
 
-        // 1. ĐỌC CONFIG DATABASE
-        const configPath = path.resolve(__dirname, '../../../config.json');
-        let dbConfig = {};
         try {
-            const configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            const db = configFile.database;
-            dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
-        } catch (err) {
-            return api.sendMessage("❌ Lỗi đọc config.json", threadID);
-        }
-
-        let connection;
-        try {
-            connection = await mysql.createConnection(dbConfig);
-
             // 2. Lấy thông tin nhóm để lấy danh sách thành viên
             let memberInfo = [];
             try {
@@ -59,8 +45,8 @@ module.exports = {
             // Thử query từ bảng mới (credits theo nhóm)
             try {
                 const placeholders = memberIDs.map(() => '?').join(',');
-                [rows] = await connection.execute(
-                    `SELECT muc.psid, muc.credits, mu.name 
+                rows = await execute(
+                    `SELECT muc.psid, muc.credits, mu.name
                      FROM messenger_user_credits muc
                      LEFT JOIN messenger_users mu ON muc.psid = mu.psid
                      WHERE muc.threadID = ? AND muc.psid IN (${placeholders})
@@ -74,8 +60,8 @@ module.exports = {
             // Nếu bảng mới chưa có dữ liệu, dùng bảng cũ (toàn hệ thống)
             if (rows.length === 0) {
                 const placeholders = memberIDs.map(() => '?').join(',');
-                [rows] = await connection.execute(
-                    `SELECT psid, credits, name FROM messenger_users 
+                rows = await execute(
+                    `SELECT psid, credits, name FROM messenger_users
                      WHERE psid IN (${placeholders})
                      ORDER BY credits DESC LIMIT 10`,
                     memberIDs
@@ -114,8 +100,6 @@ module.exports = {
         } catch (e) {
             console.error("Lỗi daigia:", e);
             return api.sendMessage("❌ Lỗi khi lấy thống kê đại gia.", threadID);
-        } finally {
-            if (connection) await connection.end();
         }
     }
 };

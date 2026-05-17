@@ -5,6 +5,12 @@ const { debug } = require('./logger');
 
 const SETTINGS_PATH = path.join(__dirname, "../../mode_settings.json");
 
+const { getThreadInfoCached } = require('./threadInfo');
+
+async function getThreadInfoSafe(api, threadID) {
+  return getThreadInfoCached(api, threadID);
+}
+
 function normalizeMode(rawMode) {
   const mode = String(rawMode || "").toLowerCase();
   if (mode === "admingr") return "qtv"; // Tương thích dữ liệu cũ
@@ -25,8 +31,13 @@ function toAdminIdList(threadInfo) {
  * Get admin bot UIDs from config
  */
 function getAdminBotUIDs() {
-  const config = getBotConfig();
-  return config.adminIDs || [];
+  try {
+    const config = getBotConfig();
+    return config?.adminIDs || [];
+  } catch (error) {
+    console.error('Error getting admin bot UIDs:', error);
+    return [];
+  }
 }
 
 /**
@@ -51,7 +62,7 @@ async function readSettings() {
 async function checkPermission(threadID, senderID, api) {
   threadID = String(threadID); // Convert sang string để match settings
   const settings = await readSettings();
-  const mode = normalizeMode(settings[threadID] || "adminbot");
+  const mode = normalizeMode(settings[threadID] || "qtv");
 
   // Chủ bot luôn được dùng
   const adminBotUIDs = getAdminBotUIDs();
@@ -59,28 +70,38 @@ async function checkPermission(threadID, senderID, api) {
     return { allowed: true, reason: "Bot admin" };
   }
 
+  // Bot tự dùng lệnh ngang hàng với admin
+  const botUID = String(api.getCurrentUserID());
+  if (String(senderID) === botUID) {
+    return { allowed: true, reason: "Bot self-command" };
+  }
+
   // Mode USER: Ai cũng được
   if (mode === "user") {
     return { allowed: true, reason: "User mode" };
   }
 
-  // Mode QTV: Chủ bot + admin nhóm
+  // Mode QTV: Chủ bot + quản trị viên nhóm
   if (mode === "qtv") {
     try {
-      const threadInfo = await api.getThreadInfo(threadID);
+      const threadInfo = await getThreadInfoSafe(api, threadID);
+      if (!threadInfo) {
+        // API lỗi, không block user
+        return { allowed: true, reason: "Cannot verify (API error), allowing" };
+      }
       const adminIDs = toAdminIdList(threadInfo);
 
       if (adminIDs.includes(String(senderID))) {
         return { allowed: true, reason: "Group admin" };
       }
     } catch (e) {
-      console.error("Lỗi lấy thông tin nhóm khi check permission:", e);
-      return { allowed: false, reason: "Không thể xác minh quyền" };
+      // Không spam log
+      return { allowed: true, reason: "Cannot verify (exception), allowing" };
     }
 
     return {
       allowed: false,
-      reason: `Mode ${mode} - Bạn không phải admin nhóm`,
+      reason: `Mode ${mode} - Bạn không phải quản trị viên nhóm`,
     };
   }
 
@@ -98,7 +119,7 @@ async function checkPermission(threadID, senderID, api) {
 async function getGroupMode(threadID) {
   threadID = String(threadID);
   const settings = await readSettings();
-  return settings[threadID] || "adminbot";
+  return settings[threadID] || "qtv";
 }
 
 module.exports = {

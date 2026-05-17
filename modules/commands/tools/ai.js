@@ -22,7 +22,7 @@ function loadAiConfig() {
 module.exports = {
     name: "ai",
     description: "Chat AI",
-    usage : "\nDùng AI local Ollama (mặc định model llama3:latest).\n!ai [câu hỏi]\n!ai -m [tên_model_ollama] [câu hỏi]",
+    usage : "\n!ai [câu hỏi] → Hỏi AI (model mặc định)\n!ai -m [model] [câu hỏi] → Hỏi với model cụ thể\n━━━━━━━━━━━━━━━━━━\n🤖 Sử dụng AI local Ollama\n💡 Ví dụ: !ai Thủ đô Việt Nam là gì?",
     execute: async ({ api, event, args }) => {
         const threadID = String(event.threadID); // Ép kiểu chuỗi để tránh lỗi
         const displayLabel = 'AI local';

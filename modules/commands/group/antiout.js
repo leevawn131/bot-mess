@@ -1,11 +1,11 @@
 const { checkCooldown } = require("../../utils/cooldown");
-const { ADMIN_BOT_UIDS } = require("../../utils/checkPermission");
+const { getAdminBotUIDs } = require("../../utils/checkPermission");
 const { getAntioutSetting, setAntioutEnabled } = require("../../utils/antioutSettings");
 
 module.exports = {
     name: "antiout",
     description: "Bật/tắt antiout để tự kéo lại người tự rời nhóm",
-    usage: "[on | off | status]",
+    usage: "\n!antiout on → Bật chống rời nhóm\n!antiout off → Tắt chống rời nhóm\n!antiout status → Xem trạng thái hiện tại\n━━━━━━━━━━━━━━━━━━\n🛡️ Tự kéo lại người tự rời nhóm\n⚠️ Yêu cầu: Bot phải có quyền QTV\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
 
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
@@ -17,14 +17,15 @@ module.exports = {
 
         try {
             const threadInfo = await api.getThreadInfo(threadID);
-            if (!threadInfo.isGroup) {
-                return api.sendMessage("⚠️ Lệnh này chỉ dùng trong nhóm chat.", threadID, messageID);
+            if (!threadInfo || typeof threadInfo !== 'object' || !threadInfo.isGroup) {
+                return api.sendMessage("⚠️ Không thể lấy thông tin nhóm hoặc lệnh này chỉ dùng trong nhóm chat.", threadID, messageID);
             }
 
             const adminIDs = (threadInfo.adminIDs || []).map((item) => String(item.id));
             const botID = String(api.getCurrentUserID());
             const isSenderAdmin = adminIDs.includes(String(senderID));
-            const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+            const adminBotUIDs = getAdminBotUIDs();
+            const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
             const isBotAdmin = adminIDs.includes(botID);
 
             if (!isSenderAdmin && !isSenderBotAdmin) {

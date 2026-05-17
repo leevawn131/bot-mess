@@ -35,6 +35,8 @@ npm install
 
 3. Đặt file `appstate.json` ở thư mục gốc dự án.
 
+	Nếu muốn bot tự làm mới đăng nhập khi `appstate.json` hết hạn, tạo file `.env` từ `.env.example` và điền `FB_EMAIL`, `FB_PASSWORD`.
+
 4. Chạy bot:
 
 ```bash
@@ -200,10 +202,11 @@ Bạn có thể cấu hình trong `config.json`:
 - Không đẩy `appstate.json` và thông tin database thật lên repo public.
 - Nên tách dữ liệu nhạy cảm sang biến môi trường nếu triển khai production.
 - Giới hạn `adminIDs` đúng UID quản trị để tránh lạm quyền.
+- Nếu muốn tự refresh đăng nhập, lưu `FB_EMAIL` và `FB_PASSWORD` trong `.env`; khi `appstate.json` lỗi, bot sẽ tự gọi `refresh-appstate.js` rồi thử login lại.
 
 ## Khắc phục lỗi nhanh
 
-- Lỗi đăng nhập Facebook: kiểm tra lại `appstate.json` còn hạn.
+- Lỗi đăng nhập Facebook: nếu là appstate/cookie hết hạn, cấu hình `FB_EMAIL` và `FB_PASSWORD` để bot tự refresh `appstate.json`. Nếu log báo `Error retrieving userID`, thường cần đăng nhập và xác minh tài khoản bằng browser trước.
 - Lỗi kết nối DB: xác minh host/port/user/password trong `config.json`.
 - Lệnh không nhận: kiểm tra `prefix` và quyền của người dùng theo mode nhóm.
 

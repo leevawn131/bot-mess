@@ -3,8 +3,8 @@ const tienCommand = require("./tien");
 
 module.exports = {
   name: "chuyentien",
-  description: "Chuyen tien cho nguoi khac",
-  usage: "<so_tien> (tag/reply/ID)",
+  description: "Chuyển tiền cho người khác",
+  usage: "\n!chuyentien [số_tiền] @tag → Chuyển cho người được tag\n!chuyentien [số_tiền] (reply) → Chuyển cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Phí chuyển: 2%\n💡 Ví dụ: !chuyentien 50000 @Minh",
   execute: async (ctx) => {
     const { api, event } = ctx;
     const { threadID, messageID, senderID } = event;

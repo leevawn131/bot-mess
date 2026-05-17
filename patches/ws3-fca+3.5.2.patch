@@ -1,0 +1,160 @@
+diff --git a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadInfo.js b/node_modules/ws3-fca/src/deltas/apis/threads/getThreadInfo.js
+index f5c5964..4e6bdc0 100644
+--- a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadInfo.js
++++ b/node_modules/ws3-fca/src/deltas/apis/threads/getThreadInfo.js
+@@ -40,7 +40,8 @@ function formatEventReminders(reminder) {
+  * @returns {Object | null} A formatted thread object or null if data is invalid.
+  */
+ function formatThreadGraphQLResponse(data) {
+-  if (data.errors) return null;
++  if (!data || typeof data !== 'object') return null;
++  if (data.errors && Array.isArray(data.errors) && data.errors.length > 0) return null;
+   const messageThread = data.message_thread;
+   if (!messageThread) return null;
+ 
+@@ -161,45 +162,52 @@ module.exports = function (defaultFuncs, api, ctx) {
+    */
+   return async function getThreadInfo(threadID) {
+     const threadIDs = Array.isArray(threadID) ? threadID : [threadID];
+-    
+-    let form = {};
+-    threadIDs.forEach((t, i) => {
+-      form["o" + i] = {
+-        doc_id: "3449967031715030",
+-        query_params: {
+-          id: t,
+-          message_limit: 0,
+-          load_messages: false,
+-          load_read_receipts: false,
+-          before: null,
+-        },
+-      };
+-    });
+-
+-    form = {
+-      queries: JSON.stringify(form),
+-      batch_name: "MessengerGraphQLThreadFetcher",
+-    };
+-
+     try {
+-        const resData = await defaultFuncs
+-            .post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, form)
+-            .then(utils.parseAndCheckLogin(ctx, defaultFuncs));
++        const threadInfos = {};
++        const getListLimit = 50; // Try fetching 50 recent threads as a fallback
++        let recentThreads = null;
+         
+-        if (resData.error) {
+-            throw resData;
+-        }
++        await Promise.all(threadIDs.map(async (t) => {
++            const form = {
++                doc_id: "5779546922121823", // Usually dead, but keep trying
++                variables: JSON.stringify({
++                    id: t,
++                    message_limit: 0,
++                    load_messages: false,
++                    load_read_receipts: false,
++                    before: null,
++                })
++            };
+ 
+-        const threadInfos = {};
+-        for (let i = resData.length - 2; i >= 0; i--) {
+-            const res = resData[i];
+-            if (res.error_results) continue;
++            try {
++                const resData = await defaultFuncs
++                    .post("https://www.facebook.com/api/graphql/", ctx.jar, form)
++                    .then(utils.parseAndCheckLogin(ctx, defaultFuncs));
++
++                if (resData && !resData.error && resData.data) {
++                    const threadInfo = formatThreadGraphQLResponse(resData.data);
++                    if (threadInfo) {
++                        threadInfos[threadInfo.threadID || t] = threadInfo;
++                        return; // Success
++                    }
++                }
++            } catch (e) {
++                // Ignore graphQL error, fallback to getThreadList
++            }
+             
+-            const threadInfo = formatThreadGraphQLResponse(res[Object.keys(res)[0]].data);
+-            if (threadInfo) {
+-                threadInfos[threadInfo.threadID || threadID[threadID.length - 1 - i]] = threadInfo;
++            // Fallback: If not found via doc_id, fetch from getThreadList
++            try {
++                if (!recentThreads) {
++                    recentThreads = await api.getThreadList(getListLimit, null, ["INBOX"]);
++                }
++                const foundThread = recentThreads.find(th => String(th.threadID) === String(t));
++                if (foundThread) {
++                    threadInfos[t] = foundThread;
++                }
++            } catch (e) {
++                console.error("Fallback getThreadList error:", e);
+             }
+-        }
++        }));
+ 
+         return Array.isArray(threadID) ? threadInfos : Object.values(threadInfos)[0] || null;
+     } catch (err) {
+@@ -207,4 +215,4 @@ module.exports = function (defaultFuncs, api, ctx) {
+         throw err;
+     }
+   };
+-};
++}
+\ No newline at end of file
+diff --git a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadList.js b/node_modules/ws3-fca/src/deltas/apis/threads/getThreadList.js
+index 83c1d02..b6a923a 100644
+--- a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadList.js
++++ b/node_modules/ws3-fca/src/deltas/apis/threads/getThreadList.js
+@@ -65,8 +65,8 @@ function formatThreadGraphQLResponse(messageThread) {
+       firstName: d.node.messaging_actor.short_name,
+       vanity: d.node.messaging_actor.username,
+       url: d.node.messaging_actor.url,
+-      thumbSrc: d.node.messaging_actor.big_image_src.uri,
+-      profileUrl: d.node.messaging_actor.big_image_src.uri,
++      thumbSrc: d.node.messaging_actor.big_image_src ? d.node.messaging_actor.big_image_src.uri : null,
++      profileUrl: d.node.messaging_actor.big_image_src ? d.node.messaging_actor.big_image_src.uri : null,
+       gender: d.node.messaging_actor.gender,
+       type: d.node.messaging_actor.__typename,
+       isFriend: d.node.messaging_actor.is_viewer_friend,
+@@ -104,7 +104,7 @@ function formatThreadGraphQLResponse(messageThread) {
+             {},
+           )
+         : {},
+-    adminIDs: messageThread.thread_admins.map(a => a.id),
++    adminIDs: messageThread.thread_admins.map(a => ({ id: a.id || a })),
+     approvalMode: Boolean(messageThread.approval_mode),
+     approvalQueue: messageThread.group_approval_queue.nodes.map((a) => ({
+       inviterID: a.inviter.id,
+diff --git a/node_modules/ws3-fca/src/utils/clients.js b/node_modules/ws3-fca/src/utils/clients.js
+index 548b15f..d548a2b 100644
+--- a/node_modules/ws3-fca/src/utils/clients.js
++++ b/node_modules/ws3-fca/src/utils/clients.js
+@@ -38,7 +38,8 @@ function parseAndCheckLogin(ctx, http, retryCount = 0) {
+ 
+       await delay(retryTime);
+ 
+-      if (data.request.headers["content-type"].split(";")[0] === "multipart/form-data") {
++      const contentType = data.request.headers["content-type"] || data.request.headers["Content-Type"] || "";
++      if (contentType.split(";")[0] === "multipart/form-data") {
+         const newData = await http.postFormData(
+           url,
+           ctx.jar,
+diff --git a/node_modules/ws3-fca/src/utils/formatters/data/formatDelta.js b/node_modules/ws3-fca/src/utils/formatters/data/formatDelta.js
+index 989f2a7..692791d 100644
+--- a/node_modules/ws3-fca/src/utils/formatters/data/formatDelta.js
++++ b/node_modules/ws3-fca/src/utils/formatters/data/formatDelta.js
+@@ -21,6 +21,9 @@ function getAdminTextMessageType(type) {
+ }
+ 
+ function formatDeltaMessage(m) {
++    if (m.delta.body && m.delta.body.includes('@')) {
++        require('fs').writeFileSync('/home/leevawn/bot-mess/delta_debug.json', JSON.stringify(m.delta, null, 2));
++    }
+     const md = m.delta.messageMetadata;
+     const mdata = m.delta.data?.prng ? JSON.parse(m.delta.data.prng) : [];
+     const mentions = {};

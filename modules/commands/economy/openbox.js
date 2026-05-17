@@ -1,10 +1,10 @@
-const mysql = require('mysql2/promise');
+const { execute, getConnection } = require('../../utils/database');
 const { checkCooldown } = require('../../utils/cooldown');
 
 module.exports = {
     name: "openbox",
     description: "Mở hộp bí ẩn",
-    usage: "!openbox, !openbox [số_lượng] hoặc !openbox all",
+    usage: "\n!openbox → Mở 1 hộp bí ẩn\n!openbox [số_lượng] → Mở nhiều hộp cùng lúc\n!openbox all → Mở toàn bộ hộp đang có\n━━━━━━━━━━━━━━━━━━\n🎲 Phần thưởng ngẫu nhiên: xu, vật phẩm\n💡 Ví dụ: !openbox 5",
     
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -32,16 +32,13 @@ module.exports = {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi mở hộp lại!`, threadID, messageID);
         }
 
-        const db = config.database;
-        const dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
-
         let connection;
         try {
-            connection = await mysql.createConnection(dbConfig);
+            connection = await getConnection();
 
             // Check xem có hộp bí ẩn không
             const [boxes] = await connection.execute(
-                `SELECT ui.* FROM user_inventory ui 
+                `SELECT ui.* FROM user_inventory ui
                 WHERE ui.psid = ? AND ui.item_key = 'box' AND ui.uses_left > 0`,
                 [senderID]
             );
@@ -81,12 +78,11 @@ module.exports = {
 
             if (openAll || quantityToOpen > 1) {
                 // Mở nhiều hộp
-                await connection.beginTransaction();
-
                 let totalBoxes = 0;
                 let totalCredits = 0;
                 const rewards = [];
 
+                await connection.beginTransaction();
                 try {
                     const [lockedBoxes] = await connection.execute(
                         'SELECT id, uses_left FROM user_inventory WHERE id = ? AND psid = ? FOR UPDATE',
@@ -127,12 +123,11 @@ module.exports = {
                     await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [totalCredits, senderID]);
 
                     await connection.commit();
-                } catch (txErr) {
+                } catch (err) {
                     await connection.rollback();
-                    throw txErr;
+                    throw err;
                 }
 
-                // Đặt cooldown (10 giây)
                 // Hiển thị kết quả
                 const rewardList = rewards.slice(0, 10).join('\n');
                 const remainingCount = rewards.length > 10 ? `\n... và ${rewards.length - 10} phần thưởng khác` : '';
@@ -202,7 +197,7 @@ module.exports = {
             console.error(e);
             return api.sendMessage("❌ Lỗi khi mở hộp.", threadID, messageID);
         } finally {
-            if (connection) await connection.end();
+            if (connection) connection.release();
         }
     }
 };

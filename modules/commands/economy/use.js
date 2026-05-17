@@ -1,4 +1,4 @@
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 const { restoreEnergy } = require("../../utils/energySystem");
 
@@ -9,6 +9,7 @@ const LEGACY_ENERGY_TYPES = new Set([
   "stamina_restore",
   "energy_boost",
 ]);
+
 
 function normalizeText(value) {
   return String(value || "")
@@ -42,7 +43,7 @@ function isEnergyRestoreItem(item) {
 module.exports = {
   name: "use",
   description: "Sử dụng vật phẩm trong túi đồ",
-  usage: "!use [item-key]",
+  usage: "\n!use [item-key] → Sử dụng vật phẩm trong túi đồ\n━━━━━━━━━━━━━━━━━━\n📌 [item-key]: Mã vật phẩm (xem bằng !inv)\n⚡ Vật phẩm năng lượng sẽ hồi phục stamina\n💡 Ví dụ: !use shield",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
@@ -69,24 +70,12 @@ module.exports = {
       );
     }
 
-    const db = config.database;
-    const dbConfig = {
-      host: db.host,
-      port: db.port,
-      user: db.user,
-      password: db.password,
-      database: db.name,
-    };
-
-    let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
-
       // Check item trong inventory
-      const [invItems] = await connection.execute(
-        `SELECT ui.*, si.type, si.effect_value, si.uses, si.name, si.description 
-                FROM user_inventory ui 
-                JOIN shop_items si ON ui.item_key = si.item_key 
+      const invItems = await execute(
+        `SELECT ui.*, si.type, si.effect_value, si.uses, si.name, si.description
+                FROM user_inventory ui
+                JOIN shop_items si ON ui.item_key = si.item_key
                 WHERE ui.psid = ? AND ui.item_key = ? AND ui.uses_left > 0`,
         [senderID, itemKey],
       );
@@ -131,87 +120,77 @@ module.exports = {
           );
         }
 
-        await connection.beginTransaction();
+        let connection;
+        let restored;
         try {
-          const restored = await restoreEnergy(
+          connection = await getConnection();
+          restored = await restoreEnergy(
             connection,
             senderID,
             restoreAmount,
           );
-          if (!restored.ok) {
-            await connection.rollback();
-            return api.sendMessage(
-              "❌ Không thể hồi thể lực lúc này.",
-              threadID,
-              messageID,
-            );
-          }
-
-          if (invItem.uses_left <= 1) {
-            await connection.execute(
-              "DELETE FROM user_inventory WHERE id = ?",
-              [invItem.id],
-            );
-          } else {
-            await connection.execute(
-              "UPDATE user_inventory SET uses_left = uses_left - 1 WHERE id = ?",
-              [invItem.id],
-            );
-          }
-
-          await connection.commit();
-
+        } finally {
+          if (connection) connection.release();
+        }
+        if (!restored.ok) {
           return api.sendMessage(
-            `🧪 DÙNG BÌNH HỒI THỂ LỰC THÀNH CÔNG!\n⚡ Hồi ngay: +${restored.restored}/${restoreAmount}\n📊 Thể lực: ${restored.after}/${restored.maxEnergy}`,
+            "❌ Không thể hồi thể lực lúc này.",
             threadID,
             messageID,
           );
-        } catch (txErr) {
-          await connection.rollback();
-          throw txErr;
-        }
-      }
-
-      await connection.beginTransaction();
-      try {
-        // Kích hoạt effect vào active_effects
-        // Check xem đã có effect này chưa
-        const [existingEffects] = await connection.execute(
-          "SELECT * FROM active_effects WHERE psid = ? AND effect_type = ?",
-          [senderID, invItem.type],
-        );
-
-        if (existingEffects.length > 0) {
-          // Tăng uses_left
-          await connection.execute(
-            "UPDATE active_effects SET uses_left = uses_left + ?, effect_value = ? WHERE psid = ? AND effect_type = ?",
-            [invItem.uses, invItem.effect_value, senderID, invItem.type],
-          );
-        } else {
-          // Thêm mới
-          await connection.execute(
-            "INSERT INTO active_effects (psid, effect_type, effect_value, uses_left) VALUES (?, ?, ?, ?)",
-            [senderID, invItem.type, invItem.effect_value, invItem.uses],
-          );
         }
 
-        // Trừ uses_left trong inventory
         if (invItem.uses_left <= 1) {
-          // Xóa item khỏi inventory nếu hết
-          await connection.execute("DELETE FROM user_inventory WHERE id = ?", [
-            invItem.id,
-          ]);
+          await execute(
+            "DELETE FROM user_inventory WHERE id = ?",
+            [invItem.id],
+          );
         } else {
-          await connection.execute(
+          await execute(
             "UPDATE user_inventory SET uses_left = uses_left - 1 WHERE id = ?",
             [invItem.id],
           );
         }
 
-        await connection.commit();
-      } catch (txErr) {
-        await connection.rollback();
-        throw txErr;
+        return api.sendMessage(
+          `🧪 DÙNG BÌNH HỒI THỂ LỰC THÀNH CÔNG!\n⚡ Hồi ngay: +${restored.restored}/${restoreAmount}\n📊 Thể lực: ${restored.after}/${restored.maxEnergy}`,
+          threadID,
+          messageID,
+        );
+      }
+
+      // Kích hoạt effect vào active_effects
+      // Check xem đã có effect này chưa
+      const existingEffects = await execute(
+        "SELECT * FROM active_effects WHERE psid = ? AND effect_type = ?",
+        [senderID, invItem.type],
+      );
+
+      if (existingEffects.length > 0) {
+        // Tăng uses_left
+        await execute(
+          "UPDATE active_effects SET uses_left = uses_left + ?, effect_value = ? WHERE psid = ? AND effect_type = ?",
+          [invItem.uses, invItem.effect_value, senderID, invItem.type],
+        );
+      } else {
+        // Thêm mới
+        await execute(
+          "INSERT INTO active_effects (psid, effect_type, effect_value, uses_left) VALUES (?, ?, ?, ?)",
+          [senderID, invItem.type, invItem.effect_value, invItem.uses],
+        );
+      }
+
+      // Trừ uses_left trong inventory
+      if (invItem.uses_left <= 1) {
+        // Xóa item khỏi inventory nếu hết
+        await execute("DELETE FROM user_inventory WHERE id = ?", [
+          invItem.id,
+        ]);
+      } else {
+        await execute(
+          "UPDATE user_inventory SET uses_left = uses_left - 1 WHERE id = ?",
+          [invItem.id],
+        );
       }
 
       return api.sendMessage(
@@ -222,8 +201,6 @@ module.exports = {
     } catch (e) {
       console.error(e);
       return api.sendMessage("❌ Lỗi khi sử dụng item.", threadID, messageID);
-    } finally {
-      if (connection) await connection.end();
     }
   },
 };

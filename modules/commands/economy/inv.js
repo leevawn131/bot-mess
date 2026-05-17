@@ -1,10 +1,10 @@
-const mysql = require('mysql2/promise');
+const { execute } = require('../../utils/database');
 const { checkCooldown } = require('../../utils/cooldown');
 
 module.exports = {
     name: "inv",
     description: "Xem túi đồ của bạn",
-    usage: "!inv",
+    usage: "\n!inv → Xem túi đồ (vật phẩm đang sở hữu)\n━━━━━━━━━━━━━━━━━━\n📦 Hiển thị tên, mã, số lượt dùng còn lại\n💡 Dùng vật phẩm: !use [item-key]",
     
     execute: async ({ api, event, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -15,24 +15,18 @@ module.exports = {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
 
-        const db = config.database;
-        const dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
-
-        let connection;
         try {
-            connection = await mysql.createConnection(dbConfig);
-
             // Lấy inventory của user
-            const [items] = await connection.execute(
-                `SELECT ui.item_key, ui.uses_left, si.name, si.description 
-                FROM user_inventory ui 
-                JOIN shop_items si ON ui.item_key = si.item_key 
+            const items = await execute(
+                `SELECT ui.item_key, ui.uses_left, si.name, si.description
+                FROM user_inventory ui
+                JOIN shop_items si ON ui.item_key = si.item_key
                 WHERE ui.psid = ? AND ui.uses_left > 0`,
                 [senderID]
             );
-            
+
             // Check VIP status
-            const [user] = await connection.execute('SELECT vip_until FROM messenger_users WHERE psid = ?', [senderID]);
+            const user = await execute('SELECT vip_until FROM messenger_users WHERE psid = ?', [senderID]);
             
             let msg = "🎒 TÚI ĐỒ CỦA BẠN\n━━━━━━━━━━━━━━━━━━\n\n";
             
@@ -64,8 +58,6 @@ module.exports = {
         } catch (e) {
             console.error(e);
             return api.sendMessage("❌ Lỗi khi xem túi đồ.", threadID, messageID);
-        } finally {
-            if (connection) await connection.end();
         }
     }
 };

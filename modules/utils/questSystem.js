@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("./database");
 
 const CONFIG_PATH = path.resolve(__dirname, "../../config.json");
 
@@ -457,36 +457,7 @@ function getDBConfig() {
   }
 }
 
-async function withConnection(handler) {
-  const dbConfig = getDBConfig();
-  if (!dbConfig) throw new Error("Database config not found for quest system");
 
-  let connection;
-  try {
-    connection = await mysql.createConnection(dbConfig);
-    return await handler(connection);
-  } finally {
-    if (connection) await connection.end();
-  }
-}
-
-async function ensureQuestTable(connection) {
-  await connection.execute(`
-        CREATE TABLE IF NOT EXISTS quest_user_daily (
-            psid VARCHAR(50) NOT NULL,
-            quest_date DATE NOT NULL,
-            quest_id VARCHAR(64) NOT NULL,
-            progress BIGINT NOT NULL DEFAULT 0,
-            accepted TINYINT(1) NOT NULL DEFAULT 0,
-            claimed TINYINT(1) NOT NULL DEFAULT 0,
-            created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (psid, quest_date, quest_id),
-            KEY idx_quest_user_date (psid, quest_date),
-            KEY idx_quest_date (quest_date)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-}
 
 function clampProgress(progress, target) {
   const numeric = Number(progress) || 0;
@@ -603,123 +574,204 @@ function buildQuestList(rows) {
 }
 
 async function getUserQuests(userID) {
-  return withConnection(async (connection) => {
-    await ensureQuestTable(connection);
-    const questDate = getVNDateString();
+  const questDate = getVNDateString();
 
+  // Ensure quest table exists
+  await execute(`
+    CREATE TABLE IF NOT EXISTS quest_user_daily (
+      psid VARCHAR(50) NOT NULL,
+      quest_date DATE NOT NULL,
+      quest_id VARCHAR(64) NOT NULL,
+      progress BIGINT NOT NULL DEFAULT 0,
+      accepted BOOLEAN NOT NULL DEFAULT FALSE,
+      claimed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (psid, quest_date, quest_id)
+    )
+  `);
+
+  // Ensure user daily state
+  const connection = await getConnection();
+  try {
     await ensureUserDailyState(connection, userID, questDate);
-    const rows = await loadDailyQuestRows(connection, userID, questDate);
-    const { hasVip, maxAccepted } = await getUserQuestLimit(connection, userID);
-    const acceptedCount = rows.filter((row) => !!row.accepted).length;
+  } finally {
+    connection.release();
+  }
 
-    return {
-      date: questDate,
-      quests: buildQuestList(rows),
-      acceptedCount,
-      maxAccepted,
-      remainingSlots: Math.max(0, maxAccepted - acceptedCount),
-      hasVip,
-    };
-  });
+  // Load daily quest rows
+  const rows = await execute(`
+    SELECT quest_id, progress, accepted, claimed
+    FROM quest_user_daily
+    WHERE psid = ? AND quest_date = ?
+  `, [userID, questDate]);
+
+  // Get user quest limit
+  const userRows = await execute(`
+    SELECT vip_until FROM messenger_users WHERE psid = ?
+  `, [userID]);
+
+  const hasVip = userRows.length > 0 && userRows[0].vip_until && new Date(userRows[0].vip_until) > new Date();
+  const maxAccepted = hasVip ? 5 : 3;
+  const acceptedCount = rows.filter((row) => !!row.accepted).length;
+
+  return {
+    date: questDate,
+    quests: buildQuestList(rows),
+    acceptedCount,
+    maxAccepted,
+    remainingSlots: Math.max(0, maxAccepted - acceptedCount),
+    hasVip,
+  };
 }
 
 function recordAction(userID, action, amount = 1) {
   const increment = Number(amount) || 0;
   if (increment <= 0) return Promise.resolve(false);
 
-  return withConnection(async (connection) => {
-    await ensureQuestTable(connection);
-    const questDate = getVNDateString();
-    await ensureUserDailyState(connection, userID, questDate);
+  return (async () => {
+    try {
+      // Ensure quest table exists
+      await execute(`
+        CREATE TABLE IF NOT EXISTS quest_user_daily (
+          psid VARCHAR(50) NOT NULL,
+          quest_date DATE NOT NULL,
+          quest_id VARCHAR(64) NOT NULL,
+          progress BIGINT NOT NULL DEFAULT 0,
+          accepted BOOLEAN NOT NULL DEFAULT FALSE,
+          claimed BOOLEAN NOT NULL DEFAULT FALSE,
+          PRIMARY KEY (psid, quest_date, quest_id)
+        )
+      `);
 
-    const questIDs = QUEST_DEFINITIONS.filter(
-      (quest) => quest.action === action,
-    ).map((quest) => quest.id);
-    if (questIDs.length === 0) return false;
+      const questDate = getVNDateString();
 
-    for (const questID of questIDs) {
-      const definition = QUEST_MAP.get(questID);
-      if (!definition) continue;
+      // Ensure user daily state
+      const connection = await getConnection();
+      try {
+        await ensureUserDailyState(connection, userID, questDate);
+      } finally {
+        connection.release();
+      }
 
-      await connection.execute(
-        `UPDATE quest_user_daily
-                 SET progress = LEAST(?, progress + ?)
-                 WHERE psid = ? AND quest_date = ? AND quest_id = ?
-                   AND accepted = 1 AND claimed = 0`,
-        [
-          Number(definition.target),
-          increment,
-          String(userID),
-          questDate,
-          questID,
-        ],
-      );
+      const questIDs = QUEST_DEFINITIONS.filter(
+        (quest) => quest.action === action,
+      ).map((quest) => quest.id);
+      if (questIDs.length === 0) return false;
+
+      for (const questID of questIDs) {
+        const definition = QUEST_MAP.get(questID);
+        if (!definition) continue;
+
+        await execute(
+          `UPDATE quest_user_daily
+                   SET progress = LEAST(?, progress + ?)
+                   WHERE psid = ? AND quest_date = ? AND quest_id = ?
+                     AND accepted = 1 AND claimed = 0`,
+          [
+            Number(definition.target),
+            increment,
+            String(userID),
+            questDate,
+            questID,
+          ],
+        );
+      }
+
+      return true;
+    } catch (e) {
+      return false;
     }
-
-    return true;
-  }).catch(() => false);
+  })();
 }
 
 async function acceptQuests(userID, questIDs = []) {
-  return withConnection(async (connection) => {
-    await ensureQuestTable(connection);
-    const questDate = getVNDateString();
+  // Ensure quest table exists
+  await execute(`
+    CREATE TABLE IF NOT EXISTS quest_user_daily (
+      psid VARCHAR(50) NOT NULL,
+      quest_date DATE NOT NULL,
+      quest_id VARCHAR(64) NOT NULL,
+      progress BIGINT NOT NULL DEFAULT 0,
+      accepted BOOLEAN NOT NULL DEFAULT FALSE,
+      claimed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (psid, quest_date, quest_id)
+    )
+  `);
+
+  const questDate = getVNDateString();
+
+  // Ensure user daily state
+  const connection = await getConnection();
+  try {
     await ensureUserDailyState(connection, userID, questDate);
+  } finally {
+    connection.release();
+  }
 
-    const rows = await loadDailyQuestRows(connection, userID, questDate);
-    const { maxAccepted, hasVip } = await getUserQuestLimit(connection, userID);
-    const acceptedNow = rows.filter((row) => !!row.accepted).length;
-    let remainingSlots = Math.max(0, maxAccepted - acceptedNow);
+  // Load daily quest rows
+  const rows = await execute(`
+    SELECT quest_id, progress, accepted, claimed
+    FROM quest_user_daily
+    WHERE psid = ? AND quest_date = ?
+  `, [userID, questDate]);
 
-    const rowMap = new Map(rows.map((row) => [String(row.quest_id), row]));
-    const idSet = new Set((questIDs || []).map((id) => String(id)));
+  // Get user quest limit
+  const userRows = await execute(`
+    SELECT vip_until FROM messenger_users WHERE psid = ?
+  `, [userID]);
 
-    let acceptedCount = 0;
-    let alreadyAcceptedCount = 0;
-    let notFoundCount = 0;
-    let overLimitCount = 0;
-    const acceptedIDs = [];
-    const alreadyAcceptedIDs = [];
+  const hasVip = userRows.length > 0 && userRows[0].vip_until && new Date(userRows[0].vip_until) > new Date();
+  const maxAccepted = hasVip ? 5 : 3;
+  const acceptedNow = rows.filter((row) => !!row.accepted).length;
+  let remainingSlots = Math.max(0, maxAccepted - acceptedNow);
 
-    for (const questID of idSet) {
-      const row = rowMap.get(questID);
-      if (!row) {
-        notFoundCount += 1;
-        continue;
-      }
-      if (row.accepted) {
-        alreadyAcceptedCount += 1;
-        alreadyAcceptedIDs.push(questID);
-        continue;
-      }
+  const rowMap = new Map(rows.map((row) => [String(row.quest_id), row]));
+  const idSet = new Set((questIDs || []).map((id) => String(id)));
 
-      if (remainingSlots <= 0) {
-        overLimitCount += 1;
-        continue;
-      }
+  let acceptedCount = 0;
+  let alreadyAcceptedCount = 0;
+  let notFoundCount = 0;
+  let overLimitCount = 0;
+  const acceptedIDs = [];
+  const alreadyAcceptedIDs = [];
 
-      await connection.execute(
-        "UPDATE quest_user_daily SET accepted = 1 WHERE psid = ? AND quest_date = ? AND quest_id = ?",
-        [String(userID), questDate, questID],
-      );
-      acceptedCount += 1;
-      remainingSlots -= 1;
-      acceptedIDs.push(questID);
+  for (const questID of idSet) {
+    const row = rowMap.get(questID);
+    if (!row) {
+      notFoundCount += 1;
+      continue;
+    }
+    if (row.accepted) {
+      alreadyAcceptedCount += 1;
+      alreadyAcceptedIDs.push(questID);
+      continue;
     }
 
-    return {
-      acceptedCount,
-      alreadyAcceptedCount,
-      notFoundCount,
-      overLimitCount,
-      acceptedIDs,
-      alreadyAcceptedIDs,
-      maxAccepted,
-      hasVip,
-      acceptedTotal: acceptedNow + acceptedCount,
-      remainingSlots,
-    };
-  });
+    if (remainingSlots <= 0) {
+      overLimitCount += 1;
+      continue;
+    }
+
+    await execute(
+      "UPDATE quest_user_daily SET accepted = 1 WHERE psid = ? AND quest_date = ? AND quest_id = ?",
+      [String(userID), questDate, questID],
+    );
+    acceptedCount += 1;
+    remainingSlots -= 1;
+    acceptedIDs.push(questID);
+  }
+
+  return {
+    acceptedCount,
+    alreadyAcceptedCount,
+    notFoundCount,
+    overLimitCount,
+    acceptedIDs,
+    alreadyAcceptedIDs,
+    maxAccepted,
+    hasVip,
+    acceptedTotal: acceptedNow + acceptedCount,
+    remainingSlots,
+  };
 }
 
 function pickWeightedTier(availableByTier) {
@@ -744,224 +796,318 @@ function pickWeightedTier(availableByTier) {
 }
 
 async function acceptRandomQuest(userID) {
-  return withConnection(async (connection) => {
-    await ensureQuestTable(connection);
-    const questDate = getVNDateString();
+  // Ensure quest table exists
+  await execute(`
+    CREATE TABLE IF NOT EXISTS quest_user_daily (
+      psid VARCHAR(50) NOT NULL,
+      quest_date DATE NOT NULL,
+      quest_id VARCHAR(64) NOT NULL,
+      progress BIGINT NOT NULL DEFAULT 0,
+      accepted BOOLEAN NOT NULL DEFAULT FALSE,
+      claimed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (psid, quest_date, quest_id)
+    )
+  `);
+
+  const questDate = getVNDateString();
+
+  // Ensure user daily state
+  const connection = await getConnection();
+  try {
     await ensureUserDailyState(connection, userID, questDate);
+  } finally {
+    connection.release();
+  }
 
-    const rows = await loadDailyQuestRows(connection, userID, questDate);
-    const { maxAccepted, hasVip } = await getUserQuestLimit(connection, userID);
-    const acceptedCount = rows.filter((row) => !!row.accepted).length;
-    const remainingSlots = Math.max(0, maxAccepted - acceptedCount);
+  // Load daily quest rows
+  const rows = await execute(`
+    SELECT quest_id, progress, accepted, claimed
+    FROM quest_user_daily
+    WHERE psid = ? AND quest_date = ?
+  `, [userID, questDate]);
 
-    if (remainingSlots <= 0) {
-      return {
-        ok: false,
-        reason: "limit_reached",
-        hasVip,
-        maxAccepted,
-        acceptedCount,
-        remainingSlots: 0,
-      };
-    }
+  // Get user quest limit
+  const userRows = await execute(`
+    SELECT vip_until FROM messenger_users WHERE psid = ?
+  `, [userID]);
 
-    const rowMap = new Map(rows.map((row) => [String(row.quest_id), row]));
-    const availableDefinitions = QUEST_DEFINITIONS.filter((quest) => {
-      const row = rowMap.get(quest.id);
-      return row && !row.accepted;
-    });
+  const hasVip = userRows.length > 0 && userRows[0].vip_until && new Date(userRows[0].vip_until) > new Date();
+  const maxAccepted = hasVip ? 5 : 3;
+  const acceptedCount = rows.filter((row) => !!row.accepted).length;
+  const remainingSlots = Math.max(0, maxAccepted - acceptedCount);
 
-    if (availableDefinitions.length === 0) {
-      return {
-        ok: false,
-        reason: "no_available",
-        hasVip,
-        maxAccepted,
-        acceptedCount,
-        remainingSlots,
-      };
-    }
-
-    const availableByTier = { easy: [], medium: [], hard: [], rare: [] };
-    availableDefinitions.forEach((quest) => {
-      const tier = getQuestTier(quest);
-      if (availableByTier[tier]) availableByTier[tier].push(quest);
-    });
-
-    const selectedTier = pickWeightedTier(availableByTier);
-    if (!selectedTier) {
-      return {
-        ok: false,
-        reason: "no_available",
-        hasVip,
-        maxAccepted,
-        acceptedCount,
-        remainingSlots,
-      };
-    }
-
-    const tierQuests = availableByTier[selectedTier];
-    const randomIndex = Math.floor(Math.random() * tierQuests.length);
-    const selectedQuest = tierQuests[randomIndex];
-
-    await connection.execute(
-      "UPDATE quest_user_daily SET accepted = 1 WHERE psid = ? AND quest_date = ? AND quest_id = ?",
-      [String(userID), questDate, selectedQuest.id],
-    );
-
+  if (remainingSlots <= 0) {
     return {
-      ok: true,
+      ok: false,
+      reason: "limit_reached",
       hasVip,
       maxAccepted,
-      acceptedCount: acceptedCount + 1,
-      remainingSlots: Math.max(0, remainingSlots - 1),
-      selectedTier,
-      weights: { ...QUEST_TIER_WEIGHTS },
-      quest: {
-        id: selectedQuest.id,
-        title: selectedQuest.title,
-        description: selectedQuest.description,
-        action: selectedQuest.action,
-        tier: selectedTier,
-        target: selectedQuest.target,
-        reward: selectedQuest.reward,
-      },
+      acceptedCount,
+      remainingSlots: 0,
     };
+  }
+
+  const rowMap = new Map(rows.map((row) => [String(row.quest_id), row]));
+  const availableDefinitions = QUEST_DEFINITIONS.filter((quest) => {
+    const row = rowMap.get(quest.id);
+    return row && !row.accepted;
   });
+
+  if (availableDefinitions.length === 0) {
+    return {
+      ok: false,
+      reason: "no_available",
+      hasVip,
+      maxAccepted,
+      acceptedCount,
+      remainingSlots,
+    };
+  }
+
+  const availableByTier = { easy: [], medium: [], hard: [], rare: [] };
+  availableDefinitions.forEach((quest) => {
+    const tier = getQuestTier(quest);
+    if (availableByTier[tier]) availableByTier[tier].push(quest);
+  });
+
+  const selectedTier = pickWeightedTier(availableByTier);
+  if (!selectedTier) {
+    return {
+      ok: false,
+      reason: "no_available",
+      hasVip,
+      maxAccepted,
+      acceptedCount,
+      remainingSlots,
+    };
+  }
+
+  const tierQuests = availableByTier[selectedTier];
+  const randomIndex = Math.floor(Math.random() * tierQuests.length);
+  const selectedQuest = tierQuests[randomIndex];
+
+  await execute(
+    "UPDATE quest_user_daily SET accepted = 1 WHERE psid = ? AND quest_date = ? AND quest_id = ?",
+    [String(userID), questDate, selectedQuest.id],
+  );
+
+  return {
+    ok: true,
+    hasVip,
+    maxAccepted,
+    acceptedCount: acceptedCount + 1,
+    remainingSlots: Math.max(0, remainingSlots - 1),
+    selectedTier,
+    weights: { ...QUEST_TIER_WEIGHTS },
+    quest: {
+      id: selectedQuest.id,
+      title: selectedQuest.title,
+      description: selectedQuest.description,
+      action: selectedQuest.action,
+      tier: selectedTier,
+      target: selectedQuest.target,
+      reward: selectedQuest.reward,
+    },
+  };
 }
 
 async function previewClaims(userID, questIDs = []) {
-  return withConnection(async (connection) => {
-    await ensureQuestTable(connection);
-    const questDate = getVNDateString();
+  // Ensure quest table exists
+  await execute(`
+    CREATE TABLE IF NOT EXISTS quest_user_daily (
+      psid VARCHAR(50) NOT NULL,
+      quest_date DATE NOT NULL,
+      quest_id VARCHAR(64) NOT NULL,
+      progress BIGINT NOT NULL DEFAULT 0,
+      accepted BOOLEAN NOT NULL DEFAULT FALSE,
+      claimed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (psid, quest_date, quest_id)
+    )
+  `);
+
+  const questDate = getVNDateString();
+
+  // Ensure user daily state
+  const connection = await getConnection();
+  try {
     await ensureUserDailyState(connection, userID, questDate);
-    const rows = await loadDailyQuestRows(connection, userID, questDate);
-    const rowMap = new Map(rows.map((row) => [String(row.quest_id), row]));
-    const uniqueIDs = [...new Set((questIDs || []).map((id) => String(id)))];
+  } finally {
+    connection.release();
+  }
 
-    let totalReward = 0;
-    let claimableCount = 0;
-    let alreadyClaimedCount = 0;
-    let notCompleteCount = 0;
-    let notAcceptedCount = 0;
-    let notFoundCount = 0;
+  // Load daily quest rows
+  const rows = await execute(`
+    SELECT quest_id, progress, accepted, claimed
+    FROM quest_user_daily
+    WHERE psid = ? AND quest_date = ?
+  `, [userID, questDate]);
 
-    const claimableIDs = [];
+  const rowMap = new Map(rows.map((row) => [String(row.quest_id), row]));
+  const uniqueIDs = [...new Set((questIDs || []).map((id) => String(id)))];
 
-    uniqueIDs.forEach((questID) => {
-      const row = rowMap.get(questID);
-      const definition = QUEST_MAP.get(questID);
+  let totalReward = 0;
+  let claimableCount = 0;
+  let alreadyClaimedCount = 0;
+  let notCompleteCount = 0;
+  let notAcceptedCount = 0;
+  let notFoundCount = 0;
 
-      if (!row || !definition) {
-        notFoundCount += 1;
-        return;
-      }
-      if (!row.accepted) {
-        notAcceptedCount += 1;
-        return;
-      }
-      if (row.claimed) {
-        alreadyClaimedCount += 1;
-        return;
-      }
-      if (Number(row.progress) < Number(definition.target)) {
-        notCompleteCount += 1;
-        return;
-      }
+  const claimableIDs = [];
 
-      claimableCount += 1;
-      totalReward += Number(definition.reward) || 0;
-      claimableIDs.push(definition.id);
-    });
+  uniqueIDs.forEach((questID) => {
+    const row = rowMap.get(questID);
+    const definition = QUEST_MAP.get(questID);
 
-    return {
-      claimableIDs,
-      claimableCount,
-      totalReward,
-      alreadyClaimedCount,
-      notCompleteCount,
-      notAcceptedCount,
-      notFoundCount,
-    };
+    if (!row || !definition) {
+      notFoundCount += 1;
+      return;
+    }
+    if (!row.accepted) {
+      notAcceptedCount += 1;
+      return;
+    }
+    if (row.claimed) {
+      alreadyClaimedCount += 1;
+      return;
+    }
+    if (Number(row.progress) < Number(definition.target)) {
+      notCompleteCount += 1;
+      return;
+    }
+
+    claimableCount += 1;
+    totalReward += Number(definition.reward) || 0;
+    claimableIDs.push(definition.id);
   });
+
+  return {
+    claimableIDs,
+    claimableCount,
+    totalReward,
+    alreadyClaimedCount,
+    notCompleteCount,
+    notAcceptedCount,
+    notFoundCount,
+  };
 }
 
 async function previewClaimAll(userID) {
-  return withConnection(async (connection) => {
-    await ensureQuestTable(connection);
-    const questDate = getVNDateString();
+  // Ensure quest table exists
+  await execute(`
+    CREATE TABLE IF NOT EXISTS quest_user_daily (
+      psid VARCHAR(50) NOT NULL,
+      quest_date DATE NOT NULL,
+      quest_id VARCHAR(64) NOT NULL,
+      progress BIGINT NOT NULL DEFAULT 0,
+      accepted BOOLEAN NOT NULL DEFAULT FALSE,
+      claimed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (psid, quest_date, quest_id)
+    )
+  `);
+
+  const questDate = getVNDateString();
+
+  // Ensure user daily state
+  const connection = await getConnection();
+  try {
     await ensureUserDailyState(connection, userID, questDate);
-    const rows = await loadDailyQuestRows(connection, userID, questDate);
+  } finally {
+    connection.release();
+  }
 
-    let totalReward = 0;
-    const claimableIDs = [];
+  // Load daily quest rows
+  const rows = await execute(`
+    SELECT quest_id, progress, accepted, claimed
+    FROM quest_user_daily
+    WHERE psid = ? AND quest_date = ?
+  `, [userID, questDate]);
 
-    rows.forEach((row) => {
-      const definition = QUEST_MAP.get(String(row.quest_id));
-      if (!definition) return;
+  let totalReward = 0;
+  const claimableIDs = [];
 
-      if (
-        row.accepted &&
-        !row.claimed &&
-        Number(row.progress) >= Number(definition.target)
-      ) {
-        claimableIDs.push(definition.id);
-        totalReward += Number(definition.reward) || 0;
-      }
-    });
+  rows.forEach((row) => {
+    const definition = QUEST_MAP.get(String(row.quest_id));
+    if (!definition) return;
 
-    return {
-      claimableIDs,
-      claimableCount: claimableIDs.length,
-      totalReward,
-    };
+    if (
+      row.accepted &&
+      !row.claimed &&
+      Number(row.progress) >= Number(definition.target)
+    ) {
+      claimableIDs.push(definition.id);
+      totalReward += Number(definition.reward) || 0;
+    }
   });
+
+  return {
+    claimableIDs,
+    claimableCount: claimableIDs.length,
+    totalReward,
+  };
 }
 
 async function markQuestsClaimed(userID, questIDs = []) {
-  return withConnection(async (connection) => {
-    await ensureQuestTable(connection);
-    const questDate = getVNDateString();
+  // Ensure quest table exists
+  await execute(`
+    CREATE TABLE IF NOT EXISTS quest_user_daily (
+      psid VARCHAR(50) NOT NULL,
+      quest_date DATE NOT NULL,
+      quest_id VARCHAR(64) NOT NULL,
+      progress BIGINT NOT NULL DEFAULT 0,
+      accepted BOOLEAN NOT NULL DEFAULT FALSE,
+      claimed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (psid, quest_date, quest_id)
+    )
+  `);
+
+  const questDate = getVNDateString();
+
+  // Ensure user daily state
+  const connection = await getConnection();
+  try {
     await ensureUserDailyState(connection, userID, questDate);
-    const idSet = new Set((questIDs || []).map((id) => String(id)));
+  } finally {
+    connection.release();
+  }
 
-    let markedCount = 0;
-    let totalReward = 0;
-    const markedIDs = [];
+  const idSet = new Set((questIDs || []).map((id) => String(id)));
 
-    for (const questID of idSet) {
-      const definition = QUEST_MAP.get(questID);
-      if (!definition) continue;
+  let markedCount = 0;
+  let totalReward = 0;
+  const markedIDs = [];
 
-      const [rows] = await connection.execute(
-        "SELECT progress, accepted, claimed FROM quest_user_daily WHERE psid = ? AND quest_date = ? AND quest_id = ?",
-        [String(userID), questDate, questID],
-      );
-      if (rows.length === 0) continue;
+  for (const questID of idSet) {
+    const definition = QUEST_MAP.get(questID);
+    if (!definition) continue;
 
-      const row = rows[0];
-      if (
-        !row.accepted ||
-        row.claimed ||
-        Number(row.progress) < Number(definition.target)
-      )
-        continue;
+    const rows = await execute(
+      "SELECT progress, accepted, claimed FROM quest_user_daily WHERE psid = ? AND quest_date = ? AND quest_id = ?",
+      [String(userID), questDate, questID],
+    );
+    if (rows.length === 0) continue;
 
-      await connection.execute(
-        "UPDATE quest_user_daily SET claimed = 1 WHERE psid = ? AND quest_date = ? AND quest_id = ?",
-        [String(userID), questDate, questID],
-      );
-      markedCount += 1;
-      totalReward += Number(definition.reward) || 0;
-      markedIDs.push(questID);
-    }
+    const row = rows[0];
+    if (
+      !row.accepted ||
+      row.claimed ||
+      Number(row.progress) < Number(definition.target)
+    )
+      continue;
 
-    return {
-      markedCount,
-      totalReward,
-      markedIDs,
-    };
-  });
+    await execute(
+      "UPDATE quest_user_daily SET claimed = 1 WHERE psid = ? AND quest_date = ? AND quest_id = ?",
+      [String(userID), questDate, questID],
+    );
+    markedCount += 1;
+    totalReward += Number(definition.reward) || 0;
+    markedIDs.push(questID);
+  }
+
+  return {
+    markedCount,
+    totalReward,
+    markedIDs,
+  };
 }
 
 async function claimQuest(userID, questID) {

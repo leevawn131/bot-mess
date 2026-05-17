@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { checkCooldown } = require("../../utils/cooldown");
-const { ADMIN_BOT_UIDS } = require("../../utils/checkPermission");
+const { getAdminBotUIDs } = require("../../utils/checkPermission");
 
 const ANTITHUHOI_DIR = path.join(__dirname, "../../../cache/antithuhoi");
 const SETTINGS_PATH = path.join(ANTITHUHOI_DIR, "settings.json");
@@ -91,7 +91,7 @@ async function saveLatestMessages(api, threadID) {
 module.exports = {
   name: "antithuhoi",
   description: "Lưu 15 tin nhắn cuối và nhắc lại khi bị gỡ",
-  usage: "[on | off | status]",
+  usage: "\n!antithuhoi on → Bật chống thu hồi tin nhắn\n!antithuhoi off → Tắt chống thu hồi\n!antithuhoi status → Xem trạng thái\n━━━━━━━━━━━━━━━━━━\n📨 Lưu 15 tin nhắn cuối, nhắc lại khi bị gỡ\n⚡ Cập nhật tức thời\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
 
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
@@ -124,7 +124,8 @@ module.exports = {
         String(item.id),
       );
       const isSenderAdmin = adminIDs.includes(String(senderID));
-      const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+      const adminBotUIDs = getAdminBotUIDs();
+      const isSenderBotAdmin = adminBotUIDs.includes(String(senderID));
 
       if (!isSenderAdmin && !isSenderBotAdmin) {
         return api.sendMessage(

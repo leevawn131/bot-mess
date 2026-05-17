@@ -20,7 +20,7 @@ function getDateString(date) {
 module.exports = {
     name: "bank",
     description: "Quản lý tiền gửi ngân hàng (lãi 5%/ngày)",
-    usage: "!bank gui [số_tiền] | !bank rut [số_tiền] | !bank check | !bank sync\n⚠️ Chỉ gửi 1 lần/ngày, rút phải chờ sang ngày mới + check lãi",
+    usage: "\n!bank gui [số_tiền] → Gửi tiết kiệm (1 lần/ngày)\n!bank rut [số_tiền] → Rút tiền (phải chờ sang ngày mới)\n!bank check → Kiểm tra số dư & lãi hiện tại\n!bank sync → Đồng bộ quỹ ngân hàng (Admin)\n━━━━━━━━━━━━━━━━━━\n💰 Lãi suất: 5%/ngày (lãi kép)\n⚠️ Gửi 1 lần/ngày, rút phải chờ sang ngày mới",
     
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;

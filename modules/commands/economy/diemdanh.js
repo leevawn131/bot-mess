@@ -1,4 +1,4 @@
-const mysql = require('mysql2/promise');
+const { execute } = require('../../utils/database');
 const { recordAction } = require('../../utils/questSystem');
 
 // Bộ nhớ đệm để chống spam race condition (ngăn gửi nhiều lệnh trong 1 giây)
@@ -6,7 +6,8 @@ global.diemdanhLock = global.diemdanhLock || new Set();
 
 module.exports = {
     name: "diemdanh",
-    description: "Điểm danh nhận quà hàng ngày (Chống spam & Fix múi giờ)",
+    description: "Điểm danh nhận quà hàng ngày",
+    usage: "\n!diemdanh → Điểm danh nhận xu miễn phí mỗi ngày\n━━━━━━━━━━━━━━━━━━\n🎁 Nhận xu ngẫu nhiên mỗi lần điểm danh\n👑 VIP nhận thưởng gấp đôi\n⏰ Reset lúc 00:00 hàng ngày",
     execute: async ({ api, event, config }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -14,15 +15,9 @@ module.exports = {
         if (global.diemdanhLock.has(senderID)) return;
         global.diemdanhLock.add(senderID);
 
-        const db = config.database;
-        const dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
-
-        let connection;
         try {
-            connection = await mysql.createConnection(dbConfig);
-
             // 2. LẤY THÔNG TIN & FIX MÚI GIỜ VIỆT NAM
-            const [rows] = await connection.execute('SELECT credits, name, last_checkin, vip_until FROM messenger_users WHERE psid = ?', [senderID]);
+            const rows = await execute('SELECT credits, name, last_checkin, vip_until FROM messenger_users WHERE psid = ?', [senderID]);
 
             if (rows.length === 0) {
                 global.diemdanhLock.delete(senderID);
@@ -62,8 +57,8 @@ module.exports = {
             }
             
             // Cập nhật ngay lập tức
-            await connection.execute(
-                'UPDATE messenger_users SET credits = credits + ?, last_checkin = ? WHERE psid = ?', 
+            await execute(
+                'UPDATE messenger_users SET credits = credits + ?, last_checkin = ? WHERE psid = ?',
                 [reward, todayStr, senderID]
             );
 
@@ -87,7 +82,6 @@ module.exports = {
         } finally {
             // Mở khóa cho người dùng sau khi xử lý xong
             global.diemdanhLock.delete(senderID);
-            if (connection) await connection.end();
         }
     }
 };

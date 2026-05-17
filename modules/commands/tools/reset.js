@@ -8,7 +8,8 @@ function detectRuntime() {
   const isNodemon =
     process.env.NODEMON === "true" ||
     (process.env.npm_lifecycle_script || "").includes("nodemon");
-  return { isPm2, isNodemon };
+  const isDocker = fs.existsSync('/.dockerenv');
+  return { isPm2, isNodemon, isDocker };
 }
 
 function triggerFileRestart() {
@@ -21,7 +22,8 @@ function triggerFileRestart() {
 
 module.exports = {
   name: "reset",
-  description: "Khởi động lại Bot và thông báo khi thành công",
+  description: "Khởi động lại Bot",
+  usage: "\n!reset → Khởi động lại bot và thông báo khi thành công\n━━━━━━━━━━━━━━━━━━\n🔄 Tự động phát hiện pm2/nodemon/docker\n🔒 Chỉ Admin bot mới dùng được",
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID, messageID } = event;
     const adminIDs = config.adminIDs || [];
@@ -55,25 +57,31 @@ module.exports = {
         }),
       );
 
-      const { isPm2, isNodemon } = detectRuntime();
+      const { isPm2, isNodemon, isDocker } = detectRuntime();
       const runtimeName = isPm2
         ? "PM2"
-        : isNodemon
-          ? "nodemon"
-          : "nodemon/local";
+        : isDocker
+          ? "Docker"
+          : isNodemon
+            ? "nodemon"
+            : "local";
       api.sendMessage(
         `🔄 Đang khởi động lại hệ thống (${runtimeName})... Vui lòng chờ.`,
         threadID,
       );
 
       setTimeout(() => {
-        // PM2: exit để PM2 tự spawn process mới.
         if (isPm2) {
           process.exit(0);
           return;
         }
 
-        // nodemon/local: chạm file index.js để watcher tự restart (không làm app crash).
+        if (isDocker) {
+          process.exit(1); // Exit với code 1 để Docker tự restart (nếu config restart: always)
+          return;
+        }
+
+        // nodemon/local: chạm file index.js để watcher tự restart
         try {
           triggerFileRestart();
         } catch (_) {

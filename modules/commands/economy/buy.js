@@ -1,10 +1,10 @@
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 
 module.exports = {
   name: "buy",
   description: "Mua vật phẩm từ shop",
-  usage: "!buy [item-key] [số_lượng]",
+  usage: "\n!buy [item-key] <số_lượng> → Mua vật phẩm từ shop\n━━━━━━━━━━━━━━━━━━\n📌 [item-key]: Mã vật phẩm (xem bằng !shop)\n📌 <số_lượng>: Số lượng muốn mua (mặc định: 1)\n💡 Ví dụ: !buy shield 2",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
@@ -45,18 +45,9 @@ module.exports = {
       }
     }
 
-    const db = config.database;
-    const dbConfig = {
-      host: db.host,
-      port: db.port,
-      user: db.user,
-      password: db.password,
-      database: db.name,
-    };
-
     let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
+      connection = await getConnection();
 
       // Check item tồn tại trong shop
       const [items] = await connection.execute(
@@ -198,7 +189,7 @@ module.exports = {
       console.error(e);
       return api.sendMessage("❌ Lỗi khi mua item.", threadID, messageID);
     } finally {
-      if (connection) await connection.end();
+      if (connection) connection.release();
     }
   },
 };

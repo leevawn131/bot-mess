@@ -38,7 +38,7 @@ function parseTierFilter(input) {
 module.exports = {
   name: "quest",
   description: "Quest ngày: nhận random, check tiến độ, claim thưởng",
-  usage: "[nhan|check|claim]",
+  usage: "\n!quest nhan <de|tb|kho|hiem> → Nhận quest ngẫu nhiên theo độ khó\n!quest check → Xem tiến độ quest hiện tại\n!quest claim → Nhận thưởng quest đã hoàn thành\n━━━━━━━━━━━━━━━━━━\n🎯 Mỗi ngày nhận tối đa 3 quest\n🏅 Độ khó càng cao, thưởng càng lớn\n💡 Ví dụ: !quest nhan kho",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
@@ -63,15 +63,6 @@ module.exports = {
       const quests = data.quests;
 
       if (subCommand === "claim") {
-        const db = config.database;
-        const dbConfig = {
-          host: db.host,
-          port: db.port,
-          user: db.user,
-          password: db.password,
-          database: db.name,
-        };
-
         const claimArg = (args[1] || "").toLowerCase();
         if (!claimArg) {
           return api.sendMessage(
@@ -81,11 +72,8 @@ module.exports = {
           );
         }
 
-        let connection;
         try {
-          connection = await mysql.createConnection(dbConfig);
-
-          const [rows] = await connection.execute(
+          const rows = await execute(
             "SELECT credits FROM messenger_users WHERE psid = ?",
             [senderID],
           );
@@ -98,12 +86,10 @@ module.exports = {
           }
 
           const baseCredits = parseInt(rows[0].credits) || 0;
-          await connection.beginTransaction();
 
           if (claimArg === "all") {
             const claimAllResult = await previewClaimAll(senderID);
             if (claimAllResult.claimableCount === 0) {
-              await connection.rollback();
               return api.sendMessage(
                 "🫠 Không có nhiệm vụ đã nhận nào đủ điều kiện nhận thưởng.",
                 threadID,
@@ -111,7 +97,7 @@ module.exports = {
               );
             }
 
-            await connection.execute(
+            await execute(
               "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
               [claimAllResult.totalReward, senderID],
             );
@@ -127,7 +113,6 @@ module.exports = {
               throw new Error("Quest claim mismatch after DB update");
             }
 
-            await connection.commit();
             return api.sendMessage(
               `🎉 Nhận thưởng ${claimAllResult.claimableCount} nhiệm vụ: +${claimAllResult.totalReward.toLocaleString()} xu\n` +
                 `💳 Số dư mới: ${(baseCredits + claimAllResult.totalReward).toLocaleString()} xu`,
@@ -141,7 +126,6 @@ module.exports = {
             (quest) => quest.accepted,
           );
           if (acceptedQuests.length === 0) {
-            await connection.rollback();
             return api.sendMessage(
               "📭 Bạn chưa nhận nhiệm vụ nào. Dùng quest nhan để lấy quest random.",
               threadID,
@@ -157,7 +141,6 @@ module.exports = {
             .filter((num) => !Number.isNaN(num));
 
           if (sttList.length === 0) {
-            await connection.rollback();
             return api.sendMessage(
               "⚠️ STT không hợp lệ. Ví dụ: quest claim 1 2 3",
               threadID,
@@ -170,7 +153,6 @@ module.exports = {
             (num) => num < 1 || num > acceptedQuests.length,
           );
           if (invalidStt.length > 0) {
-            await connection.rollback();
             return api.sendMessage(
               `⚠️ Có STT không hợp lệ: ${invalidStt.join(", ")}. Chỉ chọn từ 1 đến ${acceptedQuests.length} (theo quest check).`,
               threadID,
@@ -184,7 +166,7 @@ module.exports = {
           const preview = await previewClaims(senderID, selectedQuestIDs);
 
           if (preview.totalReward > 0) {
-            await connection.execute(
+            await execute(
               "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
               [preview.totalReward, senderID],
             );
@@ -200,8 +182,6 @@ module.exports = {
             }
           }
 
-          await connection.commit();
-
           let rewardMsg = "🎁 KẾT QUẢ NHẬN THƯỞNG\n━━━━━━━━━━━━━━━━━━\n";
           rewardMsg += `✅ Nhận thành công: ${preview.claimableCount}\n`;
           rewardMsg += `💰 Tổng thưởng: +${preview.totalReward.toLocaleString()} xu\n`;
@@ -214,18 +194,11 @@ module.exports = {
           return api.sendMessage(rewardMsg, threadID, messageID);
         } catch (error) {
           console.error(error);
-          if (connection) {
-            try {
-              await connection.rollback();
-            } catch (_) {}
-          }
           return api.sendMessage(
             "❌ Lỗi nhận thưởng quest.",
             threadID,
             messageID,
           );
-        } finally {
-          if (connection) await connection.end();
         }
       }
 

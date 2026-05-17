@@ -1,6 +1,19 @@
 {
   "entries": [
     {
+      "version": "v1.2.6",
+      "date": "2026-05-02",
+      "title": "Tối ưu Database, Fix lỗi & Cải tiến Thuê Bot",
+      "changes": [
+        "Hỗ trợ cộng thời gian thuê thủ công cho admin (!setthue).",
+        "Fix lỗi sập bot Error [object Object] khi Boss cược Tài Xỉu/Bầu Cua.",
+        "Hỗ trợ gõ Tiếng Việt có dấu đầy đủ trong Tài xỉu.",
+        "Fix hoàn toàn lỗi nhiệm vụ (!quest) báo Unknown column 'id' và hiển thị sai ngày.",
+        "Nâng cấp kết nối Database (chuyển sang dùng chung Connection Pool): Tốc độ bàn cược nhanh hơn, ngăn chặn rò rỉ bộ nhớ hoàn toàn.",
+        "Lệnh !reset đã tương thích 100% với môi trường Docker."
+      ]
+    },
+    {
       "version": "v1.2.5",
       "date": "2026-03-30",
       "title": "Hỗ trợ tải nhạc từ SoundCloud",

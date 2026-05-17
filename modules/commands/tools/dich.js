@@ -4,7 +4,7 @@ const { checkCooldown } = require('../../utils/cooldown');
 module.exports = {
     name: "dich",
     description: "Dịch mọi ngôn ngữ sang tiếng Việt",
-    usage: "!dich [đoạn cần dịch] hoặc reply tin nhắn và gõ !dich",
+    usage: "\n!dich [đoạn cần dịch] → Dịch văn bản sang tiếng Việt\n!dich (reply) → Dịch nội dung tin nhắn được reply\n━━━━━━━━━━━━━━━━━━\n🌐 Tự động nhận diện ngôn ngữ gốc\n💡 Ví dụ: !dich Hello, how are you?",
     execute: async ({ api, event, args }) => {
         const { messageID, messageReply, senderID } = event;
         const threadID = String(event.threadID);

@@ -1,7 +1,8 @@
-const mysql = require('mysql2/promise');
+const { execute, getConnection } = require('../../utils/database');
 const path = require('path');
 const fs = require('fs');
 const { checkCooldown } = require('../../utils/cooldown');
+const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
 
 
 module.exports = {
@@ -10,6 +11,7 @@ module.exports = {
     usage: "!tu check | !tu check all | !tu cuu @tag|reply",
 
     execute: async ({ api, event, args }) => {
+        await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;
 
         // Cooldown 5s
@@ -18,21 +20,11 @@ module.exports = {
             return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`, threadID, messageID);
         }
 
-        const configPath = path.resolve(__dirname, '../../../config.json');
-        let dbConfig = {};
-        try {
-            const configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            const db = configFile.database;
-            dbConfig = { host: db.host, port: db.port, user: db.user, password: db.password, database: db.name };
-        } catch (err) {
-            return api.sendMessage("❌ Lỗi config.json", threadID);
-        }
-
         const command = args[0]?.toLowerCase();
-
         let connection;
+
         try {
-            connection = await mysql.createConnection(dbConfig);
+            connection = await getConnection();
 
             // Check all tù nhân
             if (command === "check" && args[1] === "all") {
@@ -192,7 +184,7 @@ module.exports = {
             console.error("Lỗi Tù:", e);
             return api.sendMessage("❌ Lỗi hệ thống nhà tù.", threadID, messageID);
         } finally {
-            if (connection) await connection.end();
+            if (connection) connection.release();
         }
     }
 };

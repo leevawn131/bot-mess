@@ -3,6 +3,7 @@ const { checkCooldown } = require("../../utils/cooldown");
 const { recordAction } = require("../../utils/questSystem");
 const { getBotConfig } = require("../../utils/envConfig");
 const { info, warn, error } = require("../../utils/logger");
+const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
 
 const TRANSFER_TAX_RATE = 0.02;
 
@@ -14,8 +15,10 @@ function getBossID() {
 
 module.exports = {
   name: "tien",
-  description: "Xem tiền & kiểm tra hạn mức chuyển",
+  description: "Xem tiền & chuyển tiền",
+  usage: "\n!tien → Xem số dư & hạn mức chuyển tiền\n!tien chuyen [số_tiền] @tag → Chuyển tiền cho người được tag\n!tien chuyen [số_tiền] (reply) → Chuyển cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Phí chuyển: 2% | Hạn mức/ngày có giới hạn\n💡 Hoặc dùng tắt: !chuyentien [số_tiền] @tag",
   execute: async ({ api, event, args, transferMode = false }) => {
+    await ensureMentionsFromHistory(api, event);
     const { threadID, messageID, senderID, mentions, type, messageReply } =
       event;
 
@@ -313,12 +316,12 @@ module.exports = {
           if (taxAmount > 0) {
             await connection.execute(
               "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-              [taxAmount, BOSS_ID],
+              [taxAmount, bossID],
             );
           }
 
           // Cập nhật transferred_today (trừ Boss)
-          if (senderID !== BOSS_ID) {
+          if (senderID !== bossID) {
             await connection.execute(
               "UPDATE transfer_limits SET transferred_today = transferred_today + ? WHERE psid = ?",
               [amount, senderID],
@@ -333,7 +336,7 @@ module.exports = {
           } catch (_) {}
 
           // Thông báo thành công
-          if (senderID === BOSS_ID) {
+          if (senderID === bossID) {
             return api.sendMessage(
               `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName} 👑\n📥 Nhận: ${targetName}\n💰 Tiền chuyển: ${amount.toLocaleString()}\n🧾 Thuế chuyển (2%): ${taxAmount.toLocaleString()}\n💸 Tổng trừ: ${totalDebit.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🔓 Không giới hạn (Boss)`,
               threadID,
@@ -357,7 +360,7 @@ module.exports = {
       // KIỂM TRA HẠN MỨC
       else if (["hanmuc", "limit", "hm"].includes(command)) {
         // Ngoại lệ cho Boss
-        if (senderID === BOSS_ID) {
+        if (senderID === bossID) {
           return api.sendMessage(
             `👑 HẠN MỨC BOSS\n━━━━━━━━━━━━━━━━━━\n🔓 KHÔNG GIỚI HẠN\n━━━━━━━━━━━━━━━━━━\n💎 Boss có đặc quyền chuyển tiền không giới hạn`,
             threadID,
@@ -476,7 +479,7 @@ module.exports = {
       console.error(e);
       return api.sendMessage("❌ Lỗi Database.", threadID);
     } finally {
-      if (connection) await connection.end();
+      if (connection) connection.release();
     }
   },
 };

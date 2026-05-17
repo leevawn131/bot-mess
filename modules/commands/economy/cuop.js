@@ -1,6 +1,8 @@
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 const { syncBankPool } = require("../../utils/bankPool");
+const { consumeEnergy } = require("../../utils/energySystem");
+const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
 
 const ROB_TAX_RATE = 0.08;
 
@@ -10,9 +12,11 @@ const BOSS_ID = "100037351338722";
 module.exports = {
   name: "cuop",
   description: "Cướp tiền người khác hoặc ngân hàng",
-  usage: "!cuop @tag | reply | !cuop nganhang",
+  usage:
+    "\n!cuop @tag → Cướp tiền người được tag\n!cuop (reply) → Cướp tiền người được reply\n!cuop nganhang → Cướp ngân hàng (rủi ro cao)\n━━━━━━━━━━━━━━━━━━\n⚠️ Thất bại sẽ bị phạt tiền + có thể vào tù\n💰 Thuế cướp: 8%\n⚡ Tốn 20 thể lực mỗi lần dùng",
 
   execute: async ({ api, event, config, args }) => {
+    await ensureMentionsFromHistory(api, event);
     const { threadID, senderID, mentions, messageID, messageReply, body } =
       event;
 
@@ -65,22 +69,24 @@ module.exports = {
       );
     }
 
-    // Config DB
-    const db = config.database;
-    const dbConfig = {
-      host: db.host,
-      port: db.port,
-      user: db.user,
-      password: db.password,
-      database: db.name,
-    };
-
     let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
+      connection = await getConnection();
+
+      const energyUse = await consumeEnergy(connection, senderID, 20);
+      if (!energyUse.ok) {
+        if (energyUse.reason === "not_enough") {
+          return api.sendMessage(energyUse.message, threadID, messageID);
+        }
+        return api.sendMessage(
+          "❌ Không thể kiểm tra thể lực lúc này.",
+          threadID,
+          messageID,
+        );
+      }
 
       // Check tù
-      const [jailRows] = await connection.execute(
+      const jailRows = await execute(
         "SELECT jail_until, reason FROM user_jail WHERE psid = ? AND jail_until > NOW()",
         [senderID],
       );
@@ -121,9 +127,9 @@ module.exports = {
           );
         }
 
-        await syncBankPool(connection);
+        await syncBankPool(null);
 
-        const [poolRows] = await connection.execute(
+        const poolRows = await execute(
           "SELECT total_balance FROM bank_pool WHERE id = 1",
         );
         const poolBalance = parseInt(poolRows[0]?.total_balance) || 0;
@@ -200,7 +206,7 @@ module.exports = {
           const finalGain = Math.max(0, totalStolen - taxAmount);
 
           api.sendMessage(
-            `🏦 **CƯỚP NGÂN HÀNG THÀNH CÔNG!**\n👤 ${senderName}\n💰 Lấy được: ${totalStolen.toLocaleString()}\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n🔥 Thoát khỏi truy nã... tạm thời!`,
+            `🏦 **CƯỚP NGÂN HÀNG THÀNH CÔNG!**\n👤 ${senderName}\n💰 Lấy được: ${totalStolen.toLocaleString()}\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n🔥 Thoát khỏi truy nã... tạm thời!`,
             threadID,
             messageID,
           );
@@ -208,35 +214,28 @@ module.exports = {
           const fine = 100000; // 100k fixed penalty
           const jailUntil = new Date(now.getTime() + 1 * 60 * 60 * 1000);
 
-          await connection.beginTransaction();
-          try {
-            await connection.execute(
-              "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-              [fine, senderID],
-            );
-            await connection.execute(
-              "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-              [fine, BOSS_ID],
-            );
+          await execute(
+            "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
+            [fine, senderID],
+          );
+          await execute(
+            "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
+            [fine, BOSS_ID],
+          );
 
-            await connection.execute(
-              "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE jail_until = ?, reason = ?",
-              [
-                senderID,
-                jailUntil,
-                "Cướp ngân hàng",
-                jailUntil,
-                "Cướp ngân hàng",
-              ],
-            );
-            await connection.commit();
-          } catch (err) {
-            await connection.rollback();
-            throw err;
-          }
+          await execute(
+            "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE jail_until = ?, reason = ?",
+            [
+              senderID,
+              jailUntil,
+              "Cướp ngân hàng",
+              jailUntil,
+              "Cướp ngân hàng",
+            ],
+          );
 
           api.sendMessage(
-            `🚔 **CƯỚP NGÂN HÀNG THẤT BẠI!**\n👮 Bạn bị bắt và vào tù 1h.\n💸 Tiền phạt: 500,000 credits`,
+            `🚔 **CƯỚP NGÂN HÀNG THẤT BẠI!**\n👮 Bạn bị bắt và vào tù 1h.\n💸 Tiền phạt: 100,000 credits\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)`,
             threadID,
             messageID,
           );
@@ -260,7 +259,7 @@ module.exports = {
         targetData?.vip_until && new Date(targetData.vip_until) > now;
 
       // Check shield protection cho nguoi bi cuop
-      const [shieldCheck] = await connection.execute(
+      const shieldCheck = await execute(
         'SELECT * FROM active_effects WHERE psid = ? AND effect_type = "protect_rob" AND uses_left > 0',
         [targetID],
       );
@@ -355,7 +354,7 @@ module.exports = {
           );
         }
 
-        let msg = `🔫 **CƯỚP THÀNH CÔNG!**\nBạn đã trấn lột ${stealAmount.toLocaleString()} credits từ ${targetName}.\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n(Nạn nhân khóc thét 😭)`;
+        let msg = `🔫 **CƯỚP THÀNH CÔNG!**\nBạn đã trấn lột ${stealAmount.toLocaleString()} credits từ ${targetName}.\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n(Nạn nhân khóc thét 😭)`;
         if (hasShield && !isBossRobber)
           msg += `\n🛡️ Khien bao ve da giam sat thuong!`;
         if (targetHasVIP && !isBossRobber)
@@ -368,14 +367,14 @@ module.exports = {
         if (targetID === BOSS_ID) fine = 10000; // Cướp Boss phạt nặng hơn
 
         // Trừ tiền thằng đi cướp
-        await connection.execute(
+        await execute(
           "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
           [fine, senderID],
         );
 
         // Cộng tiền phạt vào ví BOSS (Nếu Boss không phải là người đi cướp)
         if (senderID !== BOSS_ID) {
-          await connection.execute(
+          await execute(
             "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
             [fine, BOSS_ID],
           );
@@ -383,13 +382,13 @@ module.exports = {
 
         // Vào tù 3 phút
         const jailUntil = new Date(Date.now() + 3 * 60 * 1000);
-        await connection.execute(
+        await execute(
           "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE jail_until = ?, reason = ?",
           [senderID, jailUntil, "Cướp fail", jailUntil, "Cướp fail"],
         );
 
         api.sendMessage(
-          `👮 **BỊ BẮT RỒI CON ƠI!**\nCướp ${targetName} bất thành, bạn bị Công An phạt ${fine.toLocaleString()} credits.\n🔒 Bạn bị giam 3 phút.\n(Tiền phạt đã được nộp vào kho bạc của Boss 🐧)`,
+          `👮 **BỊ BẮT RỒI CON ƠI!**\nCướp ${targetName} bất thành, bạn bị Công An phạt ${fine.toLocaleString()} credits.\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n🔒 Bạn bị giam 3 phút.\n(Tiền phạt đã được nộp vào kho bạc của Boss 🐧)`,
           threadID,
           messageID,
         );
@@ -398,7 +397,7 @@ module.exports = {
       console.error(e);
       api.sendMessage("❌ Lỗi Database.", threadID, messageID);
     } finally {
-      if (connection) await connection.end();
+      if (connection) connection.release();
     }
   },
 };

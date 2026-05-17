@@ -1,14 +1,14 @@
 {
   "_note": "For production use, set environment variables instead of hardcoded values. See .env.example for reference.",
   "adminID": [],
-  "adminIDs": [],
+  "adminIDs": ["100037351338722","61578017290778"],
   "adminOnly": false,
   "ai": {
     "autoReplyOnlyGroups": false
   },
   "botName": "DarkWin",
   "database": {
-    "host": "127.0.0.1",
+    "host": "mysql",
     "name": "goatbot",
     "password": "123456",
     "port": 3306,

@@ -1,10 +1,11 @@
 const { checkCooldown } = require("../../utils/cooldown");
-const { ADMIN_BOT_UIDS } = require("../../utils/checkPermission");
+const { getAdminBotUIDs } = require("../../utils/checkPermission");
 
 module.exports = {
   name: "kick",
   description: "Kick thành viên (Có check quyền QTV)",
-  usage: "[tag] | [reply]",
+  usage:
+    "\n!kick @tag → Kick người được tag\n!kick (reply) → Kick người được reply\n!kick [uid] → Kick bằng User ID\n━━━━━━━━━━━━━━━━━━\n🛡️ Tự động bỏ qua QTV và Bot\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID, mentions } = event;
 
@@ -23,33 +24,58 @@ module.exports = {
     }
 
     try {
+      // 2. Lấy thông tin nhóm và danh sách Admin
+      const threadInfo = await api.getThreadInfo(threadID);
+      
+      if (!threadInfo || typeof threadInfo !== 'object') {
+        return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
+      }
+
       // 1. Xác định danh sách ID cần kick
       let targetIDs = [];
-      if (Object.keys(mentions).length > 0) {
+      
+      if (Object.keys(mentions || {}).length > 0) {
         targetIDs = Object.keys(mentions);
       } else if (event.type === "message_reply") {
         targetIDs = [event.messageReply.senderID];
       } else if (args[0] && !isNaN(args[0])) {
         targetIDs = [args[0]];
+      } else if (args.length > 0) {
+        // Fallback: Tìm chính xác tên (Exact match) khi tag bị lỗi metadata
+        const searchStr = args.join(" ").replace(/@/g, "").trim().toLowerCase();
+        const matchedUsers = (threadInfo.userInfo || []).filter(
+          (u) => u.name && u.name.toLowerCase() === searchStr
+        );
+        
+        if (matchedUsers.length === 1) {
+          // Chỉ kick ngay lập tức nếu tìm thấy CHÍNH XÁC 1 người (Đảm bảo an toàn 100%)
+          targetIDs = [String(matchedUsers[0].id)];
+        } else if (matchedUsers.length > 1) {
+          // Trùng tên -> Từ chối kick để tránh nhầm người vô tội
+          return api.sendMessage(
+            `❌ Có ${matchedUsers.length} thành viên trùng tên "${searchStr}". Bot từ chối kick để tránh nhầm lẫn.\n📌 Vui lòng Reply tin nhắn hoặc nhập ID của người cần kick.`,
+            threadID,
+            messageID
+          );
+        }
       }
 
       if (targetIDs.length === 0)
         return api.sendMessage(
-          "❌ Vui lòng Tag hoặc Reply người cần kick.",
+          "❌ Vui lòng Tag, Reply hoặc nhập đúng tên/ID người cần kick.",
           threadID,
           messageID,
         );
-
-      // 2. Lấy thông tin nhóm và danh sách Admin
-      const threadInfo = await api.getThreadInfo(threadID);
+      
       const adminIDs = (threadInfo.adminIDs || []).map((i) => String(i.id));
       const botID = String(api.getCurrentUserID());
       const isSenderAdmin = adminIDs.includes(String(senderID));
-      const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+      const adminBotUIDs = getAdminBotUIDs();
+      const isSenderBotAdmin = Array.isArray(adminBotUIDs)
+        ? adminBotUIDs.includes(String(senderID))
+        : false;
 
       // --- KIỂM TRA QUYỀN HẠN ---
-
-      // A. Kiểm tra quyền của NGƯỜI DÙNG LỆNH (Sender)
       if (!isSenderAdmin && !isSenderBotAdmin) {
         return api.sendMessage(
           "⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh kick!",
@@ -58,7 +84,6 @@ module.exports = {
         );
       }
 
-      // B. Kiểm tra quyền của BOT
       if (!adminIDs.includes(botID)) {
         return api.sendMessage(
           "❌ Bot cần quyền Quản Trị Viên để thực hiện lệnh này!",
@@ -67,40 +92,44 @@ module.exports = {
         );
       }
 
-      // ---------------------------
+      const hasRemoveSupport = Boolean(
+        api.removeUserFromGroup ||
+        api.removeParticipant ||
+        api.removeUser ||
+        api.removeUserFromThread ||
+        api.removeParticipantFromThread ||
+        api.gcmember,
+      );
 
-      // 3. Hàm Kick
+      if (!hasRemoveSupport) {
+        return api.sendMessage(
+          "❌ Bot hiện tại không hỗ trợ chức năng kick do thư viện thiếu API xóa participant. Vui lòng cập nhật thư viện/phiên bản.",
+          threadID,
+          messageID,
+        );
+      }
+
+      // 4. Hàm Kick
       const kickUser = async (uid, tid) => {
-        try {
-          // Ưu tiên dùng hàm chuẩn của thư viện
-          if (api.removeUserFromGroup) {
-            await api.removeUserFromGroup(uid, tid);
-          }
-          // Fallback cho thư viện cũ
-          else if (api.removeParticipant) {
-            await api.removeParticipant(uid, tid);
-          }
-          // Fallback cuối cùng: Gọi HTTP thủ công (nếu thư viện nát quá)
-          else {
-            throw new Error("Library missing remove function");
-          }
-        } catch (e) {
-          throw e;
-        }
+        if (api.removeUserFromGroup) return api.removeUserFromGroup(uid, tid);
+        if (api.removeParticipant) return api.removeParticipant(uid, tid);
+        if (api.gcmember) return api.gcmember("remove", uid, tid);
+        if (api.removeUser) return api.removeUser(uid, tid);
+        if (api.removeUserFromThread) return api.removeUserFromThread(uid, tid);
+        if (api.removeParticipantFromThread)
+          return api.removeParticipantFromThread(uid, tid);
+        throw new Error("Library missing remove function");
       };
 
-      // 4. Thực thi - Kick tất cả những người được tag
       let successCount = 0;
       let skipCount = 0;
 
       for (const targetID of targetIDs) {
-        // Kiểm tra không kick Admin
         if (adminIDs.includes(String(targetID))) {
           skipCount++;
           continue;
         }
 
-        // Không kick bot
         if (String(targetID) === botID) {
           skipCount++;
           continue;
@@ -129,9 +158,9 @@ module.exports = {
     } catch (e) {
       console.error(e);
       api.sendMessage(
-        "❌ Lỗi: Không thể kick thành viên này. (Có thể do lỗi thư viện hoặc Bot bị chặn)",
-        threadID,
-        messageID,
+        "❌ Lỗi: Không thể xử lý yêu cầu. (Có thể do lỗi thư viện hoặc Bot bị chặn)",
+        event.threadID,
+        event.messageID,
       );
     }
   },

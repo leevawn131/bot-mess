@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
-const mysql = require('mysql2/promise');
+const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require('../../utils/cooldown');
 const { consumeEnergy, getDBConfigFromRuntime } = require('../../utils/energySystem');
+const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
 
 const PUNCH_GIF_DIR = path.resolve(__dirname, '../cache/punch');
 const PUNCH_MESSAGES = [
@@ -56,8 +57,9 @@ async function getUserNameFromThread(api, threadID, userID) {
 module.exports = {
     name: 'đấm',
     description: 'Đấm người được reply hoặc tag và gửi GIF',
-    usage: '@người dùng hoặc reply tin nhắn',
+    usage: "\n!đấm @tag → Đấm người được tag\n!đấm (reply) → Đấm người được reply\n━━━━━━━━━━━━━━━━━━\n🥊 Gửi kèm GIF đấm và tin nhắn vui\n⚡ Tốn năng lượng mỗi lần dùng",
     execute: async ({ api, event, config }) => {
+        await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;
 
         const cooldown = checkCooldown({ command: 'đấm', key: senderID, durationMs: 20000 });
@@ -102,7 +104,7 @@ module.exports = {
         let energyUse;
         let connection;
         try {
-            connection = await mysql.createConnection(dbConfig);
+            connection = await getConnection();
             energyUse = await consumeEnergy(connection, senderID, 20);
             if (!energyUse.ok) {
                 if (energyUse.reason === 'not_enough') {
@@ -114,7 +116,7 @@ module.exports = {
             console.error('Energy check error (dam):', error);
             return api.sendMessage('❌ Lỗi hệ thống thể lực.', threadID, messageID);
         } finally {
-            if (connection) await connection.end();
+            if (connection) connection.release();
         }
 
         const actorName = await getUserName(api, senderID, 'Bạn');

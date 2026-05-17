@@ -3,7 +3,7 @@ const { checkCooldown } = require("../../utils/cooldown");
 module.exports = {
   name: "help",
   description: "Xem danh sách lệnh theo nhóm",
-  usage: "[tên lệnh]",
+  usage: "\n!help → Xem danh sách tất cả lệnh theo nhóm\n!help [tên_lệnh] → Xem hướng dẫn chi tiết của 1 lệnh\n━━━━━━━━━━━━━━━━━━\n💡 Ví dụ: !help taixiu",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
     const prefix = config?.prefix || "!";
@@ -23,68 +23,30 @@ module.exports = {
     }
 
     try {
-      // 1. Lấy danh sách lệnh từ Map global
       const commandList = Array.from(global.commands.keys()).sort();
       const commandSet = new Set(commandList);
 
       const sections = [
         {
-          title: "💰 Kinh tế",
+          title: "👑 ADMIN-BOT (Quản lý Bot)",
+          commands: ["reset", "go", "ping", "tu", "mode", "setthue"],
+        },
+        {
+          title: "🛡️ QTV NHÓM (Quản lý Box)",
           commands: [
-            "tien",
-            "chuyentien",
-            "bank",
-            "lamviec",
-            "diemdanh",
-            "vay",
-            "shop",
-            "buy",
-            "inv",
-            "use",
-            "openbox",
-            "cuop",
-            "daigia",
-            "quest",
+            "go", "kick", "antiout", "setwelcome", "luatnhom", "checkbd", "setbd", "checkout"
           ],
         },
         {
-          title: "🎮 Minigame",
-          commands: ["taixiu", "baucua", "lode", "duoihinhbatchu"],
-        },
-        {
-          title: "👥 Nhóm",
+          title: "👤 THƯỜNG DÂN",
           commands: [
-            "admingr",
-            "add",
-            "kick",
-            "grinfo",
-            "checkout",
-            "antiout",
-            "checktt",
-            "checkbd",
-            "ghepdoi",
-            "setbd",
-            "setwelcome",
-            "luatnhom",
+            "thuebot", "help", "ai", 
+            "tien", "chuyentien", "bank", "lamviec", "diemdanh", "vay", "shop", "buy", "inv", "use", "openbox", "cuop", "daigia", "quest", // Kinh tế
+            "taixiu", "baucua", "lode", "duoihinhbatchu", "tu", // Game
+            "add", "grinfo", "checktt", "ghepdoi", "qtv", // Tiện ích nhóm
+            "huongdan", "changelog", "dich", "say", "voice2text", "mp3", "vidgai", "đấm", "kiss", "uid" // Công cụ
           ],
-        },
-        {
-          title: "🛠️ Công cụ",
-          commands: [
-            "help",
-            "huongdan",
-            "changelog",
-            "ai",
-            "dich",
-            "say",
-            "mp3",
-            "vidgai",
-            "đấm",
-            "kiss",
-            "reset",
-          ],
-        },
-        { title: "⚙️ Hệ thống", commands: ["ping", "uid", "tu", "go", "mode"] },
+        }
       ];
 
       const grouped = sections
@@ -102,18 +64,18 @@ module.exports = {
       const others = commandList.filter((name) => !groupedNames.has(name));
 
       if (!args[0]) {
-        let msg = `📜 DANH SÁCH LỆNH (${commandList.length})\n━━━━━━━━━━━━━\n`;
+        let msg = `📜 DANH SÁCH LỆNH (${commandList.length})\n━━━━━━━━━━━━━\n\n`;
 
         grouped.forEach((section) => {
-          msg += `${section.title}: ${section.commands.join(", ")}\n`;
+          msg += `[ ${section.title} ]\n👉 ${section.commands.join(", ")}\n\n`;
         });
 
         if (others.length > 0) {
-          msg += `📦 Khác: ${others.join(", ")}\n`;
+          msg += `[ 📦 KHÁC ]\n👉 ${others.join(", ")}\n\n`;
         }
 
         msg += "━━━━━━━━━━━━━\n";
-        msg += `👉 Chi tiết: ${prefix}help [tên lệnh]`;
+        msg += `📌 Xem chi tiết: ${prefix}help [tên lệnh]`;
 
         return api.sendMessage(msg, threadID);
       }

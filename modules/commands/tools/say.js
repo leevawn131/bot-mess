@@ -1,7 +1,7 @@
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const mysql = require("mysql2/promise");
+const { execute, getConnection } = require("../../utils/database");
 let googleTTS = null;
 try {
   const loaded = require("google-tts-api");
@@ -46,7 +46,7 @@ function splitTextIntoChunks(text, maxLen = MAX_TTS_CHARS_PER_CHUNK) {
 module.exports = {
   name: "say",
   description: "Chuyển tin nhắn được reply thành voice (giọng nói)",
-  usage: "Reply tin nhắn bất kỳ và gõ !say",
+  usage: "\n!say (reply tin nhắn) → Chuyển nội dung được reply thành giọng nói\n━━━━━━━━━━━━━━━━━━\n🎙️ Reply tin nhắn bất kỳ rồi gõ !say\n⚡ Tốn năng lượng mỗi lần dùng\n📌 Hỗ trợ tiếng Việt, tối đa 20,000 ký tự",
   execute: async ({ api, event, config }) => {
     const { messageID, messageReply, senderID } = event;
     const threadID = String(event.threadID); // Ép kiểu chuỗi
@@ -95,7 +95,7 @@ module.exports = {
       let energyUse;
       let connection;
       try {
-        connection = await mysql.createConnection(dbConfig);
+        connection = await getConnection();
         energyUse = await consumeEnergy(connection, senderID, 20);
         if (!energyUse.ok) {
           if (energyUse.reason === "not_enough") {
@@ -111,7 +111,7 @@ module.exports = {
         console.error("Energy check error (say):", error);
         return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, messageID);
       } finally {
-        if (connection) await connection.end();
+        if (connection) connection.release();
       }
 
       const text = messageReply.body.trim();

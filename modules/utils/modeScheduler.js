@@ -46,15 +46,17 @@ function writeJsonFile(filePath, data) {
 }
 
 function getLocalTimeHHMM(date) {
-    const hh = String(date.getHours()).padStart(2, "0");
-    const mm = String(date.getMinutes()).padStart(2, "0");
+    const vnTime = new Date(date.getTime() + (7 * 60 * 60 * 1000));
+    const hh = String(vnTime.getHours()).padStart(2, "0");
+    const mm = String(vnTime.getMinutes()).padStart(2, "0");
     return `${hh}:${mm}`;
 }
 
 function getDateStamp(date) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
+    const vnTime = new Date(date.getTime() + (7 * 60 * 60 * 1000));
+    const y = vnTime.getFullYear();
+    const m = String(vnTime.getMonth() + 1).padStart(2, "0");
+    const d = String(vnTime.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
 }
 
@@ -166,11 +168,12 @@ function saveThreadScheduleValue(schedules, threadID, dailyList, inTask) {
 
 function formatDateTimeVN(timestamp) {
     const d = new Date(timestamp);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mi = String(d.getMinutes()).padStart(2, "0");
+    const vnTime = new Date(d.getTime() + (7 * 60 * 60 * 1000));
+    const dd = String(vnTime.getDate()).padStart(2, "0");
+    const mm = String(vnTime.getMonth() + 1).padStart(2, "0");
+    const yyyy = vnTime.getFullYear();
+    const hh = String(vnTime.getHours()).padStart(2, "0");
+    const mi = String(vnTime.getMinutes()).padStart(2, "0");
     return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
 }
 

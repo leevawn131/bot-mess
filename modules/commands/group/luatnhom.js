@@ -1,11 +1,11 @@
 const { checkCooldown } = require('../../utils/cooldown');
-const { ADMIN_BOT_UIDS } = require('../../utils/checkPermission');
+const { getAdminBotUIDs } = require('../../utils/checkPermission');
 const { getGroupRule, setGroupRule } = require('../../utils/groupRulesSettings');
 
 module.exports = {
     name: "luatnhom",
     description: "Lưu luật riêng cho từng nhóm",
-    usage: "[set <nội dung> | check | reset]",
+    usage: "\n!luatnhom → Xem luật hiện tại của nhóm\n!luatnhom set [nội dung] → Lưu luật mới\n!luatnhom reset → Xóa luật riêng của nhóm\n━━━━━━━━━━━━━━━━━━\n📌 Tối đa 2000 ký tự\n🔒 Chỉ QTV nhóm/chủ bot mới cài được\n💡 VD: !luatnhom set Không spam, không toxic",
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -21,6 +21,10 @@ module.exports = {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
         }
 
+        if (!threadInfo || typeof threadInfo !== 'object') {
+            return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
+        }
+
         if (!threadInfo.isGroup) {
             return api.sendMessage("⚠️ Lệnh này chỉ dùng trong nhóm chat.", threadID, messageID);
         }
@@ -29,7 +33,8 @@ module.exports = {
         const botID = String(api.getCurrentUserID());
         const isBotAdmin = adminIDs.includes(botID);
         const isSenderAdmin = adminIDs.includes(String(senderID));
-        const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+        const adminBotUIDs = getAdminBotUIDs();
+        const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
 
         if (!isSenderAdmin && !isSenderBotAdmin) {
             return api.sendMessage("⚠️ Chỉ admin nhóm hoặc chủ bot mới được cài luật nhóm.", threadID, messageID);

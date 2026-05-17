@@ -1,12 +1,15 @@
+const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
+
 module.exports = {
     name: "setbd",
     description: "Đổi biệt danh",
-    usage: "[@tag/reply] [tên]",
+    usage: "\n!setbd [tên mới] → Đổi biệt danh cho bản thân\n!setbd @tag [tên mới] → Đổi cho người được tag\n!setbd (reply) [tên mới] → Đổi cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Tối đa 32 ký tự | Bỏ trống = xóa biệt danh\n⚠️ Bot cần quyền QTV nhóm\n🔒 Chỉ QTV mới được đổi cho người khác",
     execute: async ({ api, event, args }) => {
+        await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;
         const botID = String(api.getCurrentUserID());
         const { checkCooldown } = require('../../utils/cooldown');
-        const { ADMIN_BOT_UIDS } = require('../../utils/checkPermission');
+        const { getAdminBotUIDs } = require('../../utils/checkPermission');
 
         // Cooldown 5s
         const cooldown = checkCooldown({ command: "setbd", key: senderID, durationMs: 10000 });
@@ -58,25 +61,33 @@ module.exports = {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm để kiểm tra quyền.", threadID);
         }
 
+        if (!threadInfo || typeof threadInfo !== 'object') {
+            return api.sendMessage("❌ Không thể lấy thông tin nhóm để kiểm tra quyền.", threadID);
+        }
+
         const adminIDs = (threadInfo.adminIDs || []).map(item => String(item.id)); // Danh sách ID Quản trị viên
         const isBotAdmin = adminIDs.includes(botID);              // Bot có phải Admin không?
         const isSenderAdmin = adminIDs.includes(String(senderID)); // Người dùng lệnh có phải Admin không?
-        const isSenderBotAdmin = ADMIN_BOT_UIDS.includes(String(senderID));
+        const adminBotUIDs = getAdminBotUIDs();
+        const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
+        const isSenderBot = String(senderID) === botID;           // Sender có phải là bot không?
+        const isSetBotOwnName = isSenderBot && String(targetID) === botID;  // Bot set cho chính nó không?
 
         // 3. KIỂM TRA QUYỀN (LOGIC BẢO MẬT)
 
-        if (!isSenderAdmin && !isSenderBotAdmin) {
-            return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh setbd!", threadID);
-        }
-
-        // Rule 1: Bot bắt buộc phải là Admin mới đổi được tên (để tránh lỗi permission)
-        if (!isBotAdmin) {
+        // Rule 1: Nếu bot set tên cho người khác (không phải chính nó), bot phải là Admin
+        if (!isSetBotOwnName && !isBotAdmin) {
             return api.sendMessage("🚫 Bot cần quyền Quản trị viên nhóm để thực hiện lệnh này.", threadID);
         }
 
-        // Rule 2: Nếu đổi tên cho NGƯỜI KHÁC, người dùng lệnh phải là Admin
+        // Rule 2: Chỉ Admin, QTV nhóm, hoặc bot tự dùng mới được dùng lệnh
+        if (!isSenderAdmin && !isSenderBotAdmin && !isSenderBot) {
+            return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh setbd!", threadID);
+        }
+
+        // Rule 3: Nếu đổi tên cho NGƯỜI KHÁC (không phải chính mình), phải là Admin
         if (targetID !== senderID) {
-            if (!isSenderAdmin && !isSenderBotAdmin) {
+            if (!isSenderAdmin && !isSenderBotAdmin && !isSenderBot) {
                 return api.sendMessage("⚠️ Chỉ Quản trị viên mới được đổi biệt danh cho người khác!", threadID);
             }
         }

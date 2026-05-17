@@ -3,7 +3,8 @@ const { checkCooldown } = require("../../utils/cooldown");
 module.exports = {
   name: "huongdan",
   description: "Hướng dẫn người chơi mới bắt đầu chơi",
-  usage: "[chi_tiet]",
+  usage:
+    "\n!huongdan → Hướng dẫn tổng quan cho người mới\n!huongdan chitiet → Hướng dẫn chi tiết từng hệ thống\n━━━━━━━━━━━━━━━━━━\n📚 Giải thích cách chơi, kiếm tiền, minigame",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
     const prefix = config?.prefix || "!";
@@ -127,6 +128,7 @@ ${prefix}bank upgrade
 ${prefix}cuop [@tên]
 • Có thể kiếm lớn nhưng dễ bị trả đũa
 • Rủi ro cao, sau cáu bị phạt
+• Mỗi lần dùng tốn 20 thể lực
 • Chỉ dùng khi thực sự cần & tin tưởng mình
 
 💎 GIẢM GIÁ VÀ ĐẠI GIÁ

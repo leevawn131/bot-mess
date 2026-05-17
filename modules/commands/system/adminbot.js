@@ -1,5 +1,5 @@
 const { checkCooldown } = require("../../utils/cooldown");
-const { ADMIN_BOT_UIDS } = require("../../utils/checkPermission");
+const { getAdminBotUIDs } = require("../../utils/checkPermission");
 
 async function resolveUserName(api, uid) {
   const id = String(uid || "").trim();
@@ -26,7 +26,7 @@ async function resolveUserName(api, uid) {
 module.exports = {
   name: "adminbot",
   description: "Hiển thị danh sách admin bot",
-  usage: "",
+  usage: "\n!adminbot → Xem danh sách admin của bot\n━━━━━━━━━━━━━━━━━━\n👑 Hiển thị tên và link Facebook của từng admin",
 
   execute: async ({ api, event }) => {
     const { threadID, messageID, senderID } = event;
@@ -45,9 +45,10 @@ module.exports = {
       );
     }
 
+    const adminBotUIDs = getAdminBotUIDs();
     const adminIds = Array.from(
       new Set(
-        (ADMIN_BOT_UIDS || []).map((id) => String(id).trim()).filter(Boolean),
+        (Array.isArray(adminBotUIDs) ? adminBotUIDs : []).map((id) => String(id).trim()).filter(Boolean),
       ),
     );
 

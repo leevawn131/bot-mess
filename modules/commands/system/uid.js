@@ -1,10 +1,14 @@
 const { checkCooldown } = require('../../utils/cooldown');
+const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
 
 module.exports = {
     name: "uid",
     description: "Lấy ID người dùng",
+    usage: "\n!uid → Lấy UID của bản thân\n!uid @tag → Lấy UID người được tag\n!uid (reply) → Lấy UID người được reply\n━━━━━━━━━━━━━━━━━━\n🆔 Trả về Facebook User ID dạng số",
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
+
+        await ensureMentionsFromHistory(api, event);
 
         // Cooldown 5s
         const cooldown = checkCooldown({ command: "uid", key: senderID, durationMs: 10000 });
@@ -18,7 +22,7 @@ module.exports = {
             uid = event.messageReply.senderID;
         } 
         // Nếu tag người khác
-        else if (Object.keys(event.mentions).length > 0) {
+        else if (Object.keys(event.mentions || {}).length > 0) {
             uid = Object.keys(event.mentions)[0];
         } 
         // Mặc định lấy UID bản thân

@@ -1,10 +1,10 @@
-const mysql = require("mysql2/promise");
+const { execute } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 
 module.exports = {
   name: "shop",
   description: "Xem danh sách vật phẩm có thể mua",
-  usage: "!shop",
+  usage: "\n!shop → Xem danh sách vật phẩm có thể mua\n━━━━━━━━━━━━━━━━━━\n🏪 Hiển thị tên, giá, mô tả từng item\n🛒 Mua: !buy [item-key] <số_lượng>",
 
   execute: async ({ api, event, config }) => {
     const { threadID, messageID, senderID } = event;
@@ -23,20 +23,8 @@ module.exports = {
       );
     }
 
-    const db = config.database;
-    const dbConfig = {
-      host: db.host,
-      port: db.port,
-      user: db.user,
-      password: db.password,
-      database: db.name,
-    };
-
-    let connection;
     try {
-      connection = await mysql.createConnection(dbConfig);
-
-      const [items] = await connection.execute(
+      const items = await execute(
         "SELECT * FROM shop_items ORDER BY price ASC",
       );
 
@@ -65,8 +53,6 @@ module.exports = {
         threadID,
         messageID,
       );
-    } finally {
-      if (connection) await connection.end();
     }
   },
 };
