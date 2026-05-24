@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
@@ -6,8 +6,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
+    tar \
+    unzip \
     python3 \
     python3-pip \
+    && python3 -m pip install --no-cache-dir --break-system-packages yt-dlp \
     && ln -s /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 

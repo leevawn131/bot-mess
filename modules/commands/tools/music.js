@@ -191,16 +191,16 @@ function getYtDlpExtraArgs() {
 }
 
 module.exports = {
-  name: "mp3",
+  name: "music",
   description: "Tải nhạc từ YouTube hoặc SoundCloud",
   usage:
-    "\n!mp3 [tên bài hát] → Tìm và tải nhạc\n!mp3 [link YouTube/SoundCloud] → Tải từ link\n━━━━━━━━━━━━━━━━━━\n🎧 Hỗ trợ: YouTube, SoundCloud\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: !mp3 See You Again",
+    "\n!music [tên bài hát] → Tìm và tải nhạc\n!music [link YouTube/SoundCloud] → Tải từ link\n━━━━━━━━━━━━━━━━━━\n🎧 Hỗ trợ: YouTube, SoundCloud\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: !music See You Again",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
 
     // Cooldown 20s
     const cooldown = checkCooldown({
-      command: "mp3",
+      command: "music",
       key: senderID,
       durationMs: 20000,
     });
@@ -227,29 +227,7 @@ module.exports = {
       return api.sendMessage("❌ Lỗi cấu hình Database.", threadID, messageID);
     }
 
-    let energyUse;
-    let energyConnection;
-    try {
-      energyConnection = await getConnection();
-      energyUse = await consumeEnergy(energyConnection, senderID, 20);
-      if (!energyUse.ok) {
-        if (energyUse.reason === "not_enough") {
-          return api.sendMessage(energyUse.message, threadID, messageID);
-        }
-        return api.sendMessage(
-          "❌ Không thể kiểm tra thể lực lúc này.",
-          threadID,
-          messageID,
-        );
-      }
-    } catch (error) {
-      console.error("Energy check error (mp3):", error);
-      return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, messageID);
-    } finally {
-      if (energyConnection) energyConnection.release();
-    }
-
-    const cacheDir = path.resolve(__dirname, "../../../cache/mp3");
+    const cacheDir = path.resolve(__dirname, "../../../cache/music");
 
     // Tạo thư mục cache nếu chưa tồn tại
     if (!fs.existsSync(cacheDir)) {
@@ -262,28 +240,92 @@ module.exports = {
       let videoUrl = input;
       let songTitle = "";
 
-      // Kiểm tra nếu input là link
+      // Nếu input không phải link thì tìm kiếm và hiển thị top 5 kết quả
       if (
         !input.includes("youtube.com") &&
         !input.includes("youtu.be") &&
         !input.includes("soundcloud.com")
       ) {
-        // Nếu không phải link, tìm kiếm trên YouTube
-        console.log("🔍 Tìm kiếm:", input);
-        videoUrl = await searchYouTube(input);
-        if (!videoUrl) {
-          return api.sendMessage(
-            "❌ Không tìm thấy bài hát!",
-            threadID,
-            messageID,
-          );
+        console.log("🔍 Tìm kiếm top 5:", input);
+        const results = await searchYouTubeList(input, 5);
+        if (!results || !results.length) {
+          return api.sendMessage("❌ Không tìm thấy bài hát!", threadID, messageID);
         }
+
+        // Enrich missing metadata before sending list (try to get title/duration)
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if ((!r.title || !r.duration) && r.url) {
+            try {
+              const info = await getYouTubeInfo(r.url);
+              if (info) {
+                r.title = r.title || info.title || r.url;
+                r.duration = r.duration || info.duration || null;
+                console.log(`ℹ️ Enriched result[${i}]:`, r.title, r.duration);
+              }
+            } catch (e) {
+              console.log(`⚠️ Enrich failed for result[${i}]`, e && e.message ? e.message : e);
+            }
+            // small pause to avoid hammering
+            await sleep(120);
+          }
+        }
+
+        // Build message with index, title and duration
+        const lines = [
+          `🔎 Kết quả tìm kiếm cho: ${input}`,
+          "Reply số (1-5) để phát bài bạn muốn:",
+        ];
+        results.forEach((r, i) => {
+          const idx = i + 1;
+          const durValue = normalizeDurationValue(r.duration);
+          const dur = typeof durValue === "number" ? formatDuration(durValue) : "??:??";
+          const title = (r.title || r.url).substring(0, 150);
+          lines.push(`${idx}. ${title} - ${dur}`);
+        });
+
+        const info = await api.sendMessage(lines.join("\n"), threadID, messageID);
+
+        // Lưu session để handleReply xử lý
+        global.musicSearchSessions = global.musicSearchSessions || {};
+        global.musicSearchSessions[threadID] = {
+          messageID: info.messageID,
+          requester: String(senderID),
+          results,
+          cacheDir,
+        };
+
+        return;
       }
 
       // Xử lý YouTube
       if (videoUrl.includes("youtube.com") || videoUrl.includes("youtu.be")) {
         console.log("📹 Xử lý YouTube:", videoUrl);
-        const result = await downloadYouTubeToMP3(videoUrl, cacheDir);
+
+        // Kiểm tra và trừ thể lực trước khi tải (trường hợp input là link)
+        let energyUseLocal;
+        let energyConnectionLocal;
+        try {
+          energyConnectionLocal = await getConnection();
+          energyUseLocal = await consumeEnergy(energyConnectionLocal, senderID, 20);
+          if (!energyUseLocal.ok) {
+            if (energyUseLocal.reason === "not_enough") {
+              return api.sendMessage(energyUseLocal.message, threadID, messageID);
+            }
+            return api.sendMessage(
+              "❌ Không thể kiểm tra thể lực lúc này.\nGõ !tien để tạo thể lực",
+              threadID,
+              messageID,
+            );
+          }
+        } catch (e) {
+          console.error("Energy check error (music direct link):", e);
+          return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, messageID);
+        } finally {
+          if (energyConnectionLocal) energyConnectionLocal.release();
+        }
+
+        const result = await downloadYouTubeTomusic(videoUrl, cacheDir);
 
         if (!result || !result.audioPath || !fs.existsSync(result.audioPath)) {
           return api.sendMessage(
@@ -327,7 +369,7 @@ module.exports = {
         const title = result.title ? result.title.substring(0, 100) : "Unknown";
         await api.sendMessage(
           {
-            body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`,
+            body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUseLocal.energy}/${energyUseLocal.maxEnergy})`,
             attachment: fs.createReadStream(result.audioPath),
           },
           threadID,
@@ -349,7 +391,31 @@ module.exports = {
       // Xử lý SoundCloud
       else if (videoUrl.includes("soundcloud.com")) {
         console.log("🎵 Xử lý SoundCloud:", videoUrl);
-        const result = await downloadSoundCloudToMP3(videoUrl, cacheDir);
+
+        // Kiểm tra và trừ thể lực trước khi tải (trường hợp input là link)
+        let energyUseLocal;
+        let energyConnectionLocal;
+        try {
+          energyConnectionLocal = await getConnection();
+          energyUseLocal = await consumeEnergy(energyConnectionLocal, senderID, 20);
+          if (!energyUseLocal.ok) {
+            if (energyUseLocal.reason === "not_enough") {
+              return api.sendMessage(energyUseLocal.message, threadID, messageID);
+            }
+            return api.sendMessage(
+              "❌ Không thể kiểm tra thể lực lúc này.\nGõ !tien để tạo thể lực",
+              threadID,
+              messageID,
+            );
+          }
+        } catch (e) {
+          console.error("Energy check error (music direct link):", e);
+          return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, messageID);
+        } finally {
+          if (energyConnectionLocal) energyConnectionLocal.release();
+        }
+
+        const result = await downloadSoundCloudTomusic(videoUrl, cacheDir);
 
         if (!result || !result.audioPath || !fs.existsSync(result.audioPath)) {
           return api.sendMessage(
@@ -387,7 +453,7 @@ module.exports = {
         const title = result.title ? result.title.substring(0, 100) : "Unknown";
         await api.sendMessage(
           {
-            body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`,
+            body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUseLocal.energy}/${energyUseLocal.maxEnergy})`,
             attachment: fs.createReadStream(result.audioPath),
           },
           threadID,
@@ -406,7 +472,7 @@ module.exports = {
         }, 10000);
       }
     } catch (error) {
-      console.error("❌ Lỗi mp3:", error);
+      console.error("❌ Lỗi music:", error);
       api.sendMessage(`❌ Lỗi: ${error.message}`, threadID, messageID);
     }
   },
@@ -501,6 +567,24 @@ async function getYouTubeTitle(url) {
         if (info && info.title) return info.title;
       } catch (_) {}
     }
+    // Fallback: fetch page HTML and parse og:title or <title>
+    try {
+      const res = await axios.get(url, { timeout: 6000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const html = String(res.data || '');
+      const ogMatch = html.match(/<meta\s+property=(?:"|')og:title(?:"|')\s+content=(?:"|')([^"']+)(?:"|')/i);
+      if (ogMatch && ogMatch[1]) return ogMatch[1];
+      const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+      if (titleMatch && titleMatch[1]) return titleMatch[1].trim();
+    } catch (e) {
+      // ignore
+    }
+    // Fallback: try oEmbed (works without API key)
+    try {
+      const oembed = await axios.get('https://www.youtube.com/oembed', { params: { url, format: 'json' }, timeout: 6000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (oembed && oembed.data && oembed.data.title) return String(oembed.data.title).trim();
+    } catch (e) {
+      // ignore
+    }
   } catch (e) {
     console.log("⚠️ Không lấy được tiêu đề:", e.message);
   }
@@ -546,9 +630,9 @@ function extractPrintedFilePath(output) {
 }
 
 /**
- * Tải video từ YouTube và convert thành MP3 bằng youtube-dl hoặc yt-dlp
+ * Tải video từ YouTube và convert thành music bằng youtube-dl hoặc yt-dlp
  */
-async function downloadYouTubeToMP3(url, cacheDir) {
+async function downloadYouTubeTomusic(url, cacheDir) {
   return new Promise((resolve, reject) => {
     try {
       const downloadStartMs = Date.now();
@@ -559,13 +643,13 @@ async function downloadYouTubeToMP3(url, cacheDir) {
         return reject(new Error("URL YouTube không hợp lệ"));
       }
 
-      const audioPath = path.join(cacheDir, `${videoId}.mp3`);
+      const audioPath = path.join(cacheDir, `${videoId}.music`);
       const m4aPath = path.join(cacheDir, `${videoId}.m4a`);
       const outputBase = path.join(cacheDir, videoId);
 
-      // Nếu file đã tồn tại (MP3 hoặc M4A), trả về luôn
+      // Nếu file đã tồn tại (music hoặc M4A), trả về luôn
       if (fs.existsSync(audioPath)) {
-        console.log("✅ Sử dụng MP3 cache:", audioPath);
+        console.log("✅ Sử dụng music cache:", audioPath);
         return getYouTubeTitle(url)
           .then((title) => {
             resolve({ audioPath, title });
@@ -597,7 +681,7 @@ async function downloadYouTubeToMP3(url, cacheDir) {
       // Thử yt-dlp trước với format M4A (Facebook hỗ trợ tốt hơn)
       try {
         if (canUseYtDlpCli()) {
-          // Tải trực tiếp dạng M4A thay vì convert từ MP3
+          // Tải trực tiếp dạng M4A thay vì convert từ music
           command = buildYtDlpCommand(
             `-f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${m4aPath}" "${url}"`,
           );
@@ -636,16 +720,16 @@ async function downloadYouTubeToMP3(url, cacheDir) {
             }
           } catch (e) {
             console.log(
-              "⚠️ Tải M4A thất bại, thử MP3...",
+              "⚠️ Tải M4A thất bại, thử music...",
               getExecErrorDetails(e),
             );
           }
 
-          // Nếu M4A thất bại, thử MP3
+          // Nếu M4A thất bại, thử music
           command = buildYtDlpCommand(
-            `-x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`,
+            `-x --audio-format music --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".music", "")}.%(ext)s" "${url}"`,
           );
-          console.log("📦 Sử dụng yt-dlp (MP3 format)");
+          console.log("📦 Sử dụng yt-dlp (music format)");
         } else {
           const ytDlpExec = getYtDlpExec();
           if (!ytDlpExec) {
@@ -690,13 +774,13 @@ async function downloadYouTubeToMP3(url, cacheDir) {
               }
             } catch (e) {
               console.log(
-                "⚠️ yt-dlp-exec binary M4A thất bại, thử MP3...",
+                "⚠️ yt-dlp-exec binary M4A thất bại, thử music...",
                 getExecErrorDetails(e),
               );
             }
 
-            command = `${bundledBinary} ${getYtDlpExtraArgs()} -x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`;
-            console.log("📦 Sử dụng yt-dlp-exec binary (MP3 format)");
+            command = `${bundledBinary} ${getYtDlpExtraArgs()} -x --audio-format music --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".music", "")}.%(ext)s" "${url}"`;
+            console.log("📦 Sử dụng yt-dlp-exec binary (music format)");
 
             try {
               const dlOutput = execSync(command, {
@@ -793,7 +877,7 @@ async function downloadYouTubeToMP3(url, cacheDir) {
           if (!hasCommand("youtube-dl")) {
             throw new Error("youtube-dl not found");
           }
-          command = `youtube-dl -x -f bestaudio --audio-format mp3 --audio-quality 128K -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`;
+          command = `youtube-dl -x -f bestaudio --audio-format music --audio-quality 128K -o "${audioPath.replace(".music", "")}.%(ext)s" "${url}"`;
           console.log("📦 Sử dụng youtube-dl");
         } catch (e2) {
           return reject(
@@ -814,7 +898,7 @@ async function downloadYouTubeToMP3(url, cacheDir) {
         const printedTitle = extractPrintedTitle(dlOutput);
         const printedPath = extractPrintedFilePath(dlOutput);
 
-        // Kiểm tra file nào được tạo (M4A hoặc MP3)
+        // Kiểm tra file nào được tạo (M4A hoặc music)
         let resultPath = null;
         if (fs.existsSync(m4aPath)) {
           console.log("✅ Tải và chuyển đổi thành công:", m4aPath);
@@ -913,9 +997,9 @@ async function downloadWithYtDlpExec(ytDlpExec, url, audioPath, m4aPath) {
     url,
     {
       extractAudio: true,
-      audioFormat: "mp3",
+      audioFormat: "music",
       audioQuality: 5,
-      output: `${audioPath.replace(".mp3", "")}.%(ext)s`,
+      output: `${audioPath.replace(".music", "")}.%(ext)s`,
       noWarnings: true,
       noCheckCertificate: true,
       noProgress: true,
@@ -975,7 +1059,7 @@ async function getSoundCloudTitle(url) {
 /**
  * Tải audio từ SoundCloud
  */
-async function downloadSoundCloudToMP3(url, cacheDir) {
+async function downloadSoundCloudTomusic(url, cacheDir) {
   try {
     // Tạo tên file an toàn để tránh ký tự đặc biệt trên Windows
     const safeId = Buffer.from(url)
@@ -1000,8 +1084,8 @@ async function downloadSoundCloudToMP3(url, cacheDir) {
       await ytDlpExec(
         url,
         {
-          // Ưu tiên lấy stream mp3 trực tiếp để không cần ffmpeg
-          format: "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio",
+          // Ưu tiên lấy stream music trực tiếp để không cần ffmpeg
+          format: "http_music/hls_music/bestaudio[ext=music]/bestaudio",
           output: `${outputBase}.%(ext)s`,
           noWarnings: true,
           noCheckCertificate: true,
@@ -1024,7 +1108,7 @@ async function downloadSoundCloudToMP3(url, cacheDir) {
     // Fallback to command line yt-dlp
     if (canUseYtDlpCli()) {
       const command = buildYtDlpCommand(
-        `-f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`,
+        `-f "http_music/hls_music/bestaudio[ext=music]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`,
       );
       console.log("📦 Sử dụng yt-dlp command");
 
@@ -1046,13 +1130,13 @@ async function downloadSoundCloudToMP3(url, cacheDir) {
       "Lỗi tải SoundCloud - không có định dạng audio phù hợp hoặc file không được tạo",
     );
   } catch (error) {
-    console.error("❌ Lỗi downloadSoundCloudToMP3:", error.message);
+    console.error("❌ Lỗi downloadSoundCloudTomusic:", error.message);
     throw error;
   }
 }
 
 function findFirstExistingAudio(outputBase) {
-  const extensions = ["mp3", "m4a", "opus", "webm", "ogg"];
+  const extensions = ["music", "m4a", "opus", "webm", "ogg"];
   for (const ext of extensions) {
     const filePath = `${outputBase}.${ext}`;
     if (fs.existsSync(filePath)) {
@@ -1091,7 +1175,7 @@ function findRecentAudioInDir(dirPath, minMtimeMs, preferredBaseName) {
     if (!fs.existsSync(dirPath)) return null;
 
     const extensions = new Set([
-      "mp3",
+      "music",
       "m4a",
       "opus",
       "webm",
@@ -1133,3 +1217,603 @@ function findRecentAudioInDir(dirPath, minMtimeMs, preferredBaseName) {
     return null;
   }
 }
+
+/**
+ * Định dạng giây -> HH:MM:SS hoặc MM:SS
+ */
+function formatDuration(seconds) {
+  if (typeof seconds !== "number" || Number.isNaN(seconds) || seconds <= 0)
+    return "??:??";
+  const s = Math.floor(seconds);
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (hh > 0) return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+function normalizeDurationValue(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return Math.floor(numeric);
+    }
+
+    const parsed = parseDurationString(trimmed);
+    if (typeof parsed === "number" && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+async function scrapeYouTubeDuration(url) {
+  try {
+    const response = await axios.get(url, {
+      timeout: 8000,
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    const html = String(response && response.data ? response.data : "");
+
+    const candidates = [
+      /"lengthSeconds":"?(\d+)"?/,
+      /"approxDurationMs":"?(\d+)"?/, 
+      /"durationSeconds":"?(\d+)"?/, 
+    ];
+
+    for (const regex of candidates) {
+      const match = html.match(regex);
+      if (match && match[1]) {
+        const value = Number(match[1]);
+        if (Number.isFinite(value) && value > 0) {
+          if (String(regex).includes("approxDurationMs")) {
+            return Math.floor(value / 1000);
+          }
+          return Math.floor(value);
+        }
+      }
+    }
+  } catch (error) {
+    console.log(`⚠️ scrape duration failed for ${url}:`, error && error.message ? error.message : error);
+  }
+
+  return null;
+}
+
+async function scrapeYouTubePageMetadata(url) {
+  try {
+    const response = await axios.get(url, {
+      timeout: 8000,
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    const html = String(response && response.data ? response.data : "");
+
+    let title = null;
+    let duration = null;
+
+    const ogTitleMatch = html.match(
+      /<meta\s+property=(?:"|')og:title(?:"|')\s+content=(?:"|')([^"']+)(?:"|')/i,
+    );
+    if (ogTitleMatch && ogTitleMatch[1]) {
+      title = String(ogTitleMatch[1]).trim();
+    }
+
+    const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+    if (!title && titleMatch && titleMatch[1]) {
+      title = String(titleMatch[1]).trim().replace(/\s+-\s+YouTube$/i, "");
+    }
+
+    const playerResponseMatch = html.match(
+      /var ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/s,
+    );
+    if (playerResponseMatch && playerResponseMatch[1]) {
+      try {
+        const playerResponse = JSON.parse(playerResponseMatch[1]);
+        const videoDetails = playerResponse && playerResponse.videoDetails ? playerResponse.videoDetails : null;
+        if (videoDetails) {
+          if (!title && videoDetails.title) {
+            title = String(videoDetails.title).trim();
+          }
+          duration =
+            normalizeDurationValue(videoDetails.lengthSeconds) ||
+            normalizeDurationValue(videoDetails.length_seconds) ||
+            normalizeDurationValue(videoDetails.lengthText) ||
+            normalizeDurationValue(videoDetails.duration) ||
+            duration;
+        }
+      } catch (_) {}
+    }
+
+    return {
+      title,
+      duration,
+      url,
+    };
+  } catch (error) {
+    console.log(`⚠️ scrape metadata failed for ${url}:`, error && error.message ? error.message : error);
+    return { title: null, duration: null, url };
+  }
+}
+
+function collectVideoRenderers(node, output) {
+  if (!node || typeof node !== "object" || output.length >= 20) return;
+
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectVideoRenderers(item, output);
+      if (output.length >= 20) break;
+    }
+    return;
+  }
+
+  if (node.videoRenderer && typeof node.videoRenderer === "object") {
+    output.push(node.videoRenderer);
+  }
+
+  for (const value of Object.values(node)) {
+    if (value && typeof value === "object") {
+      collectVideoRenderers(value, output);
+      if (output.length >= 20) break;
+    }
+  }
+}
+
+function extractYouTubeSearchJson(html) {
+  const text = String(html || "");
+  const patterns = [
+    /var ytInitialData\s*=\s*(\{.+?\})\s*;/s,
+    /ytInitialData\s*=\s*(\{.+?\})\s*;/s,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      try {
+        return JSON.parse(match[1]);
+      } catch (_) {}
+    }
+  }
+
+  return null;
+}
+
+function parseYouTubeSearchResults(html, limit = 5) {
+  try {
+    const data = extractYouTubeSearchJson(html);
+    if (!data) return [];
+
+    const renderers = [];
+    collectVideoRenderers(data, renderers);
+
+    const results = [];
+    for (const renderer of renderers) {
+      if (results.length >= limit) break;
+      const videoId = renderer.videoId;
+      if (!videoId) continue;
+
+      const titleRuns = renderer.title && Array.isArray(renderer.title.runs) ? renderer.title.runs : [];
+      const title = titleRuns.map((run) => run.text).filter(Boolean).join("").trim() || null;
+      const durationText = renderer.lengthText && (renderer.lengthText.simpleText || (Array.isArray(renderer.lengthText.runs) ? renderer.lengthText.runs.map((run) => run.text).join("") : null));
+      const duration = normalizeDurationValue(durationText) || normalizeDurationValue(renderer.lengthSeconds);
+
+      results.push({
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        title,
+        duration,
+      });
+    }
+
+    return results;
+  } catch (error) {
+    console.log("⚠️ parseYouTubeSearchResults failed:", error && error.message ? error.message : error);
+    return [];
+  }
+}
+
+/**
+ * Lấy thông tin (title,duration) của video bằng yt-dlp nếu có
+ */
+async function getYouTubeInfo(url) {
+  console.log('DBG getYouTubeInfo called for', url);
+  try {
+    let title = null;
+    let duration = null;
+
+    // Try oEmbed first (fast, doesn't require yt-dlp)
+    try {
+      const oembed = await axios.get("https://www.youtube.com/oembed", {
+        params: { url, format: "json" },
+        timeout: 6000,
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      if (oembed && oembed.data && oembed.data.title) {
+        console.log(`ℹ️ oEmbed title for ${url}:`, oembed.data.title);
+        title = title || String(oembed.data.title).trim();
+      } else {
+        console.log(`⚠️ oEmbed returned no title for ${url}`);
+      }
+    } catch (e) {
+      console.log(`⚠️ oEmbed failed for ${url}:`, e && e.message ? e.message : e);
+      // ignore, fallback to other methods
+    }
+
+    const ytDlpExec = getYtDlpExec();
+    if (ytDlpExec) {
+      const info = await ytDlpExec(url, { dumpJson: true, noWarnings: true, noCheckCertificate: true });
+      if (info && typeof info === "object") {
+        if (Array.isArray(info.entries) && info.entries.length > 0) {
+          const first = info.entries[0] || {};
+          title = title || first.title || info.title || null;
+          duration =
+            duration ||
+            normalizeDurationValue(first.duration) ||
+            normalizeDurationValue(first.duration_string) ||
+            normalizeDurationValue(info.duration) ||
+            normalizeDurationValue(info.duration_string) ||
+            normalizeDurationValue(info.duration_raw);
+          url = first.webpage_url || first.url || info.webpage_url || url;
+        } else {
+          title = title || info.title || null;
+          duration =
+            duration ||
+            normalizeDurationValue(info.duration) ||
+            normalizeDurationValue(info.duration_string) ||
+            normalizeDurationValue(info.duration_raw);
+          url = info.webpage_url || url;
+        }
+      }
+    }
+
+    if (canUseYtDlpCli()) {
+      try {
+        const out = execSync(buildYtDlpCommand(`-j "${url}"`), { stdio: "pipe", timeout: 8000, encoding: "utf8" });
+        const info = JSON.parse(out);
+        title = title || info.title || null;
+        duration =
+          duration ||
+          normalizeDurationValue(info.duration) ||
+          normalizeDurationValue(info.duration_string) ||
+          normalizeDurationValue(info.duration_raw);
+        url = info.webpage_url || url;
+      } catch (_) {}
+    }
+
+    const scrapedMetadata = await scrapeYouTubePageMetadata(url);
+    if (scrapedMetadata && (scrapedMetadata.title || scrapedMetadata.duration)) {
+      title = title || scrapedMetadata.title || null;
+      duration = duration || scrapedMetadata.duration || null;
+    }
+
+    // Fallback to title helper if still missing
+    if (!title) {
+      title = await getYouTubeTitle(url).catch(() => null);
+    }
+
+    return { title: title || null, duration: duration || null, url };
+  } catch (e) {
+    return { title: null, duration: null, url };
+  }
+}
+
+/**
+ * Tìm kiếm YouTube và trả về danh sách kết quả (url,title,duration)
+ */
+async function searchYouTubeList(query, limit = 5) {
+  try {
+    global.musicSearchCache = global.musicSearchCache || {};
+    const cacheKey = `${SEARCH_CACHE_VERSION}:${query}::${limit}`;
+    const cached = global.musicSearchCache[cacheKey];
+    if (
+      cached &&
+      Date.now() - cached.ts < SEARCH_CACHE_TTL &&
+      Array.isArray(cached.results) &&
+      cached.results.length > 0 &&
+      cached.results.every((item) => {
+        const normalizedDuration = normalizeDurationValue(item && item.duration);
+        return item && (item.title || item.url) && typeof normalizedDuration === "number";
+      })
+    ) {
+      return cached.results;
+    }
+
+    const results = [];
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        // Ưu tiên scrape trực tiếp trang search của YouTube để lấy luôn title + duration
+        try {
+          const res = await axios.get(`https://www.youtube.com/results`, {
+            params: { search_query: query },
+            timeout: 8000,
+            headers: { "User-Agent": "Mozilla/5.0" },
+          });
+          const scrapedResults = parseYouTubeSearchResults(res.data, limit);
+          if (scrapedResults.length) {
+            for (const item of scrapedResults) {
+              results.push(item);
+              if (results.length >= limit) break;
+            }
+          }
+        } catch (e) {
+          console.log("⚠️ search page scrape failed:", e && e.message ? e.message : e);
+        }
+
+        // Nếu scrape search page chưa đủ, thử yt-dlp CLI / bundled
+        if (results.length < limit && canUseYtDlpCli()) {
+          try {
+            const raw = execSync(
+              buildYtDlpCommand(`"ytsearch${limit}:${query}" --dump-json -j`),
+              { stdio: "pipe", timeout: 10000, encoding: "utf8" },
+            );
+            const lines = raw
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .filter(Boolean);
+            for (const line of lines) {
+              if (results.length >= limit) break;
+              try {
+                const info = JSON.parse(line);
+                if (!info) continue;
+                if (Array.isArray(info.entries) && info.entries.length > 0) {
+                  for (const entry of info.entries) {
+                    if (!entry) continue;
+                    results.push({
+                      url: entry.webpage_url || entry.url,
+                      title: entry.title || null,
+                      duration:
+                        normalizeDurationValue(entry.duration) ||
+                        normalizeDurationValue(entry.duration_string) ||
+                        normalizeDurationValue(entry.duration_raw),
+                    });
+                    if (results.length >= limit) break;
+                  }
+                } else {
+                  results.push({
+                    url: info.webpage_url || info.url,
+                    title: info.title || null,
+                    duration:
+                      normalizeDurationValue(info.duration) ||
+                      normalizeDurationValue(info.duration_string) ||
+                      normalizeDurationValue(info.duration_raw),
+                  });
+                }
+              } catch (e) {
+                console.log("⚠️ Failed parse line (yt-dlp):", e && e.message ? e.message : e);
+              }
+            }
+          } catch (e) {
+            console.log("⚠️ yt-dlp CLI search timed out/failed, using fallbacks:", e && e.message ? e.message : e);
+          }
+        }
+
+        // If not enough results, try yt-dlp-exec (node binding)
+        if (results.length < limit) {
+          try {
+            const ytdlp = getYtDlpExec();
+            if (ytdlp) {
+              const info = await ytdlp(`ytsearch${limit}:${query}`, { dumpJson: true, noWarnings: true, noCheckCertificate: true });
+              // info could be array or object with entries
+              const entries = Array.isArray(info) ? info : info && info.entries ? info.entries : [info];
+              for (const entry of entries) {
+                if (!entry) continue;
+                if (results.length >= limit) break;
+                results.push({
+                  url: entry.webpage_url || entry.url,
+                  title: entry.title || null,
+                  duration:
+                    normalizeDurationValue(entry.duration) ||
+                    normalizeDurationValue(entry.duration_string) ||
+                    normalizeDurationValue(entry.duration_raw),
+                });
+              }
+            }
+          } catch (e) {
+            console.log("⚠️ yt-dlp-exec search failed:", e && e.message ? e.message : e);
+          }
+        }
+
+        // Fallback scraping by videoId only if we still need more results
+        if (results.length < limit) {
+          try {
+            const res = await axios.get(`https://www.youtube.com/results`, {
+              params: { search_query: query },
+              timeout: 6000,
+              headers: { "User-Agent": "Mozilla/5.0" },
+            });
+            const ids = [];
+            const re = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
+            let m;
+            while ((m = re.exec(res.data)) !== null && ids.length < limit) {
+              if (!ids.includes(m[1])) ids.push(m[1]);
+            }
+            for (const id of ids) {
+              if (results.length >= limit) break;
+              const url = `https://www.youtube.com/watch?v=${id}`;
+              const info = await getYouTubeInfo(url).catch(() => ({ title: null, duration: null, url }));
+              results.push(info);
+            }
+          } catch (e) {
+            console.log("⚠️ Scraping YouTube failed:", e && e.message ? e.message : e);
+          }
+        }
+
+        if (results.length) {
+          // Enrich results with metadata if missing
+          for (let i = 0; i < results.length && i < limit; i++) {
+            const r = results[i];
+            if ((!r.title || !r.duration) && r.url) {
+              try {
+                const info = await getYouTubeInfo(r.url);
+                if (info) {
+                  r.title = r.title || info.title || r.url;
+                  r.duration = normalizeDurationValue(r.duration) || normalizeDurationValue(info.duration) || null;
+                }
+              } catch (e) {
+                console.log("⚠️ Failed to enrich result metadata:", e && e.message ? e.message : e);
+              }
+            }
+          }
+
+          const slice = results.slice(0, limit);
+          global.musicSearchCache[cacheKey] = { ts: Date.now(), results: slice };
+          return slice;
+        }
+
+        // If we reach here, no results this attempt — retry with backoff
+        const backoff = 300 * attempt;
+        console.log(`⚠️ search attempt ${attempt} returned no results, retrying after ${backoff}ms`);
+        await sleep(backoff + Math.floor(Math.random() * 200));
+      } catch (e) {
+        console.log(`⚠️ search attempt ${attempt} failed:`, e && (e.message || e));
+        if (attempt < maxAttempts) await sleep(300 * attempt + Math.floor(Math.random() * 300));
+      }
+    }
+
+    return [];
+  } catch (error) {
+    console.error("Lỗi searchYouTubeList:", error && error.message ? error.message : error);
+    return [];
+  }
+}
+
+function parseDurationString(durationString) {
+  const raw = String(durationString || "").trim();
+  if (!raw) return null;
+  const parts = raw.split(":").map((part) => Number(part));
+  if (parts.some((part) => Number.isNaN(part))) return null;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return null;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+const SEARCH_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const SEARCH_CACHE_VERSION = 3;
+
+
+/**
+ * Xử lý reply của người dùng để chọn bài hát đã tìm
+ */
+module.exports.handleReply = async ({ api, event, config }) => {
+  try {
+    const { threadID, body, messageReply, senderID } = event;
+    if (!messageReply) return;
+    global.musicSearchSessions = global.musicSearchSessions || {};
+    const session = global.musicSearchSessions[threadID];
+    if (!session) return;
+    // Chỉ xử lý khi reply vào tin nhắn của bot
+    if (String(messageReply.senderID) !== String(api.getCurrentUserID())) return;
+    if (String(messageReply.messageID) !== String(session.messageID)) return;
+
+    const pick = parseInt((body || "").trim(), 10);
+    if (!Number.isInteger(pick) || pick < 1 || pick > session.results.length) {
+      return api.sendMessage("❌ Vui lòng reply 1 số hợp lệ từ danh sách (1-5).", threadID);
+    }
+
+    // Chỉ cho người yêu cầu ban đầu chọn
+    if (String(senderID) !== String(session.requester)) {
+      return api.sendMessage("⚠️ Chỉ người đã yêu cầu tìm nhạc mới được chọn kết quả.", threadID);
+    }
+
+    const chosen = session.results[pick - 1];
+    if (!chosen || !chosen.url) return api.sendMessage("❌ Lỗi kết quả đã chọn.", threadID);
+
+    // Thử unsend (xóa) tin nhắn tìm kiếm của bot ngay khi đã chọn
+    try {
+      if (session.messageID) await api.unsendMessage(session.messageID);
+    } catch (e) {
+      console.log("⚠️ Không thể unsend message search:", e && e.message ? e.message : e);
+    }
+
+    // Giảm thể lực và tiến hành tải
+    let energyUse;
+    let energyConnection;
+    try {
+      energyConnection = await getConnection();
+      energyUse = await consumeEnergy(energyConnection, senderID, 20);
+      if (!energyUse.ok) {
+        if (energyUse.reason === "not_enough") {
+          return api.sendMessage(energyUse.message, threadID);
+        }
+        return api.sendMessage("❌ Không thể kiểm tra thể lực lúc này.\nGõ !tien để tạo thể lực", threadID);
+      }
+    } catch (e) {
+      console.error("Energy check error (music handleReply):", e);
+      return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID);
+    } finally {
+      if (energyConnection) energyConnection.release();
+    }
+
+    // Bắt đầu tải và gửi file
+    const cacheDir = session.cacheDir || path.resolve(__dirname, "../../../cache/music");
+    try {
+      await api.sendMessage("⏳ Đang tải bài hát...", threadID);
+      if (chosen.url.includes("youtube.com") || chosen.url.includes("youtu.be")) {
+        const result = await downloadYouTubeTomusic(chosen.url, cacheDir);
+        if (!result || !result.audioPath || !fs.existsSync(result.audioPath)) {
+          return api.sendMessage("❌ Lỗi tải video từ YouTube", threadID);
+        }
+
+        const fileStats = fs.statSync(result.audioPath);
+        if (fileStats.size === 0) {
+          try { fs.unlinkSync(result.audioPath); } catch (_) {}
+          return api.sendMessage("❌ File audio rỗng", threadID);
+        }
+
+        if (fileStats.size > 25 * 1024 * 1024) {
+          try { fs.unlinkSync(result.audioPath); } catch (_) {}
+          return api.sendMessage("❌ File quá lớn! (Facebook giới hạn 25MB)", threadID);
+        }
+
+        // Prefer the cached title from session if available
+        const cachedTitle = session && session.results && session.results[pick - 1] && session.results[pick - 1].title;
+        const title = (cachedTitle || result.title || "Unknown").substring(0, 100);
+        await api.sendMessage({ body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`, attachment: fs.createReadStream(result.audioPath) }, threadID);
+
+        setTimeout(() => { try { if (fs.existsSync(result.audioPath)) fs.unlinkSync(result.audioPath); } catch (_) {} }, 10000);
+      } else if (chosen.url.includes("soundcloud.com")) {
+        const result = await downloadSoundCloudTomusic(chosen.url, cacheDir);
+        if (!result || !result.audioPath || !fs.existsSync(result.audioPath)) {
+          return api.sendMessage("❌ Lỗi tải audio từ SoundCloud", threadID);
+        }
+
+        const fileStats = fs.statSync(result.audioPath);
+        if (fileStats.size === 0) {
+          try { fs.unlinkSync(result.audioPath); } catch (_) {}
+          return api.sendMessage("❌ File audio rỗng", threadID);
+        }
+
+        if (fileStats.size > 25 * 1024 * 1024) {
+          try { fs.unlinkSync(result.audioPath); } catch (_) {}
+          return api.sendMessage("❌ File quá lớn! (Facebook giới hạn 25MB)", threadID);
+        }
+
+        const title = result.title ? result.title.substring(0, 100) : "Unknown";
+        await api.sendMessage({ body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`, attachment: fs.createReadStream(result.audioPath) }, threadID);
+
+        setTimeout(() => { try { if (fs.existsSync(result.audioPath)) fs.unlinkSync(result.audioPath); } catch (_) {} }, 10000);
+      } else {
+        return api.sendMessage("❌ URL không hỗ trợ.", threadID);
+      }
+    } catch (err) {
+      console.error("❌ Lỗi trong handleReply music:", err);
+      return api.sendMessage(`❌ Lỗi: ${err.message || 'Không thể tải bài hát'}`, threadID);
+    } finally {
+      // Xóa session sau khi xử lý
+      try { delete global.musicSearchSessions[threadID]; } catch (_) {}
+    }
+  } catch (error) {
+    console.error("Lỗi music.handleReply:", error);
+  }
+};

@@ -40,7 +40,7 @@ module.exports = {
         }
         
         try {
-          const rented = await execute("SELECT * FROM rented_groups ORDER BY expire_date DESC");
+          const rented = await execute("SELECT * FROM rented_groups WHERE expire_date > NOW() ORDER BY expire_date DESC");
           if (!rented || rented.length === 0) {
             return api.sendMessage("📭 Hiện tại không có nhóm nào đang thuê bot.", threadID);
           }

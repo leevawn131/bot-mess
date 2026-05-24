@@ -27,6 +27,17 @@ async function _quietGetThreadInfo(api, key) {
   }
 }
 
+// Tạm tắt console.error khi gọi getThreadHistory để ws3-fca không spam log
+async function _quietGetThreadHistory(api, threadID, limit) {
+  const _origErr = console.error;
+  console.error = () => {};
+  try {
+    return await api.getThreadHistory(threadID, limit);
+  } finally {
+    console.error = _origErr;
+  }
+}
+
 async function getThreadInfoCached(api, threadID) {
   const key = String(threadID);
   const cached = _threadInfoCache.get(key);
@@ -83,6 +94,28 @@ const loadAppStateCredentials = () => {
     return null;
   }
 };
+
+function resolveCommand(commandName) {
+  const key = String(commandName || "").trim().toLowerCase();
+  if (!key || !global.commands || !(global.commands instanceof Map)) return null;
+
+  const direct = global.commands.get(commandName) || global.commands.get(key);
+  if (direct) return direct;
+
+  for (const command of global.commands.values()) {
+    const names = [command?.name, command?.config?.name]
+      .concat(command?.aliases || [])
+      .concat(command?.config?.aliases || [])
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    if (names.includes(key)) {
+      return command;
+    }
+  }
+
+  return null;
+}
 
 const getFbLoginCredentials = () => {
   const email = process.env.FB_EMAIL || process.env.FACEBOOK_EMAIL || "";
@@ -504,7 +537,7 @@ const attemptLogin = () => {
       }
     });
 
-    const events = new Map();
+    global.events = new Map();
     const eventsDir = path.join(__dirname, "modules", "events");
     if (!fs.existsSync(eventsDir)) fs.mkdirSync(eventsDir, { recursive: true });
     getAllFiles(eventsDir).forEach((file) => {
@@ -512,12 +545,12 @@ const attemptLogin = () => {
         const ev = require(file);
         if (!ev.name) return;
 
-        events.set(ev.name, ev);
+        global.events.set(ev.name, ev);
       } catch {}
     });
 
     console.log(
-      `📂 Đã nạp ${global.commands.size} lệnh và ${events.size} sự kiện.`,
+      `📂 Đã nạp ${global.commands.size} lệnh và ${global.events.size} sự kiện.`,
     );
 
     // --- BẬT HẸN GIỜ TỰ ĐỘNG ĐỔI MODE ---
@@ -946,7 +979,7 @@ const attemptLogin = () => {
 
       // 1. Xử lý Event hệ thống (Log message)
       if (event.logMessageType) {
-        events.forEach(async (ev) => {
+        global.events.forEach(async (ev) => {
           if (ev.eventType && ev.eventType.includes(event.logMessageType)) {
             try {
               await ev.execute({ api, event, config });
@@ -957,7 +990,7 @@ const attemptLogin = () => {
 
       // 1b. Xử lý Event theo event.type
       if (event.type) {
-        events.forEach(async (ev) => {
+        global.events.forEach(async (ev) => {
           if (ev.eventType && ev.eventType.includes(event.type)) {
             try {
               await ev.execute({ api, event, config });
@@ -1000,7 +1033,11 @@ const attemptLogin = () => {
                 const nameById = new Map(
                   memberInfo.map((u) => [String(u.id), u.name || ""]),
                 );
-                const history = await api.getThreadHistory(event.threadID, 15);
+                const history = await _quietGetThreadHistory(
+                  api,
+                  event.threadID,
+                  15,
+                );
                 const messages = history
                   .filter(
                     (msg) => msg.body && String(msg.senderID) !== String(botID),
@@ -1059,7 +1096,7 @@ const attemptLogin = () => {
 
         const args = event.body.slice(prefix.length).trim().split(/ +/);
         const commandName = args.shift().toLowerCase();
-        const command = global.commands.get(commandName);
+        const command = resolveCommand(commandName);
 
         if (command) {
           try {

@@ -1,3 +1,108 @@
+diff --git a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadHistory.js b/node_modules/ws3-fca/src/deltas/apis/threads/getThreadHistory.js
+index e2744b9..7b60b90 100644
+--- a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadHistory.js
++++ b/node_modules/ws3-fca/src/deltas/apis/threads/getThreadHistory.js
+@@ -120,7 +120,9 @@ function formatExtensibleAttachment(attachment) {
+  * @returns {Array<Object>} An array of formatted message objects.
+  */
+ function formatMessagesGraphQLResponse(data) {
+-    const messageThread = data.o0.data.message_thread;
++    const batchRoot = data?.o0?.data;
++    const directRoot = data?.data;
++    const messageThread = batchRoot?.message_thread || directRoot?.message_thread;
+     if (!messageThread) return [];
+ 
+     const threadID = messageThread.thread_key.thread_fbid ? messageThread.thread_key.thread_fbid : messageThread.thread_key.other_user_id;
+@@ -183,6 +185,37 @@ function formatMessagesGraphQLResponse(data) {
+     });
+ }
+ 
++function buildBatchForm(threadID, amount, timestamp, ctx) {
++    return {
++        av: ctx.globalOptions.pageID,
++        queries: JSON.stringify({
++            o0: {
++                doc_id: "1498317363570230",
++                query_params: {
++                    id: threadID,
++                    message_limit: amount,
++                    load_messages: 1,
++                    load_read_receipts: false,
++                    before: timestamp || null,
++                },
++            },
++        }),
++    };
++}
++
++function buildDirectForm(threadID, amount, timestamp) {
++    return {
++        doc_id: "1498317363570230",
++        variables: JSON.stringify({
++            id: threadID,
++            message_limit: amount,
++            load_messages: 1,
++            load_read_receipts: false,
++            before: timestamp || null,
++        }),
++    };
++}
++
+ /**
+  * @param {Object} defaultFuncs
+  * @param {Object} api
+@@ -202,35 +235,28 @@ module.exports = function (defaultFuncs, api, ctx) {
+             throw new Error("getThreadHistory: threadID and amount are required.");
+         }
+ 
+-        const form = {
+-            av: ctx.globalOptions.pageID,
+-            queries: JSON.stringify({
+-                o0: {
+-                    doc_id: "1498317363570230",
+-                    query_params: {
+-                        id: threadID,
+-                        message_limit: amount,
+-                        load_messages: 1,
+-                        load_read_receipts: false,
+-                        before: timestamp || null,
+-                    },
+-                },
+-            }),
+-        };
+-
+         try {
+-            const resData = await defaultFuncs.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, form);
+-            const parsedData = await utils.parseAndCheckLogin(ctx, defaultFuncs)(resData);
++            const batchResData = await defaultFuncs.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, buildBatchForm(threadID, amount, timestamp));
++            const parsedBatchData = await utils.parseAndCheckLogin(ctx, defaultFuncs)(batchResData);
+ 
+-            if (parsedData.error || (Array.isArray(parsedData) && parsedData[parsedData.length - 1].error_results !== 0)) {
+-                throw parsedData;
++            if (Array.isArray(parsedBatchData) && parsedBatchData[parsedBatchData.length - 1]?.error_results === 0) {
++                const messages = formatMessagesGraphQLResponse(parsedBatchData[0]);
++                if (messages.length > 0) {
++                    return messages;
++                }
+             }
+ 
+-            if (!Array.isArray(parsedData) || !parsedData[0] || !parsedData[0].o0 || !parsedData[0].o0.data) {
+-                throw { error: "getThreadHistory: Malformed response from GraphQL.", res: parsedData };
++            const directResData = await defaultFuncs.post("https://www.facebook.com/api/graphql/", ctx.jar, buildDirectForm(threadID, amount, timestamp));
++            const parsedDirectData = await utils.parseAndCheckLogin(ctx, defaultFuncs)(directResData);
++
++            if (parsedDirectData && !parsedDirectData.error) {
++                const messages = formatMessagesGraphQLResponse(parsedDirectData);
++                if (messages.length > 0) {
++                    return messages;
++                }
+             }
+ 
+-            return formatMessagesGraphQLResponse(parsedData[0]);
++            throw { error: "getThreadHistory: Malformed response from GraphQL.", res: parsedDirectData || parsedBatchData };
+         } catch (err) {
+             utils.error("getThreadHistory", err);
+             throw err;
 diff --git a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadInfo.js b/node_modules/ws3-fca/src/deltas/apis/threads/getThreadInfo.js
 index f5c5964..4e6bdc0 100644
 --- a/node_modules/ws3-fca/src/deltas/apis/threads/getThreadInfo.js
@@ -158,3 +263,6 @@ index 989f2a7..692791d 100644
      const md = m.delta.messageMetadata;
      const mdata = m.delta.data?.prng ? JSON.parse(m.delta.data.prng) : [];
      const mentions = {};
+diff --git a/node_modules/ws3-fca/src/utils/pendingGroupAdds.js b/node_modules/ws3-fca/src/utils/pendingGroupAdds.js
+new file mode 100644
+index 0000000..e69de29

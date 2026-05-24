@@ -41,6 +41,8 @@ services:
       - ./antiout_settings.json:/app/antiout_settings.json
       - ./changelog.json:/app/changelog.json
       - ./youtube_cookies.txt:/app/youtube_cookies.txt
+      - ./modules:/app/modules
+      - ./index.js:/app/index.js
 
 volumes:
   mysql_data:

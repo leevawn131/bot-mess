@@ -1,5 +1,27 @@
 const { checkCooldown } = require("../../utils/cooldown");
 
+function resolveCommand(commandName) {
+  const key = String(commandName || "").trim().toLowerCase();
+  if (!key || !global.commands || !(global.commands instanceof Map)) return null;
+
+  const direct = global.commands.get(commandName) || global.commands.get(key);
+  if (direct) return direct;
+
+  for (const command of global.commands.values()) {
+    const names = [command?.name, command?.config?.name]
+      .concat(command?.aliases || [])
+      .concat(command?.config?.aliases || [])
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    if (names.includes(key)) {
+      return command;
+    }
+  }
+
+  return null;
+}
+
 module.exports = {
   name: "help",
   description: "Xem danh sách lệnh theo nhóm",
@@ -29,22 +51,23 @@ module.exports = {
       const sections = [
         {
           title: "👑 ADMIN-BOT (Quản lý Bot)",
-          commands: ["reset", "go", "ping", "tu", "mode", "setthue"],
+          commands: ["reset", "go", "ping", "mode", "setthue", "cmd"],
         },
         {
           title: "🛡️ QTV NHÓM (Quản lý Box)",
           commands: [
-            "go", "kick", "antiout", "setwelcome", "luatnhom", "checkbd", "setbd", "checkout"
+            "go", "kick", "antiout", "setwelcome", "luatnhom", "checkbd", "setbd",
+            "checkout", "antitagall", "antithuhoi"
           ],
         },
         {
           title: "👤 THƯỜNG DÂN",
           commands: [
-            "thuebot", "help", "ai", 
+            "thuebot", "help", "ai", "gỡ",
             "tien", "chuyentien", "bank", "lamviec", "diemdanh", "vay", "shop", "buy", "inv", "use", "openbox", "cuop", "daigia", "quest", // Kinh tế
             "taixiu", "baucua", "lode", "duoihinhbatchu", "tu", // Game
-            "add", "grinfo", "checktt", "ghepdoi", "qtv", // Tiện ích nhóm
-            "huongdan", "changelog", "dich", "say", "voice2text", "mp3", "vidgai", "đấm", "kiss", "uid" // Công cụ
+            "add", "grinfo", "checktt", "ghepdoi", "qtv", "adminbot", // Tiện ích nhóm
+            "huongdan", "changelog", "dich", "say", "voice2text", "music", "vidgai", "đấm", "kiss", "uid" // Công cụ
           ],
         }
       ];
@@ -82,7 +105,7 @@ module.exports = {
 
       // 2. Chi tiết từng lệnh
       const commandName = args[0].toLowerCase();
-      const command = global.commands.get(commandName);
+      const command = resolveCommand(commandName);
 
       if (!command) {
         return api.sendMessage(
@@ -91,10 +114,11 @@ module.exports = {
         );
       }
 
+      const resolvedName = command.name || command.config?.name || commandName;
       const detailMsg =
-        `ℹ️ LỆNH: ${commandName.toUpperCase()}\n` +
+        `ℹ️ LỆNH: ${resolvedName.toUpperCase()}\n` +
         `📝 Mô tả: ${command.description || "Chưa có"}\n` +
-        `🛠️ Cách dùng: ${prefix}${commandName}${command.usage ? ` ${command.usage}` : ""}`;
+        `🛠️ Cách dùng: ${prefix}${resolvedName}${command.usage ? ` ${command.usage}` : ""}`;
 
       return api.sendMessage(detailMsg, threadID);
     } catch (e) {
