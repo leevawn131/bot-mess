@@ -1,5 +1,20 @@
 const { checkCooldown } = require("../../utils/cooldown");
 
+const AUTO_UNSEND_MS = 30000;
+
+function scheduleAutoUnsend(api, messageResult) {
+  const messageID = messageResult?.messageID;
+  if (!messageID) return;
+
+  setTimeout(() => {
+    try {
+      api.unsendMessage(messageID);
+    } catch (error) {
+      console.error("Lỗi tự gỡ tin nhắn help:", error);
+    }
+  }, AUTO_UNSEND_MS);
+}
+
 function resolveCommand(commandName) {
   const key = String(commandName || "").trim().toLowerCase();
   if (!key || !global.commands || !(global.commands instanceof Map)) return null;
@@ -100,7 +115,9 @@ module.exports = {
         msg += "━━━━━━━━━━━━━\n";
         msg += `📌 Xem chi tiết: ${prefix}help [tên lệnh]`;
 
-        return api.sendMessage(msg, threadID);
+        const sentMessage = await api.sendMessage(msg, threadID);
+        scheduleAutoUnsend(api, sentMessage);
+        return sentMessage;
       }
 
       // 2. Chi tiết từng lệnh
@@ -120,7 +137,9 @@ module.exports = {
         `📝 Mô tả: ${command.description || "Chưa có"}\n` +
         `🛠️ Cách dùng: ${prefix}${resolvedName}${command.usage ? ` ${command.usage}` : ""}`;
 
-      return api.sendMessage(detailMsg, threadID);
+      const sentMessage = await api.sendMessage(detailMsg, threadID);
+      scheduleAutoUnsend(api, sentMessage);
+      return sentMessage;
     } catch (e) {
       console.error("Lỗi Help:", e);
     }

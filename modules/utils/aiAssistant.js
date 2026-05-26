@@ -5,7 +5,7 @@ const axios = require("axios");
 const CONFIG_PATH = path.resolve(__dirname, "../../config.json");
 const STATE_DIR = path.resolve(__dirname, "../../cache/ai_assistant");
 const STATE_PATH = path.join(STATE_DIR, "state.json");
-const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
+const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL = "llama3:latest";
 const DEFAULT_REPLY_LIMIT = 10;
 const DEFAULT_COOLDOWN_MS = 60 * 1000;
@@ -61,6 +61,7 @@ function getAiSettings() {
 function normalizeText(input) {
     return String(input || "")
         .toLowerCase()
+    .replace(/đ/g, "d")
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .replace(/[^a-z0-9\s@._-]+/g, " ")
@@ -914,7 +915,7 @@ function finalizeReplyQuota(userState, now, replyLimit, cooldownMs) {
     }
 }
 
-async function runAiConversation({ api, event, query, source = "manual", modelOverride = "" }) {
+async function runAiConversation({ api, event, query, source = "manual", modelOverride = "", pureAi = false }) {
     const settings = getAiSettings();
     if (!settings.enabled) {
         return {
@@ -1044,11 +1045,13 @@ async function runAiConversation({ api, event, query, source = "manual", modelOv
     // Disable chat-history context to avoid contaminated carry-over between unrelated user messages.
     const previousMessages = [];
 
-    const messages = [
-        { role: "system", content: buildSystemPrompt({ settings, senderProfile: enrichedProfile, senderName, referencedMembers, systemHelpMode }) },
-        ...previousMessages,
-        { role: "user", content: cleanQuery },
-    ];
+    const messages = pureAi
+        ? [{ role: "user", content: cleanQuery }]
+        : [
+            { role: "system", content: buildSystemPrompt({ settings, senderProfile: enrichedProfile, senderName, referencedMembers, systemHelpMode }) },
+            ...previousMessages,
+            { role: "user", content: cleanQuery },
+        ];
 
     const requestedModel = modelOverride || settings.model;
     const availableModels = await getAvailableOllamaModels(settings.ollamaHost).catch((error) => {

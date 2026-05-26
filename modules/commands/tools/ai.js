@@ -21,11 +21,11 @@ function loadAiConfig() {
 
 module.exports = {
     name: "ai",
-    description: "Chat AI",
-    usage : "\n!ai [câu hỏi] → Hỏi AI (model mặc định)\n!ai -m [model] [câu hỏi] → Hỏi với model cụ thể\n━━━━━━━━━━━━━━━━━━\n🤖 Sử dụng AI local Ollama\n💡 Ví dụ: !ai Thủ đô Việt Nam là gì?",
+    description: "AI thuần (chạy trên Ollama Llama3)",
+    usage : "\n!ai [câu hỏi] → Hỏi AI thuần (llama3:latest)\n!ai -m [model] [câu hỏi] → Hỏi với model cụ thể\n━━━━━━━━━━━━━━━━━━\n🤖 AI thuần chạy bằng Ollama (llama3)\n💡 Ví dụ: !ai Thủ đô Việt Nam là gì?",
     execute: async ({ api, event, args }) => {
         const threadID = String(event.threadID); // Ép kiểu chuỗi để tránh lỗi
-        const displayLabel = 'AI local';
+        const displayLabel = 'AI thuần (llama3)';
         const aiConfig = loadAiConfig();
         const defaultModel = process.env.OLLAMA_MODEL || aiConfig.model || DEFAULT_OLLAMA_MODEL;
 
@@ -52,6 +52,7 @@ module.exports = {
             query,
             source: 'manual',
             modelOverride: model,
+            pureAi: true,
         });
 
         if (result.ok && result.answer) {

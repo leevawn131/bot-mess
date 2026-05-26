@@ -1085,6 +1085,17 @@ const attemptLogin = () => {
       const isInbox = threadID && senderID && threadID === senderID;
       const normalizedBody = normalizeText(body);
 
+      const sendHelpHint = () =>
+        api.sendMessage(
+          "Bố mày đây, gõ !help mà xem danh sách lệnh",
+          event.threadID,
+          event.messageID,
+        );
+
+      if (normalizedBody === "bot dau") {
+        return sendHelpHint();
+      }
+
       // Lệnh không cần check quyền (tự trong lệnh xử lý)
       const FREE_COMMANDS = ["mode"];
 
@@ -1094,7 +1105,12 @@ const attemptLogin = () => {
       if (event.body.startsWith(prefix)) {
         event = await ensureMentions(api, event);
 
-        const args = event.body.slice(prefix.length).trim().split(/ +/);
+        const commandText = event.body.slice(prefix.length).trim();
+        if (!commandText || commandText.toLowerCase() === "bot") {
+          return sendHelpHint();
+        }
+
+        const args = commandText.split(/ +/);
         const commandName = args.shift().toLowerCase();
         const command = resolveCommand(commandName);
 

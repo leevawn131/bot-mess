@@ -1,4 +1,5 @@
 const path = require("path");
+const { isAutochaoEnabled } = require("../utils/autochaoSettings");
 
 const GREETING_REGEX = /^(?:hi|hello|helo|hey|chào|xin\s+chào)(?:[!?.…]+)?$/i;
 const GREETING_MESSAGES = [
@@ -27,6 +28,8 @@ module.exports = {
 
       const body = String(event.body || "").trim();
       if (!body) return;
+
+      if (!isAutochaoEnabled(event.threadID)) return;
 
       // Only short messages (likely greetings)
       if (body.length > 40) return;
