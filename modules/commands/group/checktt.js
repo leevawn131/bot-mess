@@ -174,6 +174,15 @@ function isFacebookDeadName(name = "") {
   return normalized === "nguoi dung facebook" || normalized === "facebook user";
 }
 
+function stripDiacritics(s = "") {
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase();
+}
+
 function suppressLeaveEvents(threadID, durationMs = 15000) {
   global.leaveEventSuppressByThread = global.leaveEventSuppressByThread || {};
   global.leaveEventSuppressByThread[String(threadID)] = Date.now() + durationMs;
@@ -183,7 +192,7 @@ module.exports = {
   name: "checktt",
   description: "Kiểm tra tương tác, lọc/kick/reset dữ liệu tin nhắn",
   usage:
-    "\n!checktt all → Xem top tương tác tất cả thành viên\n!checktt → Xem top tương tác của 1 người\n!checktt ngay → Top tương tác hôm nay\n!checktt tuan → Top tuần này\n!checktt thang → Top tháng này\n!checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n!checktt kickdead → Kick thành viên bị bay acc\n!checktt clear → Làm sạch dữ liệu tương tác\n!checktt reset → Reset dữ liệu nhóm (Admin)\n━━━━━━━━━━━━━━━━━━\n📊 Thống kê tự động theo ngày/tuần/tháng",
+    "\n!checktt all → Xem top tương tác tất cả thành viên\n!checktt → Xem top tương tác của 1 người\n!checktt ngày → Top tương tác hôm nay\n!checktt tuần → Top tuần này\n!checktt tháng → Top tháng này\n!checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n!checktt kickdead → Kick thành viên bị bay acc\n!checktt clear → Làm sạch dữ liệu tương tác\n!checktt reset → Reset dữ liệu nhóm (Admin)\n━━━━━━━━━━━━━━━━━━\n📊 Thống kê tự động theo ngày/tuần/tháng",
 
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
@@ -258,6 +267,7 @@ module.exports = {
       const rankedBase = buildRankList({ threadInfo, threadStats });
 
       const sub = (args[0] || "").toLowerCase();
+      const subNorm = stripDiacritics(sub);
 
       if (sub === "reset") {
         if (!canUseChecktt) {
@@ -403,10 +413,26 @@ module.exports = {
       }
 
       if (sub === "locmem") {
-        const threshold = Number(args[1]);
+        const a1 = String(args[1] || "").trim();
+        const a2 = String(args[2] || "").trim();
+
+        let period = null;
+        let threshold = NaN;
+
+        const n1 = Number(a1);
+        const n2 = Number(a2);
+
+        if (!isNaN(n1) && a1 !== "") {
+          threshold = n1;
+          period = null;
+        } else if (!isNaN(n2) && a2 !== "") {
+          threshold = n2;
+          period = stripDiacritics(a1 || "");
+        }
+
         if (isNaN(threshold) || threshold < 0) {
           return api.sendMessage(
-            "⚠️ Dùng đúng cú pháp: checktt locmem <số_tin_tổng>",
+            "⚠️ Dùng đúng cú pháp: checktt locmem <số> hoặc checktt locmem [ngày|tuần|tháng] <số>",
             threadID,
             messageID,
           );
@@ -420,17 +446,27 @@ module.exports = {
           );
         }
 
+        const periodMap = {
+          ngay: "dayCount",
+          tuan: "weekCount",
+          thang: "monthCount",
+        };
+
+        const metricKey = period && periodMap[period] ? periodMap[period] : null;
+
         const candidates = rankedBase.filter((item) => {
           const uid = String(item.uid);
           if (!item.inGroup) return false;
           if (adminIDs.includes(uid)) return false;
           if (uid === botID) return false;
-          return item.count <= threshold;
+          const val = metricKey ? Number(item[metricKey] || 0) : Number(item.count || 0);
+          return val <= threshold;
         });
 
         if (candidates.length === 0) {
+          const when = metricKey ? (period === 'ngay' ? 'hôm nay' : period === 'tuan' ? 'tuần này' : 'tháng này') : 'tổng';
           return api.sendMessage(
-            `📭 Không có thành viên nào có tổng tin nhắn <= ${threshold}.`,
+            `📭 Không có thành viên nào có ${when} <= ${threshold}.`,
             threadID,
             messageID,
           );
@@ -496,8 +532,9 @@ module.exports = {
         writeStats(stats);
 
         const failed_txt = failed > 0 ? ` | ❌${failed}` : "";
+        const label = metricKey ? (period === 'ngay' ? 'hôm nay' : period === 'tuan' ? 'tuần' : 'tháng') : 'tổng';
         return api.sendMessage(
-          `✅ locmem (tổng <= ${threshold}): ${success}/${candidates.length}${failed_txt}`,
+          `✅ locmem (${label} <= ${threshold}): ${success}/${candidates.length}${failed_txt}`,
           threadID,
           messageID,
         );
@@ -525,8 +562,8 @@ module.exports = {
         },
       };
 
-      if (metricBySub[sub]) {
-        const config = metricBySub[sub];
+      if (metricBySub[subNorm]) {
+        const config = metricBySub[subNorm];
         const ranked = [...rankedBase].sort((a, b) => {
           const metricDiff =
             Number(b[config.metricKey] || 0) - Number(a[config.metricKey] || 0);
@@ -587,6 +624,7 @@ module.exports = {
             author: String(senderID),
             threadID: String(threadID),
             ranked,
+            metricKey: config.metricKey,
             createdAt: Date.now(),
           };
 
@@ -641,7 +679,7 @@ module.exports = {
 
       if (sub !== "all") {
         return api.sendMessage(
-          "⚠️ Cú pháp không hợp lệ. Dùng: checktt | checktt all | checktt ngay | checktt tuan | checktt thang",
+          "⚠️ Cú pháp không hợp lệ. Dùng: checktt | checktt all | checktt ngày | checktt tuần | checktt tháng",
           threadID,
           messageID,
         );
@@ -730,6 +768,149 @@ module.exports = {
       }
 
       const input = String(body || "").trim();
+
+      // allow replying with: locmem <threshold>
+      try {
+        const bodyNorm = stripDiacritics(input).trim();
+        const locm = bodyNorm.match(/^locmem(?:\s+(\d+))?$/i);
+        if (locm && context.metricKey) {
+          const threshold = Number(locm[1]);
+
+          if (isNaN(threshold) || threshold < 0) {
+            return api.sendMessage(
+              "⚠️ Dùng đúng cú pháp: reply: locmem <số_tin_tổng> (ví dụ: locmem 5)",
+              threadID,
+              messageID,
+            );
+          }
+
+          const threadInfo = await api.getThreadInfo(threadID);
+          const adminIDs = Array.isArray(threadInfo.adminIDs)
+            ? threadInfo.adminIDs.map((a) => String(a.id))
+            : [];
+          const botID = String(api.getCurrentUserID());
+          const isSenderAdmin = adminIDs.includes(String(senderID));
+
+          // Get admin bot UIDs safely
+          let adminBotUIDs = [];
+          try {
+            const config = getBotConfig();
+            adminBotUIDs = config?.adminIDs || [];
+          } catch (error) {
+            console.error("Error getting admin bot UIDs:", error);
+            adminBotUIDs = [];
+          }
+
+          const isSenderBotAdmin = Array.isArray(adminBotUIDs)
+            ? adminBotUIDs.includes(String(senderID))
+            : false;
+
+          if (!isSenderAdmin && !isSenderBotAdmin) {
+            return api.sendMessage(
+              "⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng locmem.",
+              threadID,
+              messageID,
+            );
+          }
+
+          if (!adminIDs.includes(botID)) {
+            return api.sendMessage(
+              "❌ Bot cần quyền QTV để xóa thành viên bằng locmem.",
+              threadID,
+              messageID,
+            );
+          }
+
+          const stats = readStats();
+          if (!stats[threadID]) stats[threadID] = {};
+
+          const metricKey = context.metricKey;
+
+          const candidates = context.ranked.filter((item) => {
+            const uid = String(item.uid);
+            if (!item.inGroup) return false;
+            if (adminIDs.includes(uid)) return false;
+            if (uid === botID) return false;
+            return Number(item[metricKey] || 0) <= threshold;
+          });
+
+          if (candidates.length === 0) {
+            return api.sendMessage(
+              `📭 Không có thành viên nào có ${metricKey} <= ${threshold}.`,
+              threadID,
+              messageID,
+            );
+          }
+
+          suppressLeaveEvents(
+            threadID,
+            Math.max(15000, candidates.length * 1200),
+          );
+
+          let success = 0;
+          let failed = 0;
+          const failedDetails = [];
+
+          if (
+            !(
+              api.removeUserFromGroup ||
+              api.removeParticipant ||
+              api.removeUser ||
+              api.removeUserFromThread ||
+              api.removeParticipantFromThread ||
+              api.gcmember
+            )
+          ) {
+            return api.sendMessage(
+              "❌ Bot hiện tại không hỗ trợ chức năng kick do thư viện thiếu API xóa participant. Vui lòng cập nhật thư viện/phiên bản.",
+              threadID,
+              messageID,
+            );
+          }
+
+          const removeUser = async (uid, tid) => {
+            if (api.removeUserFromGroup) return api.removeUserFromGroup(uid, tid);
+            if (api.removeParticipant) return api.removeParticipant(uid, tid);
+            if (api.gcmember) return api.gcmember("remove", uid, tid);
+            if (api.removeUser) return api.removeUser(uid, tid);
+            if (api.removeUserFromThread) return api.removeUserFromThread(uid, tid);
+            if (api.removeParticipantFromThread)
+              return api.removeParticipantFromThread(uid, tid);
+            throw new Error("Library missing remove function");
+          };
+
+          for (const user of candidates) {
+            const uid = String(user.uid);
+            try {
+              await removeUser(uid, threadID);
+
+              if (stats[threadID] && stats[threadID][uid] !== undefined) {
+                delete stats[threadID][uid];
+              }
+
+              success++;
+              await new Promise((r) => setTimeout(r, 300));
+            } catch (e) {
+              failed++;
+              failedDetails.push(
+                `- ${user.name || uid} (${uid}): ${e?.message || "xóa lỗi"}`,
+              );
+            }
+          }
+
+          writeStats(stats);
+
+          const failed_txt = failed > 0 ? ` | ❌${failed}` : "";
+          return api.sendMessage(
+            `✅ locmem (${metricKey}, <= ${threshold}): ${success}/${candidates.length}${failed_txt}`,
+            threadID,
+            messageID,
+          );
+        }
+      } catch (err) {
+        console.error("Error handling locmem reply:", err);
+      }
+
       const sttMatches = input.match(/\d+/g) || [];
       const sttList = [
         ...new Set(sttMatches.map((n) => Number(n)).filter(Number.isInteger)),

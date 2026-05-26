@@ -49,8 +49,8 @@ module.exports = {
         }
 
         // Validate độ dài
-        if (nickname.length > 32) {
-            return api.sendMessage("⚠️ Biệt danh quá dài (tối đa 32 ký tự).", threadID);
+        if (nickname.length > 128) {
+            return api.sendMessage("⚠️ Biệt danh quá dài (tối đa 128 ký tự).", threadID);
         }
 
         // 2. LẤY THÔNG TIN QUYỀN HẠN TRONG NHÓM
