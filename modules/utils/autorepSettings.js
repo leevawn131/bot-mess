@@ -3,6 +3,43 @@ const path = require("path");
 
 const SETTINGS_PATH = path.join(__dirname, "../../cache/autorep_settings.json");
 const MEDIA_DIR = path.join(__dirname, "../../cache/autorep_media");
+const MEDIA_BUFFER_CACHE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+// LRU in-memory cache for small media files: key = `${threadID}|${normalizedKeyword}` => Buffer
+const mediaBufferCache = new Map();
+let mediaBufferTotalBytes = 0;
+
+function setMediaBuffer(key, buf) {
+    try {
+        if (!key) return;
+        if (!buf) {
+            const old = mediaBufferCache.get(key);
+            if (old) {
+                mediaBufferTotalBytes -= old.length || 0;
+                mediaBufferCache.delete(key);
+            }
+            return;
+        }
+
+        const existing = mediaBufferCache.get(key);
+        if (existing) {
+            mediaBufferTotalBytes -= existing.length || 0;
+            mediaBufferCache.delete(key);
+        }
+
+        mediaBufferCache.set(key, buf);
+        mediaBufferTotalBytes += buf.length || 0;
+
+        // Evict least-recently-used until under limit
+        while (mediaBufferTotalBytes > MEDIA_BUFFER_CACHE_SIZE) {
+            const firstKey = mediaBufferCache.keys().next().value;
+            if (!firstKey) break;
+            const firstBuf = mediaBufferCache.get(firstKey);
+            mediaBufferTotalBytes -= firstBuf?.length || 0;
+            mediaBufferCache.delete(firstKey);
+        }
+    } catch {}
+}
 
 function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
@@ -119,6 +156,22 @@ function upsertAutorepRule(threadID, keyword, responseText, media = null, update
     };
 
     writeAutorepSettings(settings);
+
+    // preload small media into memory cache to speed up sends
+    try {
+        const key = `${threadKey}|${normalizedKeyword}`;
+        if (nextMedia && nextMedia.path && fs.existsSync(nextMedia.path)) {
+            const stat = fs.statSync(nextMedia.path);
+            if (stat.size > 0 && stat.size <= MEDIA_BUFFER_CACHE_SIZE) {
+                const buf = fs.readFileSync(nextMedia.path);
+                setMediaBuffer(key, buf);
+            } else {
+                setMediaBuffer(key, null);
+            }
+        } else {
+            setMediaBuffer(key, null);
+        }
+    } catch {}
     return settings[threadKey][normalizedKeyword];
 }
 
@@ -146,7 +199,49 @@ function removeAutorepRule(threadID, keyword) {
     }
 
     writeAutorepSettings(settings);
+    try {
+        const key = `${threadKey}|${normalizeText(keyword)}`;
+        setMediaBuffer(key, null);
+    } catch {}
     return existing;
+}
+
+function getMediaBuffer(threadID, normalizedKeyword) {
+    try {
+        const key = `${String(threadID)}|${String(normalizedKeyword)}`;
+        const buf = mediaBufferCache.get(key) || null;
+        if (buf) {
+            // mark as recently used by reinserting
+            mediaBufferCache.delete(key);
+            mediaBufferCache.set(key, buf);
+        }
+        return buf;
+    } catch {
+        return null;
+    }
+}
+
+function preloadMediaCache() {
+    try {
+        const settings = readAutorepSettings();
+        for (const threadID of Object.keys(settings || {})) {
+            const threadRules = settings[threadID] || {};
+            for (const nk of Object.keys(threadRules || {})) {
+                try {
+                    const rule = threadRules[nk];
+                    const media = rule?.media;
+                    if (media && media.path && fs.existsSync(media.path)) {
+                        const stat = fs.statSync(media.path);
+                        if (stat.size > 0 && stat.size <= MEDIA_BUFFER_CACHE_SIZE) {
+                            const buf = fs.readFileSync(media.path);
+                            const key = `${String(threadID)}|${String(nk)}`;
+                            setMediaBuffer(key, buf);
+                        }
+                    }
+                } catch {}
+            }
+        }
+    } catch {}
 }
 
 function findMatchingRule(threadID, body) {
@@ -157,16 +252,8 @@ function findMatchingRule(threadID, body) {
         .filter((rule) => rule && rule.normalizedKeyword)
         .sort((a, b) => b.normalizedKeyword.length - a.normalizedKeyword.length);
 
-    return (
-        rules.find((rule) => {
-            if (rule.normalizedKeyword.includes(" ")) {
-                return normalizedBody.includes(rule.normalizedKeyword);
-            }
-
-            const pattern = new RegExp(`(^|\\s)${escapeRegExp(rule.normalizedKeyword)}(\\s|$)`);
-            return pattern.test(normalizedBody);
-        }) || null
-    );
+    // Use permissive substring matching for all rules to increase hit rate
+    return rules.find((rule) => normalizedBody.includes(rule.normalizedKeyword)) || null;
 }
 
 module.exports = {
@@ -182,4 +269,6 @@ module.exports = {
     sanitizeFileName,
     upsertAutorepRule,
     writeAutorepSettings,
+    getMediaBuffer,
+    preloadMediaCache,
 };

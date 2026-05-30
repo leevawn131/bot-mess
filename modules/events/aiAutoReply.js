@@ -1,7 +1,9 @@
 const fs = require("fs");
+const { getMediaBuffer } = require("../utils/autorepSettings");
+const stream = require("stream");
 const { findMatchingRule } = require("../utils/autorepSettings");
 
-function buildAutorepPayload(rule) {
+function buildAutorepPayload(rule, threadID) {
     const payload = {};
 
     if (String(rule?.responseText || "").trim()) {
@@ -9,7 +11,22 @@ function buildAutorepPayload(rule) {
     }
 
     if (rule?.media?.path && fs.existsSync(rule.media.path)) {
-        payload.attachment = fs.createReadStream(rule.media.path);
+        // prefer in-memory buffer for small media to avoid disk I/O
+        const buf = getMediaBuffer(threadID, rule.normalizedKeyword);
+        if (buf) {
+            try {
+                const rs = stream.Readable.from(buf);
+                // preserve path/filename so downstream API can infer mime/type
+                try {
+                    rs.path = rule.media.path;
+                } catch {}
+                payload.attachment = rs;
+            } catch (e) {
+                payload.attachment = fs.createReadStream(rule.media.path);
+            }
+        } else {
+            payload.attachment = fs.createReadStream(rule.media.path);
+        }
     }
 
     return payload;
@@ -35,13 +52,27 @@ module.exports = {
 
         let attachmentStream = null;
         try {
-            const payload = buildAutorepPayload(rule);
+            const payload = buildAutorepPayload(rule, threadID);
 
             if (payload.attachment) {
                 attachmentStream = payload.attachment;
             }
 
+            // log cache hit/miss and measure send time
+            let cacheHit = false;
+            let cacheSize = 0;
+            try {
+                const buf = getMediaBuffer(threadID, rule.normalizedKeyword);
+                cacheHit = !!buf;
+                cacheSize = buf ? buf.length : 0;
+            } catch {}
+
+            const t0 = Date.now();
             await api.sendMessage(payload, threadID, event.messageID);
+            const dt = Date.now() - t0;
+            try {
+                console.log(`[autorep] sent="${rule.keyword}" thread=${threadID} cacheHit=${cacheHit} size=${cacheSize}B time=${dt}ms`);
+            } catch {}
         } catch (error) {
             console.error(`❌ Lỗi autorep [${rule.keyword}]:`, error);
             if (attachmentStream) {

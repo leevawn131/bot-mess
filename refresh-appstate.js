@@ -58,12 +58,18 @@ login({
       process.exit(1);
     }
 
-    // Lưu vào file
-    const outputPath = path.join(__dirname, 'appstate.json');
-    fs.writeFileSync(outputPath, JSON.stringify(appState, null, 2));
+    // Lưu vào runtime dir và giữ file gốc đồng bộ cho công cụ cũ
+    const runtimeDir = path.join(__dirname, 'runtime');
+    const runtimeOutputPath = path.join(runtimeDir, 'appstate.json');
+    const legacyOutputPath = path.join(__dirname, 'appstate.json');
+    const appStateText = JSON.stringify(appState, null, 2);
+
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(runtimeOutputPath, appStateText);
+    fs.writeFileSync(legacyOutputPath, appStateText);
     
     console.log("✅ Appstate.json đã được làm mới!");
-    console.log(`📁 Lưu tại: ${outputPath}`);
+    console.log(`📁 Lưu tại: ${runtimeOutputPath}`);
     console.log(`📊 Số cookies: ${appState.length}`);
     console.log("🔄 Bot sẽ tự load appstate mới khi khởi động lại");
     

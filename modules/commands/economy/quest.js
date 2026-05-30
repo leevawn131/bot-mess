@@ -38,7 +38,7 @@ function parseTierFilter(input) {
 module.exports = {
   name: "quest",
   description: "Quest ngày: nhận random, check tiến độ, claim thưởng",
-  usage: "\n!quest nhan <de|tb|kho|hiem> → Nhận quest ngẫu nhiên theo độ khó\n!quest check → Xem tiến độ quest hiện tại\n!quest claim → Nhận thưởng quest đã hoàn thành\n━━━━━━━━━━━━━━━━━━\n🎯 Mỗi ngày nhận tối đa 3 quest\n🏅 Độ khó càng cao, thưởng càng lớn\n💡 Ví dụ: !quest nhan kho",
+  usage: "\n!quest nhan <de|tb|kho|hiem> → Nhận quest ngẫu nhiên theo độ khó\n!quest check → Xem tiến độ quest hiện tại\n!quest claim → Nhận thưởng quest đã hoàn thành\n━{13}\n🎯 Mỗi ngày nhận tối đa 3 quest\n🏅 Độ khó càng cao, thưởng càng lớn\n💡 Ví dụ: !quest nhan kho",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
@@ -182,7 +182,7 @@ module.exports = {
             }
           }
 
-          let rewardMsg = "🎁 KẾT QUẢ NHẬN THƯỞNG\n━━━━━━━━━━━━━━━━━━\n";
+          let rewardMsg = "🎁 KẾT QUẢ NHẬN THƯỞNG\n━{13}\n";
           rewardMsg += `✅ Nhận thành công: ${preview.claimableCount}\n`;
           rewardMsg += `💰 Tổng thưởng: +${preview.totalReward.toLocaleString()} xu\n`;
           if (preview.alreadyClaimedCount > 0)
@@ -213,7 +213,7 @@ module.exports = {
           );
         }
 
-        let checkMsg = `📌 NHIỆM VỤ ĐÃ NHẬN (${data.date})\n━━━━━━━━━━━━━━━━━━\n`;
+        let checkMsg = `📌 NHIỆM VỤ ĐÃ NHẬN (${data.date})\n━{13}\n`;
         checkMsg += `🎯 Đã nhận: ${acceptedQuests.length}/${data.maxAccepted} quest${data.hasVip ? " (VIP)" : ""}\n\n`;
 
         acceptedQuests.forEach((quest, index) => {
@@ -228,7 +228,7 @@ module.exports = {
           checkMsg += `   - Trạng thái: ${status}\n\n`;
         });
 
-        checkMsg += "━━━━━━━━━━━━━━━━━━\n";
+        checkMsg += "━{13}\n";
         checkMsg += "💡 Claim thưởng: quest claim all hoặc quest claim [STT].";
 
         return api.sendMessage(checkMsg, threadID, messageID);
@@ -266,7 +266,7 @@ module.exports = {
         const tierLabel = getTierLabel(result.selectedTier);
         const quest = result.quest;
 
-        let msg = "🎲 NHẬN QUEST NGẪU NHIÊN\n━━━━━━━━━━━━━━━━━━\n";
+        let msg = "🎲 NHẬN QUEST NGẪU NHIÊN\n━{13}\n";
         msg += `📌 ${quest.title}\n`;
         msg += `- Mức độ: ${tierLabel}\n`;
         msg += `- ${quest.description}\n`;
@@ -274,7 +274,7 @@ module.exports = {
         msg += `- Thưởng: ${Number(quest.reward).toLocaleString()} xu\n`;
         msg += `🎯 Đã nhận: ${result.acceptedCount}/${result.maxAccepted}${result.hasVip ? " (VIP)" : ""}\n`;
         msg += `🎁 Slot còn lại: ${result.remainingSlots}\n`;
-        msg += "━━━━━━━━━━━━━━━━━━\n";
+        msg += "━{13}\n";
         msg += "💡 Dùng quest check để theo dõi tiến độ.";
 
         return api.sendMessage(msg, threadID, messageID);
@@ -292,10 +292,10 @@ module.exports = {
         );
       }
 
-      let msg = `📜 QUEST HÔM NAY (${data.date})\n━━━━━━━━━━━━━━━━━━\n`;
+      let msg = `📜 QUEST HÔM NAY (${data.date})\n━{13}\n`;
       msg += `🎯 Đã nhận: ${data.acceptedCount}/${data.maxAccepted}${data.hasVip ? " (VIP)" : ""}\n`;
       msg += `🎁 Còn lại: ${data.remainingSlots} nhiệm vụ\n`;
-      msg += "━━━━━━━━━━━━━━━━━━\n";
+      msg += "━{13}\n";
       msg += "👉 Nhận quest: quest nhan\n";
       msg += "👉 Xem tiến độ: quest check\n";
       msg += "👉 Nhận thưởng: quest claim all";

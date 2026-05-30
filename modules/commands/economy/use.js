@@ -43,7 +43,7 @@ function isEnergyRestoreItem(item) {
 module.exports = {
   name: "use",
   description: "Sử dụng vật phẩm trong túi đồ",
-  usage: "\n!use [item-key] → Sử dụng vật phẩm trong túi đồ\n━━━━━━━━━━━━━━━━━━\n📌 [item-key]: Mã vật phẩm (xem bằng !inv)\n⚡ Vật phẩm năng lượng sẽ hồi phục stamina\n💡 Ví dụ: !use shield",
+  usage: "\n!use [item-key] → Sử dụng vật phẩm trong túi đồ\n━{13}\n📌 [item-key]: Mã vật phẩm (xem bằng !inv)\n⚡ Vật phẩm năng lượng sẽ hồi phục stamina\n💡 Ví dụ: !use shield",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;

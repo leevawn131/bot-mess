@@ -123,7 +123,7 @@ module.exports = {
   name: "checkbd",
   description: "Liệt kê thành viên chưa set biệt danh và hỗ trợ kick theo STT",
   usage:
-    "\n!checkbd → Liệt kê thành viên chưa set biệt danh\n!checkbd canhbao → Tag toàn bộ chưa setbd (trừ QTV)\n!checkbd kickall → Kick toàn bộ chưa setbd (trừ QTV)\n━━━━━━━━━━━━━━━━━━\n↩️ Reply STT (vd: 1 2 3) để kick từng người (tối đa 5)\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
+    "\n!checkbd → Liệt kê thành viên chưa set biệt danh\n!checkbd canhbao → Tag toàn bộ chưa setbd (trừ QTV)\n!checkbd kickall → Kick toàn bộ chưa setbd (trừ QTV)\n━{13}\n↩️ Reply STT (vd: 1 2 3) để kick từng người (tối đa 5)\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
 
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
@@ -194,7 +194,7 @@ module.exports = {
 
         const warningLines = [
           { text: "CẢNH BÁO CHƯA SET BIỆT DANH" },
-          { text: "━━━━━━━━━━━━━━━━━━" },
+          { text: "━{13}" },
           {
             text: `Có ${nonAdminMissingList.length} thành viên chưa set biệt danh:`,
           },
@@ -312,7 +312,7 @@ module.exports = {
 
       const lines = [
         "🪪 CHECKBD - CHƯA SET BIỆT DANH",
-        "━━━━━━━━━━━━━━━━━━",
+        "━{13}",
         ...missingList.map((item, idx) => {
           const adminTag = adminIDs.includes(String(item.uid)) ? " [QTV]" : "";
           return `${idx + 1}. ${item.name}${adminTag}`;

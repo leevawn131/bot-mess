@@ -5,7 +5,7 @@ const { getGroupRule, setGroupRule } = require('../../utils/groupRulesSettings')
 module.exports = {
     name: "luatnhom",
     description: "Lưu luật riêng cho từng nhóm",
-    usage: "\n!luatnhom → Xem luật hiện tại của nhóm\n!luatnhom set [nội dung] → Lưu luật mới\n!luatnhom reset → Xóa luật riêng của nhóm\n━━━━━━━━━━━━━━━━━━\n📌 Tối đa 2000 ký tự\n🔒 Chỉ QTV nhóm/chủ bot mới cài được\n💡 VD: !luatnhom set Không spam, không toxic",
+    usage: "\n!luatnhom → Xem luật hiện tại của nhóm\n!luatnhom set [nội dung] → Lưu luật mới\n!luatnhom reset → Xóa luật riêng của nhóm\n━{13}\n📌 Tối đa 2000 ký tự\n🔒 Chỉ QTV nhóm/chủ bot mới cài được\n💡 VD: !luatnhom set Không spam, không toxic",
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -69,7 +69,7 @@ module.exports = {
 
         if (!ruleText) {
             return api.sendMessage(
-                `📌 HƯỚNG DẪN !luatnhom\n━━━━━━━━━━━━━━━━━━\n` +
+                `📌 HƯỚNG DẪN !luatnhom\n━{13}\n` +
                 `• Xem luật: !luatnhom check\n` +
                 `• Lưu luật: !luatnhom set <nội dung luật>\n` +
                 `• Xoá luật: !luatnhom reset\n\n` +

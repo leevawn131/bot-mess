@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { checkCooldown } = require("../../utils/cooldown");
-const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
+// Load resolver at runtime inside execute to pick up hot-reloads
 
 const KISS_MESSAGES = [
   "{actor} nhẹ nhàng hôn {target} một cái thật tình cảm 😘",
@@ -66,8 +66,42 @@ module.exports = {
   description: "Hôn người được tag hoặc reply bằng GIF",
   usage: "\n!kiss @tag → Hôn người được tag\n!kiss (reply) → Hôn người được reply\n━━━━━━━━━━━━━━━━━━\n💋 Gửi kèm GIF hôn và tin nhắn ngọt ngào\n😘 Không thể hôn chính mình",
   execute: async ({ api, event }) => {
+    const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
+    try {
+      console.log("[kiss ENTRY]", JSON.stringify({ messageID: event?.messageID, threadID: event?.threadID, body: String(event?.body || "").slice(0,200) }));
+    } catch (e) {}
     await ensureMentionsFromHistory(api, event);
+    try {
+      console.log("[kiss AFTER_RESOLVE] mentions:", JSON.stringify(event.mentions || {}));
+    } catch (e) {}
     const { threadID, messageID, senderID, mentions, messageReply } = event;
+
+    // Fallback: if resolver didn't find mentions but body contains @labels,
+    // try to infer targets from thread member names (conservative: only when unique).
+    if ((Object.keys(event.mentions || {}).length === 0) && String(event.body || "").includes("@")) {
+      const { inferMentionEntriesFromBody } = require("../../utils/mentionResolver");
+      const { getThreadInfoCached } = require("../../utils/threadInfo");
+      try {
+        const threadInfo = await getThreadInfoCached(api, threadID);
+        try {
+          console.log("[kiss DEBUG] attempting inference", JSON.stringify({ threadID, body: event.body, threadMembers: (threadInfo?.userInfo || []).length || 0 }));
+        } catch (e) {}
+        const inferred = inferMentionEntriesFromBody(threadInfo, event.body);
+        try {
+          console.log("[kiss DEBUG] inferred:", JSON.stringify(inferred || []));
+        } catch (e) {}
+        if (Array.isArray(inferred) && inferred.length > 0) {
+          const map = {};
+          for (const it of inferred) map[String(it.id)] = it.tag;
+          event.mentions = map;
+          try {
+            console.log("[kiss DEBUG] applied inferred mentions:", JSON.stringify(event.mentions));
+          } catch (e) {}
+        }
+      } catch (e) {
+        console.log("[kiss DEBUG] inference error", e);
+      }
+    }
 
     const cooldown = checkCooldown({
       command: "kiss",

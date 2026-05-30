@@ -2,6 +2,7 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const { execute } = require("../utils/database");
+const { ensureRentedGroupsSchema } = require("../utils/rentalSchema");
 
 module.exports = {
   name: "thuebot",
@@ -12,25 +13,7 @@ module.exports = {
     const threadID = event.threadID;
 
     try {
-      // 1. Tự động tạo Table nếu chưa có
-      await execute(`
-        CREATE TABLE IF NOT EXISTS transactions (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          transaction_code VARCHAR(50) UNIQUE NOT NULL,
-          amount INT NOT NULL,
-          thread_id VARCHAR(50) NOT NULL,
-          user_id VARCHAR(50) NOT NULL,
-          status ENUM('pending', 'success', 'failed') DEFAULT 'pending',
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      
-      await execute(`
-        CREATE TABLE IF NOT EXISTS rented_groups (
-          thread_id VARCHAR(50) PRIMARY KEY,
-          expire_date TIMESTAMP NOT NULL
-        )
-      `);
+      await ensureRentedGroupsSchema();
 
       if (args && args[0] === "list") {
         const { getAdminBotUIDs } = require("../utils/checkPermission");
@@ -40,7 +23,9 @@ module.exports = {
         }
         
         try {
-          const rented = await execute("SELECT * FROM rented_groups WHERE expire_date > NOW() ORDER BY expire_date DESC");
+          const rented = await execute(
+            "SELECT * FROM rented_groups WHERE expire_date > NOW() ORDER BY expire_date DESC",
+          );
           if (!rented || rented.length === 0) {
             return api.sendMessage("📭 Hiện tại không có nhóm nào đang thuê bot.", threadID);
           }
@@ -49,6 +34,8 @@ module.exports = {
           for (let i = 0; i < rented.length; i++) {
               const rThreadID = rented[i].thread_id;
               const expireDate = new Date(rented[i].expire_date);
+              const rentedAt = rented[i].rented_at ? new Date(rented[i].rented_at) : null;
+              const renterId = rented[i].renter_id ? String(rented[i].renter_id) : "";
               
               const now = new Date();
               const diffMs = expireDate - now;
@@ -62,19 +49,28 @@ module.exports = {
 
               let renterName = "Không rõ";
               try {
-                  const tx = await execute("SELECT user_id FROM transactions WHERE thread_id = ? AND status = 'success' ORDER BY created_at DESC LIMIT 1", [rThreadID]);
-                  if (tx && tx.length > 0) {
-                      const uid = tx[0].user_id;
-                      const uInfo = await api.getUserInfo(uid);
-                      if (uInfo && uInfo[uid] && uInfo[uid].name) {
-                          renterName = `${uInfo[uid].name} (${uid})`;
-                      } else {
-                          renterName = uid;
-                      }
+          if (renterId) {
+            const uInfo = await api.getUserInfo(renterId);
+            if (uInfo && uInfo[renterId] && uInfo[renterId].name) {
+              renterName = `${uInfo[renterId].name} (${renterId})`;
+            } else {
+              renterName = renterId;
+            }
+          } else {
+            const tx = await execute("SELECT user_id FROM transactions WHERE thread_id = ? AND status = 'success' ORDER BY created_at DESC LIMIT 1", [rThreadID]);
+            if (tx && tx.length > 0) {
+              const uid = tx[0].user_id;
+              const uInfo = await api.getUserInfo(uid);
+              if (uInfo && uInfo[uid] && uInfo[uid].name) {
+                renterName = `${uInfo[uid].name} (${uid})`;
+              } else {
+                renterName = uid;
+              }
+            }
                   }
               } catch (e) {}
 
-              msg += `${i+1}. Nhóm: ${groupName}\n   TID: ${rThreadID}\n   Người thuê: ${renterName}\n   Hết hạn: ${expireDate.toLocaleString('vi-VN')} (còn ${diffDays} ngày)\n\n`;
+        msg += `${i+1}. Nhóm: ${groupName}\n   TID: ${rThreadID}\n   Người thuê: ${renterName}\n   ID người thuê: ${renterId || "Không rõ"}\n   Thời điểm thuê: ${rentedAt ? rentedAt.toLocaleString('vi-VN') : "Không rõ"}\n   Hết hạn: ${expireDate.toLocaleString('vi-VN')} (còn ${diffDays} ngày)\n\n`;
           }
           return api.sendMessage(msg.trimEnd(), threadID);
         } catch (e) {
@@ -147,17 +143,17 @@ module.exports = {
 
     const menuMessage = `--- 💸 BẢNG GIÁ THUÊ BOT 💸 ---\n\n` +
       `[ THUÊ BOT THƯỜNG ]\n` +
-      `1️⃣ 1 Tháng - 30,000 VNĐ\n` +
-      `2️⃣ 3 Tháng - 80,000 VNĐ\n` +
+      `1️⃣ 1 Tháng - 25,000 VNĐ\n` +
+      `2️⃣ 3 Tháng - 70,000 VNĐ\n` +
       `3️⃣ 6 Tháng - 150,000 VNĐ\n` +
-      `4️⃣ 1 Năm  - 250,000 VNĐ\n\n` +
+      `4️⃣ 1 Năm  - 275,000 VNĐ\n\n` +
       `[ THUÊ KÈM QUYỀN ADMIN-BOT ]\n` +
       `(Được toàn quyền dùng mọi lệnh cấm)\n` +
-      `5️⃣ 1 Tháng - 60,000 VNĐ\n` +
-      `6️⃣ 3 Tháng - 160,000 VNĐ\n` +
+      `5️⃣ 1 Tháng - 50,000 VNĐ\n` +
+      `6️⃣ 3 Tháng - 140,000 VNĐ\n` +
       `7️⃣ 6 Tháng - 300,000 VNĐ\n` +
-      `8️⃣ 1 Năm  - 500,000 VNĐ\n\n` +
-      `👉 Vui lòng REPLY (Phản hồi) tin nhắn này kèm theo SỐ THỨ TỰ (từ 1 đến 8) để chọn gói bạn muốn thuê.`;
+      `8️⃣ 1 Năm  - 550,000 VNĐ\n\n` +
+      `👉 Vui lòng REPLY (Phản hồi) tin nhắn này kèm theo SỐ THỨ TỰ ( từ 1 đến 8 ) để chọn gói bạn muốn thuê.`;
 
     api.sendMessage(menuMessage, threadID);
   },
@@ -174,6 +170,9 @@ module.exports = {
     const threadID = event.threadID;
     const userID = event.senderID;
     const choice = parseInt(event.body.trim());
+    if (Number.isNaN(choice)) {
+      return api.sendMessage("❌ Vui lòng reply bằng số từ 1 đến 8.", threadID);
+    }
 
     let months = 0;
     let amount = 0;
@@ -182,15 +181,15 @@ module.exports = {
 
     switch (choice) {
       // Gói Thường
-      case 1: months = 1; amount = 30000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
-      case 2: months = 3; amount = 80000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
-      case 3: months = 6; amount = 150000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
-      case 4: months = 12; amount = 250000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
+      case 1: months = 1; amount = 25000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
+      case 2: months = 3; amount = 70000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
+      case 3: months = 6; amount = 140000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
+      case 4: months = 12; amount = 275000; typePrefix = "BOT"; planName = "THƯỜNG"; break;
       // Gói Admin
-      case 5: months = 1; amount = 60000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
-      case 6: months = 3; amount = 160000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
-      case 7: months = 6; amount = 300000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
-      case 8: months = 12; amount = 500000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
+      case 5: months = 1; amount = 50000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
+      case 6: months = 3; amount = 140000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
+      case 7: months = 6; amount = 280000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
+      case 8: months = 12; amount = 550000; typePrefix = "ADM"; planName = "ADMIN-BOT"; break;
       default:
         return api.sendMessage("❌ Lựa chọn không hợp lệ. Vui lòng chọn số từ 1 đến 8.", threadID);
     }
@@ -239,27 +238,38 @@ module.exports = {
       
       const writer = fs.createWriteStream(qrPath);
       response.data.pipe(writer);
-      
-      writer.on('finish', () => {
-        api.sendMessage({
-          body: `[ HÓA ĐƠN THUÊ BOT - GÓI ${planName} ${months} THÁNG ]\n\n` +
-                `💵 Số tiền: ${amount.toLocaleString('vi-VN')} VNĐ\n` +
-                `📝 Nội dung chuyển khoản: ${transactionCode}\n\n` +
-                `⚠️ LƯU Ý QUAN TRỌNG:\n` +
-                `Hãy chuyển ĐÚNG số tiền và ĐÚNG nội dung CK để hệ thống duyệt tự động.\n` +
-                `Bot sẽ tự động báo thành công từ 1-3 phút sau khi chuyển khoản.`,
-          attachment: fs.createReadStream(qrPath)
-        }, threadID, event.messageID);
-        
-        // Xóa file QR sau 10 giây để đảm bảo file đã được gửi
-        setTimeout(() => {
-          if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
-        }, 10000);
+
+      await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+        response.data.on('error', reject);
       });
+
+      await api.sendMessage({
+        body: `[ HÓA ĐƠN THUÊ BOT - GÓI ${planName} ${months} THÁNG ]\n\n` +
+              `💵 Số tiền: ${amount.toLocaleString('vi-VN')} VNĐ\n` +
+              `📝 Nội dung chuyển khoản: ${transactionCode}\n\n` +
+              `⚠️ LƯU Ý QUAN TRỌNG:\n` +
+              `Hãy chuyển ĐÚNG số tiền và ĐÚNG nội dung CK để hệ thống duyệt tự động.\n` +
+              `Bot sẽ tự động báo thành công từ 1-3 phút sau khi chuyển khoản.`,
+        attachment: fs.createReadStream(qrPath)
+      }, threadID, event.messageID);
+
+      // Xóa file QR sau 10 giây để đảm bảo file đã được gửi
+      setTimeout(() => {
+        if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
+      }, 10000);
       
     } catch (error) {
       console.error("Lỗi tạo QR thuê bot:", error);
-      api.sendMessage("Đã xảy ra lỗi hệ thống khi tạo QR. Vui lòng báo cho Admin.", threadID);
+      api.sendMessage(
+        "❌ Không tạo được ảnh QR, nhưng bạn vẫn có thể chuyển khoản thủ công.\n" +
+        `💵 Số tiền: ${amount.toLocaleString('vi-VN')} VNĐ\n` +
+        `🏦 Ngân hàng: BIDV\n` +
+        `🔢 STK: 8850288200\n` +
+        `📝 Nội dung CK: ${transactionCode}`,
+        threadID,
+      );
     }
   }
 };

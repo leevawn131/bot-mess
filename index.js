@@ -11,6 +11,9 @@ const {
   runAiConversation,
   normalizeText,
 } = require("./modules/utils/aiAssistant");
+const {
+  ensureMentionsFromHistory: ensureMentionsResolved,
+} = require("./modules/utils/mentionResolver");
 
 // --- THREAD INFO CACHE (giảm gọi API liên tục, tránh bị Facebook throttle) ---
 const _threadInfoCache = new Map();
@@ -84,10 +87,17 @@ config.database = {
 };
 
 // 2. LOAD APPSTATE
+const APPSTATE_PATH = path.join(__dirname, "runtime", "appstate.json");
+const LEGACY_APPSTATE_PATH = path.join(__dirname, "appstate.json");
+
 const loadAppStateCredentials = () => {
   try {
+    const appStatePath = fs.existsSync(APPSTATE_PATH)
+      ? APPSTATE_PATH
+      : LEGACY_APPSTATE_PATH;
+
     return {
-      appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")),
+      appState: JSON.parse(fs.readFileSync(appStatePath, "utf8")),
     };
   } catch (err) {
     console.error("❌ Thiếu appstate.json");
@@ -117,32 +127,9 @@ function resolveCommand(commandName) {
   return null;
 }
 
-const getFbLoginCredentials = () => {
-  const email = process.env.FB_EMAIL || process.env.FACEBOOK_EMAIL || "";
-  const password =
-    process.env.FB_PASSWORD || process.env.FACEBOOK_PASSWORD || "";
-
-  if (!email || !password) return null;
-
-  return { email, password };
-};
-
 const RETRY_BASE_DELAY_MS = 5 * 60 * 1000;
 const VERIFY_RETRY_DELAY_MS = 60 * 1000;
 let loginRetryTimer = null;
-
-const shouldTryFbRefresh = (err) => {
-  const message = String(err?.message || err || "").toLowerCase();
-
-  return (
-    message.includes("appstate") ||
-    message.includes("cookie") ||
-    message.includes("session") ||
-    message.includes("expired") ||
-    message.includes("invalid") ||
-    message.includes("token")
-  );
-};
 
 const isUserIdRetrievalError = (err) => {
   const message = String(err?.message || err || "").toLowerCase();
@@ -165,20 +152,7 @@ const scheduleLoginRetry = (reason, delayMs = RETRY_BASE_DELAY_MS) => {
 
 // --- FIX MENTIONS HELPER ---
 const ensureMentions = async (api, event) => {
-  if (!event.body || !event.body.includes("@")) return event;
-  if (Object.keys(event.mentions || {}).length > 0) return event;
-  try {
-    const history = await api.getThreadHistory(event.threadID, 5);
-    const originalMsg = history.find((m) => m.messageID === event.messageID);
-    if (
-      originalMsg &&
-      originalMsg.mentions &&
-      Object.keys(originalMsg.mentions).length > 0
-    ) {
-      event.mentions = originalMsg.mentions;
-    }
-  } catch (e) {}
-  return event;
+  return ensureMentionsResolved(api, event);
 };
 
 // --- HÀM QUÉT FILE ĐỆ QUY ---
@@ -251,6 +225,9 @@ app.post("/webhook/sepay", async (req, res) => {
 
   try {
     const { execute } = require("./modules/utils/database");
+    const { ensureRentedGroupsSchema } = require("./modules/utils/rentalSchema");
+
+    await ensureRentedGroupsSchema();
 
     // Tìm giao dịch đang chờ dựa vào Nội dung chuyển khoản
     // Vì người dùng có thể ghi kèm chữ khác, nên dùng LIKE '%BOTxxxx%'
@@ -291,11 +268,14 @@ app.post("/webhook/sepay", async (req, res) => {
         // Cập nhật hoặc Insert vào bảng rented_groups
         await execute(
           `
-          INSERT INTO rented_groups (thread_id, expire_date)
-          VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY))
-          ON DUPLICATE KEY UPDATE expire_date = DATE_ADD(expire_date, INTERVAL ? DAY)
+          INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at)
+          VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP)
+          ON DUPLICATE KEY UPDATE
+            expire_date = DATE_ADD(GREATEST(COALESCE(expire_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP), INTERVAL ? DAY),
+            renter_id = ?,
+            rented_at = CURRENT_TIMESTAMP
         `,
-          [tx.thread_id, daysToAdd, daysToAdd],
+          [tx.thread_id, daysToAdd, tx.user_id, daysToAdd, tx.user_id],
         );
 
         console.log(`✅ Đã cộng ${daysToAdd} ngày cho nhóm ${tx.thread_id}`);
@@ -319,6 +299,12 @@ app.post("/webhook/sepay", async (req, res) => {
               if (global.config && global.config.adminIDs)
                 global.config.adminIDs.push(tx.user_id);
 
+              // Try to prime user info cache so commands like !adminbot can display name immediately
+              try {
+                if (global.api_instance && typeof global.api_instance.getUserInfo === 'function') {
+                  global.api_instance.getUserInfo(tx.user_id).catch(() => {});
+                }
+              } catch (e) {}
               adminGrantedMsg = `\n👑 BẠN ĐÃ ĐƯỢC CẤP QUYỀN ADMIN-BOT!`;
             }
           } catch (e) {
@@ -376,45 +362,10 @@ const attemptLogin = () => {
           return;
         }
 
-        if (!shouldTryFbRefresh(err)) {
-          console.error(
-            "ℹ️ Lỗi này không giống appstate hết hạn, nên bot sẽ không tự refresh đăng nhập bằng email/password.",
-          );
-          scheduleLoginRetry("lỗi đăng nhập chưa xác định", RETRY_BASE_DELAY_MS);
-          return;
-        }
-
-        const fbCredentials = getFbLoginCredentials();
-        if (!fbCredentials) {
-          console.error(
-            "ℹ️ Để tự đăng nhập lại khi appstate hết hạn, hãy đặt FB_EMAIL và FB_PASSWORD trong .env.",
-          );
-          scheduleLoginRetry("thiếu FB_EMAIL/FB_PASSWORD", RETRY_BASE_DELAY_MS);
-          return;
-        }
-
-        console.log("🔄 Appstate lỗi, đang thử làm mới bằng email/password...");
-        const refreshResult = spawnSync(
-          process.execPath,
-          [path.join(__dirname, "refresh-appstate.js")],
-          {
-            stdio: "inherit",
-            env: {
-              ...process.env,
-              FB_EMAIL: fbCredentials.email,
-              FB_PASSWORD: fbCredentials.password,
-            },
-          },
+        console.error(
+          "ℹ️ Bot chỉ dùng appstate/cookie để đăng nhập. Nếu Facebook chặn phiên này, hãy xác minh tài khoản trong browser rồi cập nhật lại runtime/appstate.json.",
         );
-
-        if (refreshResult.status === 0) {
-          console.log("✅ Đã làm mới appstate.json. Sẽ thử đăng nhập lại ngay.");
-          scheduleLoginRetry("đã refresh appstate", 3000);
-        } else {
-          console.error("❌ Không thể làm mới appstate tự động.");
-          scheduleLoginRetry("refresh appstate thất bại", RETRY_BASE_DELAY_MS);
-        }
-
+        scheduleLoginRetry("lỗi đăng nhập appstate", RETRY_BASE_DELAY_MS);
         return;
       }
 
@@ -427,6 +378,15 @@ const attemptLogin = () => {
 
       // Lưu api vào global để Webhook có thể dùng
       global.api_instance = api;
+
+      // Preload small autorep media into memory cache to reduce first-send latency
+      try {
+        const { preloadMediaCache } = require("./modules/utils/autorepSettings");
+        try {
+          preloadMediaCache();
+          console.log("✅ Autorep media cache preloaded");
+        } catch (e) {}
+      } catch (e) {}
 
     // --- ADAPTER: đảm bảo `changeNickname` có sẵn trên `api` ---
     if (!api.changeNickname) {
@@ -490,10 +450,10 @@ const attemptLogin = () => {
       };
     }
 
-    fs.writeFileSync(
-      "appstate.json",
-      JSON.stringify(api.getAppState(), null, 2),
-    );
+    const appState = JSON.stringify(api.getAppState(), null, 2);
+    fs.mkdirSync(path.dirname(APPSTATE_PATH), { recursive: true });
+    fs.writeFileSync(APPSTATE_PATH, appState);
+    fs.writeFileSync(LEGACY_APPSTATE_PATH, appState);
 
     // =================================================================
     // ĐOẠN MỚI: KIỂM TRA THÔNG BÁO RESET THÀNH CÔNG
@@ -800,7 +760,7 @@ const attemptLogin = () => {
 
             const lines = [
               `📊 TOP 10 TƯƠNG TÁC NGÀY ${formatDayLabel(yesterdayKey)}`,
-              "━━━━━━━━━━━━━━━━━━",
+              "━{13}",
               ...ranked.slice(0, 10).map((item, idx) => {
                 const name =
                   userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
@@ -869,7 +829,7 @@ const attemptLogin = () => {
 
             const lines = [
               `📊 TOP 10 TƯƠNG TÁC THÁNG ${formatMonthLabel(previousMonthKey)}`,
-              "━━━━━━━━━━━━━━━━━━",
+              "━{13}",
               ...ranked.slice(0, 10).map((item, idx) => {
                 const name =
                   userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
@@ -1114,6 +1074,14 @@ const attemptLogin = () => {
         const commandName = args.shift().toLowerCase();
         const command = resolveCommand(commandName);
 
+        if (!command) {
+          return api.sendMessage(
+            `❌ Lệnh không tồn tại: ${commandName}\n💡 Dùng !help để xem danh sách lệnh.`,
+            event.threadID,
+            event.messageID,
+          );
+        }
+
         if (command) {
           try {
             // =================================================================
@@ -1208,16 +1176,19 @@ const attemptLogin = () => {
       // XỬ LÝ REPLY (Tài Xỉu, Bầu Cua...)
       // =================================================================
       if (event.type === "message_reply") {
-        const permCheck = await checkPermission(
-          event.threadID,
-          event.senderID,
-          api,
-        );
-        if (!permCheck.allowed) return;
+        const permCheck = await checkPermission(event.threadID, event.senderID, api);
+
+        const repliedText = String(event.messageReply?.body || "");
+        const isThuebotMenuReply = repliedText.includes("BẢNG GIÁ THUÊ BOT");
 
         global.commands.forEach(async (cmd) => {
           if (cmd.handleReply) {
             try {
+              // Cho phép reply menu thuê bot kể cả khi mode không cho dùng lệnh chung.
+              if (!permCheck.allowed && !(isThuebotMenuReply && cmd.name === "thuebot")) {
+                return;
+              }
+
               await cmd.handleReply({ api, event, config });
             } catch (e) {
               console.error(`❌ Lỗi handleReply [${cmd.name}]:`, e);

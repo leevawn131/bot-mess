@@ -1,4 +1,5 @@
 const path = require("path");
+const fs = require("fs");
 const { getBotConfig } = require('./envConfig');
 const { readJsonFile } = require('./secureFileOps');
 const { debug } = require('./logger');
@@ -32,6 +33,19 @@ function toAdminIdList(threadInfo) {
  */
 function getAdminBotUIDs() {
   try {
+    // Prefer reading adminIDs from config.json (persisted file) so runtime updates
+    // written by the webhook (granting admin) are respected immediately.
+    try {
+      const cfgPath = path.join(__dirname, '../../config.json');
+      if (fs.existsSync(cfgPath)) {
+        const raw = fs.readFileSync(cfgPath, 'utf8');
+        const cfg = JSON.parse(raw || '{}');
+        if (Array.isArray(cfg.adminIDs)) return cfg.adminIDs.map(String);
+      }
+    } catch (e) {
+      // fallback to env-based bot config
+    }
+
     const config = getBotConfig();
     return config?.adminIDs || [];
   } catch (error) {

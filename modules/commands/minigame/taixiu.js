@@ -197,7 +197,7 @@ async function finalizeTaixiuSession({
   let totalBet = 0;
   let totalPay = 0;
   const autoCloseText = autoClose ? "⏰ Hết 3 phút, bot tự xóc.\n" : "";
-  let msg = `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcon}\nTổng: ${total} - ${resultText.toUpperCase()}\n━━━━━━━━━━━━━━━━━━\n`;
+  let msg = `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcon}\nTổng: ${total} - ${resultText.toUpperCase()}\n━{13}\n`;
 
   let connection;
   try {
@@ -347,7 +347,7 @@ function scheduleTaixiuAutoClose({ api, threadID, config }) {
 module.exports = {
   name: "taixiu",
   description: "Tài Xỉu (Anti-Spam Edition)",
-  usage: "\n!taixiu → Mở sòng Tài Xỉu mới\n!taixiu xoc → Xóc đĩa kết thúc phiên (chủ sòng)\n!taixiu soicau → Xem lịch sử kết quả gần nhất\n━━━━━━━━━━━━━━━━━━\n🎲 Cược: Reply tin nhắn sòng + [tài/xỉu] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → tai 50000",
+  usage: "\n!taixiu → Mở sòng Tài Xỉu mới\n!taixiu xoc → Xóc đĩa kết thúc phiên (chủ sòng)\n!taixiu soicau → Xem lịch sử kết quả gần nhất\n━{13}\n🎲 Cược: Reply tin nhắn sòng + [tài/xỉu] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → tai 50000",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID } = event;
@@ -369,7 +369,7 @@ module.exports = {
 
       const recent = history.slice(-15);
       const lines = recent.map((item, idx) => formatSoiCauLine(idx + 1, item));
-      const msg = `📊 SOI CẦU TÀI XỈU (15 phiên gần nhất)\nBàn: ${threadID}\n━━━━━━━━━━━━━━━━━━\n${lines.join("\n")}`;
+      const msg = `📊 SOI CẦU TÀI XỈU (15 phiên gần nhất)\nBàn: ${threadID}\n━{13}\n${lines.join("\n")}`;
       return api.sendMessage(msg, threadID);
     }
 
@@ -546,7 +546,7 @@ module.exports = {
             (now - dueDate) / (1000 * 60 * 60 * 24),
           );
           return api.sendMessage(
-            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
+            `⚠️ BẠN ĐANG NỢ TIỀN!\n━{13}\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━{13}\n💡 Trả nợ để cược bình thường!`,
             threadID,
             messageID,
           );

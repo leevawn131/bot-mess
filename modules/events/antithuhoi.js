@@ -3,9 +3,17 @@ const path = require("path");
 
 const ANTITHUHOI_DIR = path.join(__dirname, "../../cache/antithuhoi");
 const SETTINGS_PATH = path.join(ANTITHUHOI_DIR, "settings.json");
+const MESSAGE_LIMIT = 15;
+
+function ensureDir() {
+  if (!fs.existsSync(ANTITHUHOI_DIR)) {
+    fs.mkdirSync(ANTITHUHOI_DIR, { recursive: true });
+  }
+}
 
 // Đọc cài đặt
 function getSettings() {
+  ensureDir();
   try {
     if (fs.existsSync(SETTINGS_PATH)) {
       return JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf8"));
@@ -16,6 +24,7 @@ function getSettings() {
 
 // Lấy file lưu tin nhắn
 function getThreadMessageFile(threadID) {
+  ensureDir();
   return path.join(ANTITHUHOI_DIR, `messages_${threadID}.json`);
 }
 
@@ -78,12 +87,57 @@ async function resolveSenderName(
   return fallbackName;
 }
 
+async function appendMessageSnapshot(api, event) {
+  if (!event.threadID || !event.messageID) return;
+
+  const botID = String(api.getCurrentUserID());
+  const senderID = String(event.senderID || "");
+  if (!senderID || senderID === botID) return;
+
+  const body = String(event.body || "").trim();
+  const attachments = Array.isArray(event.attachments) ? event.attachments.length : 0;
+  if (!body && attachments === 0) return;
+
+  const messages = getSavedMessages(event.threadID);
+  const senderName = await resolveSenderName(
+    api,
+    event.threadID,
+    senderID,
+    String(event.senderName || "Unknown"),
+  );
+
+  messages.push({
+    messageID: event.messageID,
+    senderID,
+    senderName,
+    body,
+    timestamp: Number(event.timestamp) || Date.now(),
+    attachments,
+  });
+
+  while (messages.length > MESSAGE_LIMIT) {
+    messages.shift();
+  }
+
+  const file = getThreadMessageFile(event.threadID);
+  fs.writeFileSync(file, JSON.stringify(messages, null, 2));
+}
+
 module.exports = {
   name: "messageDeleted",
-  eventType: ["message_unsend"],
+  eventType: ["message", "message_unsend"],
 
   execute: async ({ api, event }) => {
     if (!event.threadID) return;
+
+    if (event.type === "message") {
+      try {
+        await appendMessageSnapshot(api, event);
+      } catch (err) {
+        console.error("❌ Lỗi cập nhật snapshot antithuhoi:", err);
+      }
+      return;
+    }
 
     const settings = getSettings();
     if (!settings[event.threadID]) {

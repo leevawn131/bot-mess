@@ -4,7 +4,7 @@ const { checkCooldown } = require("../../utils/cooldown");
 module.exports = {
   name: "buy",
   description: "Mua vật phẩm từ shop",
-  usage: "\n!buy [item-key] <số_lượng> → Mua vật phẩm từ shop\n━━━━━━━━━━━━━━━━━━\n📌 [item-key]: Mã vật phẩm (xem bằng !shop)\n📌 <số_lượng>: Số lượng muốn mua (mặc định: 1)\n💡 Ví dụ: !buy shield 2",
+  usage: "\n!buy [item-key] <số_lượng> → Mua vật phẩm từ shop\n━{13}\n📌 [item-key]: Mã vật phẩm (xem bằng !shop)\n📌 <số_lượng>: Số lượng muốn mua (mặc định: 1)\n💡 Ví dụ: !buy shield 2",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;

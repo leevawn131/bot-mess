@@ -22,7 +22,7 @@ function loadAiConfig() {
 module.exports = {
     name: "ai",
     description: "AI thuần (chạy trên Ollama Llama3)",
-    usage : "\n!ai [câu hỏi] → Hỏi AI thuần (llama3:latest)\n!ai -m [model] [câu hỏi] → Hỏi với model cụ thể\n━━━━━━━━━━━━━━━━━━\n🤖 AI thuần chạy bằng Ollama (llama3)\n💡 Ví dụ: !ai Thủ đô Việt Nam là gì?",
+    usage : "\n!ai [câu hỏi] → Hỏi AI thuần (llama3:latest)\n!ai -m [model] [câu hỏi] → Hỏi với model cụ thể\n━{13}\n🤖 AI thuần chạy bằng Ollama (llama3)\n💡 Ví dụ: !ai Thủ đô Việt Nam là gì?",
     execute: async ({ api, event, args }) => {
         const threadID = String(event.threadID); // Ép kiểu chuỗi để tránh lỗi
         const displayLabel = 'AI thuần (llama3)';
@@ -56,7 +56,7 @@ module.exports = {
         });
 
         if (result.ok && result.answer) {
-            return api.sendMessage(`🤖 [${displayLabel}]:\n━━━━━━━━━━━━━━━━━━\n${result.answer}`, threadID);
+            return api.sendMessage(`🤖 [${displayLabel}]:\n━{13}\n${result.answer}`, threadID);
         }
 
         if (result.reason === 'cooldown' && result.errorMessage) {

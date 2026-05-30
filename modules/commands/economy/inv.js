@@ -4,7 +4,7 @@ const { checkCooldown } = require('../../utils/cooldown');
 module.exports = {
     name: "inv",
     description: "Xem túi đồ của bạn",
-    usage: "\n!inv → Xem túi đồ (vật phẩm đang sở hữu)\n━━━━━━━━━━━━━━━━━━\n📦 Hiển thị tên, mã, số lượt dùng còn lại\n💡 Dùng vật phẩm: !use [item-key]",
+    usage: "\n!inv → Xem túi đồ (vật phẩm đang sở hữu)\n━{13}\n📦 Hiển thị tên, mã, số lượt dùng còn lại\n💡 Dùng vật phẩm: !use [item-key]",
     
     execute: async ({ api, event, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -28,7 +28,7 @@ module.exports = {
             // Check VIP status
             const user = await execute('SELECT vip_until FROM messenger_users WHERE psid = ?', [senderID]);
             
-            let msg = "🎒 TÚI ĐỒ CỦA BẠN\n━━━━━━━━━━━━━━━━━━\n\n";
+            let msg = "🎒 TÚI ĐỒ CỦA BẠN\n━{13}\n\n";
             
             if (user.length > 0 && user[0].vip_until) {
                 const vipUntil = new Date(user[0].vip_until);
@@ -49,7 +49,7 @@ module.exports = {
                     msg += `   Số lượt: ${item.uses_left}\n`;
                     msg += `   Mô tả: ${item.description}\n\n`;
                 });
-                msg += "━━━━━━━━━━━━━━━━━━\n";
+                msg += "━{13}\n";
                 msg += "👉 Dùng: !use [item-key]";
             }
 

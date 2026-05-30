@@ -2,7 +2,7 @@ module.exports = {
     name: "gỡ",
     aliases: ["go", "xoa", "xóa", "delete", "remove", "like"],
     description: "Gỡ tin nhắn của bot (reply rồi gõ !gỡ hoặc !like)",
-    usage: "\n!gỡ / !like (reply tin nhắn bot) → Gỡ tin nhắn của bot\n━━━━━━━━━━━━━━━━━━\n📌 Reply vào tin nhắn của bot rồi gõ !gỡ hoặc !like\n⚠️ Chỉ gỡ được tin nhắn của bot",
+    usage: "\n!gỡ / !like (reply tin nhắn bot) → Gỡ tin nhắn của bot\n━{13}\n📌 Reply vào tin nhắn của bot rồi gõ !gỡ hoặc !like\n⚠️ Chỉ gỡ được tin nhắn của bot",
 
     execute: async ({ api, event }) => {
         const { threadID, messageID, messageReply, senderID } = event;

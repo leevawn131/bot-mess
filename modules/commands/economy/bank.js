@@ -20,7 +20,7 @@ function getDateString(date) {
 module.exports = {
     name: "bank",
     description: "Quản lý tiền gửi ngân hàng (lãi 5%/ngày)",
-    usage: "\n!bank gui [số_tiền] → Gửi tiết kiệm (1 lần/ngày)\n!bank rut [số_tiền] → Rút tiền (phải chờ sang ngày mới)\n!bank check → Kiểm tra số dư & lãi hiện tại\n!bank sync → Đồng bộ quỹ ngân hàng (Admin)\n━━━━━━━━━━━━━━━━━━\n💰 Lãi suất: 5%/ngày (lãi kép)\n⚠️ Gửi 1 lần/ngày, rút phải chờ sang ngày mới",
+    usage: "\n!bank gui [số_tiền] → Gửi tiết kiệm (1 lần/ngày)\n!bank rut [số_tiền] → Rút tiền (phải chờ sang ngày mới)\n!bank check → Kiểm tra số dư & lãi hiện tại\n!bank sync → Đồng bộ quỹ ngân hàng (Admin)\n━{13}\n💰 Lãi suất: 5%/ngày (lãi kép)\n⚠️ Gửi 1 lần/ngày, rút phải chờ sang ngày mới",
     
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -110,7 +110,7 @@ module.exports = {
                         const hoursRemaining = Math.ceil((tomorrowStart - now) / (1000 * 60 * 60));
                         
                         return api.sendMessage(
-                            `⏳ BạN ĐÃ GỮI TIỀN HÔM NAY!\n━━━━━━━━━━━━━━━━━━\n⏰ Có thể gửi lại: ngày mai từ 00:00 (UTC+7)\n⏳ Còn lại: ~${hoursRemaining}h`,
+                            `⏳ BạN ĐÃ GỮI TIỀN HÔM NAY!\n━{13}\n⏰ Có thể gửi lại: ngày mai từ 00:00 (UTC+7)\n⏳ Còn lại: ~${hoursRemaining}h`,
                             threadID,
                             messageID
                         );
@@ -144,7 +144,7 @@ module.exports = {
                     await connection.commit();
 
                     return api.sendMessage(
-                        `✅ GỬI TIỀN THÀNH CÔNG!\n👤 ${userName}\n💰 Số tiền: ${amount.toLocaleString()}\n🏦 Lãi suất: 5%/ngày (lãi kép)\n━━━━━━━━━━━━━━━━━━\n💡 Dùng !bank check để cập nhật lãi\n⏳ Có thể rút sau 24h + check lãi`,
+                        `✅ GỬI TIỀN THÀNH CÔNG!\n👤 ${userName}\n💰 Số tiền: ${amount.toLocaleString()}\n🏦 Lãi suất: 5%/ngày (lãi kép)\n━{13}\n💡 Dùng !bank check để cập nhật lãi\n⏳ Có thể rút sau 24h + check lãi`,
                         threadID,
                         messageID
                     );
@@ -178,7 +178,7 @@ module.exports = {
                     const hoursRemaining = Math.ceil((tomorrowStart - now) / (1000 * 60 * 60));
                     
                     return api.sendMessage(
-                        `⏳ CHƯA ĐỦ NGÀY!\n━━━━━━━━━━━━━━━━━━\n⏰ Cần chờ đến ngày mai từ 00:00 (UTC+7)\n⏱️ Còn lại: ~${hoursRemaining}h`,
+                        `⏳ CHƯA ĐỦ NGÀY!\n━{13}\n⏰ Cần chờ đến ngày mai từ 00:00 (UTC+7)\n⏱️ Còn lại: ~${hoursRemaining}h`,
                         threadID,
                         messageID
                     );
@@ -187,7 +187,7 @@ module.exports = {
                 // Kiểm tra điều kiện 2: Đã dùng lệnh check sau khi gửi chưa
                 if (lastCheck < lastDeposit) {
                     return api.sendMessage(
-                        `⚠️ VUI LÒNG CHECK TRƯỚC KHI RÚT!\n━━━━━━━━━━━━━━━━━━\n💡 Gõ !bank check để cập nhật lãi\n➡️ Sau đó mới rút tiền được`,
+                        `⚠️ VUI LÒNG CHECK TRƯỚC KHI RÚT!\n━{13}\n💡 Gõ !bank check để cập nhật lãi\n➡️ Sau đó mới rút tiền được`,
                         threadID,
                         messageID
                     );
@@ -245,7 +245,7 @@ module.exports = {
                 
                 if (bankRows.length === 0) {
                     return api.sendMessage(
-                        `🏦 TÀI KHOẢN NGÂN HÀNG\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số dư: 0\n━━━━━━━━━━━━━━━━━━\n💡 Dùng !bank gui để gửi tiền`,
+                        `🏦 TÀI KHOẢN NGÂN HÀNG\n━{13}\n👤 ${userName}\n💰 Số dư: 0\n━{13}\n💡 Dùng !bank gui để gửi tiền`,
                         threadID,
                         messageID
                     );
@@ -294,7 +294,7 @@ module.exports = {
                             await connection.commit();
 
                             return api.sendMessage(
-                                `🏦 CẬP NHẬT LÃI THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số dư cũ: ${balance.toLocaleString()}\n📈 Lãi ${daysPassed} ngày (5%/ngày): +${interestEarned.toLocaleString()}\n💵 Số dư mới: ${newBalance.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n✅ Bây giờ có thể rút tiền!`,
+                                `🏦 CẬP NHẬT LÃI THÀNH CÔNG!\n━{13}\n👤 ${userName}\n💰 Số dư cũ: ${balance.toLocaleString()}\n📈 Lãi ${daysPassed} ngày (5%/ngày): +${interestEarned.toLocaleString()}\n💵 Số dư mới: ${newBalance.toLocaleString()}\n━{13}\n✅ Bây giờ có thể rút tiền!`,
                                 threadID,
                                 messageID
                             );
@@ -318,7 +318,7 @@ module.exports = {
                 const hoursUntilNextDay = Math.ceil((tomorrowStart - now) / (1000 * 60 * 60));
 
                 return api.sendMessage(
-                    `🏦 TÀI KHOẢN NGÂN HÀNG\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số dư: ${newBalance.toLocaleString()}\n📊 Lãi suất: 5%/ngày\n⏰ Lãi kế tiếp: ~${hoursUntilNextDay}h\n━━━━━━━━━━━━━━━━━━\n💡 Dùng !bank rut để rút tiền`,
+                    `🏦 TÀI KHOẢN NGÂN HÀNG\n━{13}\n👤 ${userName}\n💰 Số dư: ${newBalance.toLocaleString()}\n📊 Lãi suất: 5%/ngày\n⏰ Lãi kế tiếp: ~${hoursUntilNextDay}h\n━{13}\n💡 Dùng !bank rut để rút tiền`,
                     threadID,
                     messageID
                 );
@@ -327,7 +327,7 @@ module.exports = {
             // HƯỚNG DẪN
             else {
                 return api.sendMessage(
-                    `🏦 NGÂN HÀNG - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n📥 !bank gui [số_tiền] - Gửi tiền\n📤 !bank rut [số_tiền] - Rút tiền\n🔍 !bank check - Kiểm tra & cập nhật lãi\n🛠️ !bank sync - Đồng bộ bank_pool (Boss/Admin)\n━━━━━━━━━━━━━━━━━━\n💰 Lãi suất: 5%/ngày (lãi kép)\n⚠️ Quy tắc rút tiền:\n  • Phải chờ sang ngày tiếp theo (00:00 UTC+7)\n  • Phải dùng !bank check để cập nhật lãi\n  • Sau đó mới có thể rút\n📝 Chỉ được gửi 1 lần/ngày (tính theo ngày lịch)`,
+                    `🏦 NGÂN HÀNG - HƯỚNG DẪN\n━{13}\n📥 !bank gui [số_tiền] - Gửi tiền\n📤 !bank rut [số_tiền] - Rút tiền\n🔍 !bank check - Kiểm tra & cập nhật lãi\n🛠️ !bank sync - Đồng bộ bank_pool (Boss/Admin)\n━{13}\n💰 Lãi suất: 5%/ngày (lãi kép)\n⚠️ Quy tắc rút tiền:\n  • Phải chờ sang ngày tiếp theo (00:00 UTC+7)\n  • Phải dùng !bank check để cập nhật lãi\n  • Sau đó mới có thể rút\n📝 Chỉ được gửi 1 lần/ngày (tính theo ngày lịch)`,
                     threadID,
                     messageID
                 );

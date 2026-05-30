@@ -5,7 +5,7 @@ const { getJoinGreeting, setJoinGreeting } = require('../../utils/joinGreetingSe
 module.exports = {
     name: "setwelcome",
     description: "Cài câu chào khi có người vào nhóm",
-    usage: "\n!setwelcome [câu chào] → Cài câu chào riêng cho nhóm\n!setwelcome check → Xem câu chào hiện tại\n!setwelcome reset → Quay về câu chào mặc định\n━━━━━━━━━━━━━━━━━━\n📌 Biến hỗ trợ: {name}, {names}, {count}, {@tag}, {@tags}\n💡 VD: !setwelcome Chào {@tag}, nhớ đọc nội quy nha!",
+    usage: "\n!setwelcome [câu chào] → Cài câu chào riêng cho nhóm\n!setwelcome check → Xem câu chào hiện tại\n!setwelcome reset → Quay về câu chào mặc định\n━{13}\n📌 Biến hỗ trợ: {name}, {names}, {count}, {@tag}, {@tags}\n💡 VD: !setwelcome Chào {@tag}, nhớ đọc nội quy nha!",
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
         const prefix = "!setwelcome";
@@ -45,13 +45,13 @@ module.exports = {
             const current = getJoinGreeting(threadID);
             return api.sendMessage(
                 current
-                    ? `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━━━━━━━━━━━━━━━━━━\n` +
+                    ? `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━{13}\n` +
                       `• Câu chào hiện tại:\n${current}\n\n` +
                       `• Cú pháp:\n${prefix} check\n${prefix} <nội dung câu chào>\n${prefix} reset\n\n` +
                                             `• Biến hỗ trợ:\n{name} = tên người vào nhóm đầu tiên\n{names} = danh sách tất cả tên\n{count} = số người vừa vào\n{@tag} = tag người vào đầu tiên\n{@tags} = tag tất cả người vừa vào\n\n` +
                                             `• Ví dụ:\n${prefix} Chào {@tag}, nhớ đọc nội quy nha!\n${prefix} Chào {@tags}, chào mừng đến với nhóm!\n\n` +
                       `• Dùng ${prefix} reset để quay về câu chào mặc định hiện tại.`
-                    : `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━━━━━━━━━━━━━━━━━━\n` +
+                    : `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━{13}\n` +
                       `• Nhóm đang dùng câu chào mặc định:\nChào mừng {names} đã tham gia nhóm! 🥳\n\n` +
                       `• Cú pháp:\n${prefix} check\n${prefix} <nội dung câu chào>\n${prefix} reset\n\n` +
                                             `• Biến hỗ trợ:\n{name} = tên người vào nhóm đầu tiên\n{names} = danh sách tất cả tên\n{count} = số người vừa vào\n{@tag} = tag người vào đầu tiên\n{@tags} = tag tất cả người vừa vào\n\n` +

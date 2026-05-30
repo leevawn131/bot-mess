@@ -50,7 +50,7 @@ async function sendChunks(api, threadID, replyToMessageID, lines) {
 module.exports = {
     name: "checkout",
     description: "Xem lịch sử thành viên rời nhóm theo ngày, tuần, tháng",
-    usage: "\n!checkout → Xem lịch sử rời nhóm hôm nay\n!checkout tuan → Xem trong tuần này\n!checkout thang → Xem trong tháng này\n━━━━━━━━━━━━━━━━━━\n📝 Hiển thị ai rời, thời gian, lý do\n↩️ Tuần: Reply STT để lấy link Facebook",
+    usage: "\n!checkout → Xem lịch sử rời nhóm hôm nay\n!checkout tuan → Xem trong tuần này\n!checkout thang → Xem trong tháng này\n━{13}\n📝 Hiển thị ai rời, thời gian, lý do\n↩️ Tuần: Reply STT để lấy link Facebook",
 
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;

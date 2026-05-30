@@ -1,12 +1,14 @@
 const { checkCooldown } = require("../../utils/cooldown");
 const { getAdminBotUIDs } = require("../../utils/checkPermission");
+const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
 
 module.exports = {
   name: "kick",
   description: "Kick thành viên (Có check quyền QTV)",
   usage:
-    "\n!kick @tag → Kick người được tag\n!kick (reply) → Kick người được reply\n!kick [uid] → Kick bằng User ID\n━━━━━━━━━━━━━━━━━━\n🛡️ Tự động bỏ qua QTV và Bot\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
+    "\n!kick @tag → Kick người được tag\n!kick (reply) → Kick người được reply\n!kick [uid] → Kick bằng User ID\n━{13}\n🛡️ Tự động bỏ qua QTV và Bot\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
   execute: async ({ api, event, args }) => {
+    await ensureMentionsFromHistory(api, event);
     const { threadID, messageID, senderID, mentions } = event;
 
     // Cooldown 5s

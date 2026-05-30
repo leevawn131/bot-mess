@@ -4,7 +4,7 @@ const { checkCooldown } = require("../../utils/cooldown");
 module.exports = {
   name: "shop",
   description: "Xem danh sách vật phẩm có thể mua",
-  usage: "\n!shop → Xem danh sách vật phẩm có thể mua\n━━━━━━━━━━━━━━━━━━\n🏪 Hiển thị tên, giá, mô tả từng item\n🛒 Mua: !buy [item-key] <số_lượng>",
+  usage: "\n!shop → Xem danh sách vật phẩm có thể mua\n━{13}\n🏪 Hiển thị tên, giá, mô tả từng item\n🛒 Mua: !buy [item-key] <số_lượng>",
 
   execute: async ({ api, event, config }) => {
     const { threadID, messageID, senderID } = event;
@@ -32,7 +32,7 @@ module.exports = {
         return api.sendMessage("❌ Shop hiện đang trống.", threadID, messageID);
       }
 
-      let msg = "🏪 SHOP VẬT PHẨM\n━━━━━━━━━━━━━━━━━━\n\n";
+      let msg = "🏪 SHOP VẬT PHẨM\n━{13}\n\n";
 
       items.forEach((item, index) => {
         msg += `${index + 1}. ${item.name}\n`;
@@ -41,7 +41,7 @@ module.exports = {
         msg += `   Mô tả: ${item.description}\n\n`;
       });
 
-      msg += "━━━━━━━━━━━━━━━━━━\n";
+      msg += "━{13}\n";
       msg += "👉 Mua: !buy [item-key]\n";
       msg += "Ví dụ: !buy shield";
 

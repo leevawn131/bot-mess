@@ -734,7 +734,7 @@ async function performAddToGroup({
 module.exports = {
   name: "add",
   description: "Mời thành viên vào nhóm bằng UID hoặc link Facebook",
-  usage: "\n!add [uid] → Thêm bằng User ID\n!add [link Facebook] → Thêm bằng link profile\n━━━━━━━━━━━━━━━━━━\n📌 Hỗ trợ link dạng: facebook.com/username hoặc fb://profile/id\n⚠️ Bot cần quyền QTV nhóm để thêm thành viên\n💡 Ví dụ: !add 100012345678",
+  usage: "\n!add [uid] → Thêm bằng User ID\n!add [link Facebook] → Thêm bằng link profile\n━{13}\n📌 Hỗ trợ link dạng: facebook.com/username hoặc fb://profile/id\n⚠️ Bot cần quyền QTV nhóm để thêm thành viên\n💡 Ví dụ: !add 100012345678",
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
 

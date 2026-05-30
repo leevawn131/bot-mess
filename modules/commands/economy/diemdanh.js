@@ -7,7 +7,7 @@ global.diemdanhLock = global.diemdanhLock || new Set();
 module.exports = {
     name: "diemdanh",
     description: "Điểm danh nhận quà hàng ngày",
-    usage: "\n!diemdanh → Điểm danh nhận xu miễn phí mỗi ngày\n━━━━━━━━━━━━━━━━━━\n🎁 Nhận xu ngẫu nhiên mỗi lần điểm danh\n👑 VIP nhận thưởng gấp đôi\n⏰ Reset lúc 00:00 hàng ngày",
+    usage: "\n!diemdanh → Điểm danh nhận xu miễn phí mỗi ngày\n━{13}\n🎁 Nhận xu ngẫu nhiên mỗi lần điểm danh\n👑 VIP nhận thưởng gấp đôi\n⏰ Reset lúc 00:00 hàng ngày",
     execute: async ({ api, event, config }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -66,7 +66,7 @@ module.exports = {
                 recordAction(senderID, 'checkin', 1);
             } catch (_) {}
 
-            let msg = `📅 ĐIỂM DANH THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n` +
+            let msg = `📅 ĐIỂM DANH THÀNH CÔNG!\n━{13}\n` +
                 `🎁 Quà tặng: +${reward.toLocaleString()} xu\n`;
             
             if (hasVIP) msg += `👑 VIP Bonus: x2 thuong!\n`;

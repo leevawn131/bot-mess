@@ -71,7 +71,7 @@ async function syncLoanWithCompoundInterest(loan, psid, now = new Date()) {
 module.exports = {
     name: "vay",
     description: "Vay tiền từ Boss (lãi 7.5%/ngày)",
-    usage: "\n!vay [số_tiền] [số_ngày] → Vay tiền mới\n!vay check → Xem thông tin khoản vay hiện tại\n!vay tra → Trả nợ (toàn bộ hoặc 1 phần)\n!vay checkall → Xem tất cả con nợ (Boss only)\n━━━━━━━━━━━━━━━━━━\n💰 Hạn mức: 1,000,000 xu | Lãi suất: 7.5%/ngày (lãi kép)\n⏰ Trả từ ngày mai | Quá hạn 3 ngày = Vào tù\n💡 Ví dụ: !vay 500000 7",
+    usage: "\n!vay [số_tiền] [số_ngày] → Vay tiền mới\n!vay check → Xem thông tin khoản vay hiện tại\n!vay tra → Trả nợ (toàn bộ hoặc 1 phần)\n!vay checkall → Xem tất cả con nợ (Boss only)\n━{13}\n💰 Hạn mức: 1,000,000 xu | Lãi suất: 7.5%/ngày (lãi kép)\n⏰ Trả từ ngày mai | Quá hạn 3 ngày = Vào tù\n💡 Ví dụ: !vay 500000 7",
     
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -101,7 +101,7 @@ module.exports = {
                 const seconds = totalSeconds % 60;
                 const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                 return api.sendMessage(
-                    `🔒 BẠN ĐANG TRONG TÙ!\n━━━━━━━━━━━━━━━━━━\n⏰ Còn lại: ${timeStr}\n❌ Không thể vay tiền trong tù`,
+                    `🔒 BẠN ĐANG TRONG TÙ!\n━{13}\n⏰ Còn lại: ${timeStr}\n❌ Không thể vay tiền trong tù`,
                     threadID,
                     messageID
                 );
@@ -134,9 +134,9 @@ module.exports = {
                 }
 
                 const now = new Date();
-                let msg = `📋 DANH SÁCH CON NỢ\n━━━━━━━━━━━━━━━━━━\n`;
+                let msg = `📋 DANH SÁCH CON NỢ\n━{13}\n`;
                 msg += `👥 Tổng: ${loanRows.length}\n`;
-                msg += `━━━━━━━━━━━━━━━━━━\n`;
+                msg += `━{13}\n`;
 
                 loanRows.forEach((loan, idx) => {
                     const principal = parseInt(loan.principal);
@@ -158,7 +158,7 @@ module.exports = {
                     msg += `💰 Gốc: ${principal.toLocaleString()}\n`;
                     msg += `💵 Nợ: ${Math.floor(totalDebt).toLocaleString()}\n`;
                     msg += `${status}\n`;
-                    msg += `━━━━━━━━━━━━━━━━━━\n`;
+                    msg += `━{13}\n`;
                 });
 
                 return api.sendMessage(msg, threadID, messageID);
@@ -170,7 +170,7 @@ module.exports = {
                 
                 if (loanRows.length === 0) {
                     return api.sendMessage(
-                        `💳 THÔNG TIN VAY\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n📊 Không có khoản vay nào\n━━━━━━━━━━━━━━━━━━\n💡 Vay tối đa: ${MAX_LOAN.toLocaleString()}\n💰 Lãi suất: 7.5%/ngày`,
+                        `💳 THÔNG TIN VAY\n━{13}\n👤 ${userName}\n📊 Không có khoản vay nào\n━{13}\n💡 Vay tối đa: ${MAX_LOAN.toLocaleString()}\n💰 Lãi suất: 7.5%/ngày`,
                         threadID,
                         messageID
                     );
@@ -192,11 +192,11 @@ module.exports = {
 
                 const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
                 
-                let msg = `💳 THÔNG TIN KHOẢN VAY\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n`;
+                let msg = `💳 THÔNG TIN KHOẢN VAY\n━{13}\n👤 ${userName}\n`;
                 msg += `💰 Gốc hiện tại: ${principal.toLocaleString()}\n`;
                 msg += `📈 Lãi suất: ${(interestRate * 100).toFixed(1)}%/ngày\n`;
                 msg += `💵 Tổng nợ hiện tại: ${totalDebt.toLocaleString()}\n`;
-                msg += `━━━━━━━━━━━━━━━━━━\n`;
+                msg += `━{13}\n`;
                 
                 if (isOverdue) {
                     msg += `❌ QUÁ HẠN ${daysOverdue} NGÀY!\n`;
@@ -207,7 +207,7 @@ module.exports = {
                     msg += `📅 Hạn trả: ${daysUntilDue} ngày nữa\n`;
                 }
                 
-                msg += `━━━━━━━━━━━━━━━━━━\n`;
+                msg += `━{13}\n`;
                 msg += `💡 Dùng !vay tra để trả nợ`;
 
                 return api.sendMessage(msg, threadID, messageID);
@@ -238,7 +238,7 @@ module.exports = {
                     const hoursLeft = Math.ceil((tomorrowStart - now) / (1000 * 60 * 60));
                     
                     return api.sendMessage(
-                        `⏰ CHƯA ĐỦ THỜI GIAN!\n━━━━━━━━━━━━━━━━━━\n⚠️ Vay hôm nay, trả từ ngày mai (00:00 UTC+7)\n⏳ Còn lại: ~${hoursLeft} giờ`,
+                        `⏰ CHƯA ĐỦ THỜI GIAN!\n━{13}\n⚠️ Vay hôm nay, trả từ ngày mai (00:00 UTC+7)\n⏳ Còn lại: ~${hoursLeft} giờ`,
                         threadID,
                         messageID
                     );
@@ -249,7 +249,7 @@ module.exports = {
 
                 const userCredits = parseInt(userRows[0].credits);
 
-                const replyMsg = `💳 TRẢ NỢ\n━━━━━━━━━━━━━━━━━━\n💰 Tổng nợ: ${totalDebt.toLocaleString()}\n💵 Tiền có: ${userCredits.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\nReply:\n1️⃣ - Trả toàn bộ\n2️⃣ - Trả một phần (gõ số tiền trực tiếp)`;
+                const replyMsg = `💳 TRẢ NỢ\n━{13}\n💰 Tổng nợ: ${totalDebt.toLocaleString()}\n💵 Tiền có: ${userCredits.toLocaleString()}\n━{13}\nReply:\n1️⃣ - Trả toàn bộ\n2️⃣ - Trả một phần (gõ số tiền trực tiếp)`;
                 const info = await api.sendMessage(replyMsg, threadID, messageID);
 
                 global.vayReplyContexts = global.vayReplyContexts || {};
@@ -274,7 +274,7 @@ module.exports = {
                 
                 if (loanRows.length > 0) {
                     return api.sendMessage(
-                        `❌ BẠN ĐÃ CÓ KHOẢN VAY!\n━━━━━━━━━━━━━━━━━━\n💡 Phải trả hết nợ cũ mới vay được\n📊 Dùng !vay check để xem chi tiết`,
+                        `❌ BẠN ĐÃ CÓ KHOẢN VAY!\n━{13}\n💡 Phải trả hết nợ cũ mới vay được\n📊 Dùng !vay check để xem chi tiết`,
                         threadID,
                         messageID
                     );
@@ -285,7 +285,7 @@ module.exports = {
 
                 if (!amountStr || !daysStr) {
                     return api.sendMessage(
-                        `💳 VAY TIỀN - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n📝 Cú pháp: !vay [số_tiền] [số_ngày]\n💡 Ví dụ: !vay 500000 7\n━━━━━━━━━━━━━━━━━━\n💰 Hạn mức: ${MAX_LOAN.toLocaleString()}\n📈 Lãi suất: 7.5%/ngày\n⏰ Trả từ ngày mai (00:00 UTC+7)`,
+                        `💳 VAY TIỀN - HƯỚNG DẪN\n━{13}\n📝 Cú pháp: !vay [số_tiền] [số_ngày]\n💡 Ví dụ: !vay 500000 7\n━{13}\n💰 Hạn mức: ${MAX_LOAN.toLocaleString()}\n📈 Lãi suất: 7.5%/ngày\n⏰ Trả từ ngày mai (00:00 UTC+7)`,
                         threadID,
                         messageID
                     );
@@ -300,7 +300,7 @@ module.exports = {
 
                 if (amount > MAX_LOAN) {
                     return api.sendMessage(
-                        `❌ VƯỢT HẠN MỨC VAY!\n━━━━━━━━━━━━━━━━━━\n💰 Hạn mức tối đa: ${MAX_LOAN.toLocaleString()}\n📝 Bạn muốn vay: ${amount.toLocaleString()}`,
+                        `❌ VƯỢT HẠN MỨC VAY!\n━{13}\n💰 Hạn mức tối đa: ${MAX_LOAN.toLocaleString()}\n📝 Bạn muốn vay: ${amount.toLocaleString()}`,
                         threadID,
                         messageID
                     );
@@ -329,7 +329,7 @@ module.exports = {
                 await execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [amount, BOSS_ID]);
 
                 return api.sendMessage(
-                    `✅ VAY TIỀN THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số tiền vay: ${amount.toLocaleString()}\n📅 Thời hạn: ${days} ngày\n📈 Lãi suất: 7.5%/ngày (lãi kép)\n━━━━━━━━━━━━━━━━━━\n💵 Dự kiến lãi: ~${Math.floor(estimatedInterest).toLocaleString()}\n💸 Dự kiến trả: ~${Math.floor(estimatedTotal).toLocaleString()}\n⏰ Trả từ ngày mai (00:00 UTC+7)\n━━━━━━━━━━━━━━━━━━\n⚠️ Quá hạn 3 ngày = Vào tù!`,
+                    `✅ VAY TIỀN THÀNH CÔNG!\n━{13}\n👤 ${userName}\n💰 Số tiền vay: ${amount.toLocaleString()}\n📅 Thời hạn: ${days} ngày\n📈 Lãi suất: 7.5%/ngày (lãi kép)\n━{13}\n💵 Dự kiến lãi: ~${Math.floor(estimatedInterest).toLocaleString()}\n💸 Dự kiến trả: ~${Math.floor(estimatedTotal).toLocaleString()}\n⏰ Trả từ ngày mai (00:00 UTC+7)\n━{13}\n⚠️ Quá hạn 3 ngày = Vào tù!`,
                     threadID,
                     messageID
                 );
@@ -382,7 +382,7 @@ module.exports = {
                 // Trả toàn bộ
                 if (currentCredits < totalDebt) {
                     return api.sendMessage(
-                        `💸 KHÔNG ĐỦ TIỀN!\n━━━━━━━━━━━━━━━━━━\n💰 Cần: ${totalDebt.toLocaleString()}\n💵 Có: ${currentCredits.toLocaleString()}\n💔 Thiếu: ${(totalDebt - currentCredits).toLocaleString()}`,
+                        `💸 KHÔNG ĐỦ TIỀN!\n━{13}\n💰 Cần: ${totalDebt.toLocaleString()}\n💵 Có: ${currentCredits.toLocaleString()}\n💔 Thiếu: ${(totalDebt - currentCredits).toLocaleString()}`,
                         threadID,
                         messageID
                     );
@@ -402,7 +402,7 @@ module.exports = {
 
                 delete replyContexts[event.messageReply?.messageID];
                 return api.sendMessage(
-                    `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${totalDebt.toLocaleString()}\n💵 Còn lại: ${(currentCredits - totalDebt).toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
+                    `✅ TRẢ NỢ THÀNH CÔNG!\n━{13}\n👤 ${userName}\n💰 Đã trả: ${totalDebt.toLocaleString()}\n💵 Còn lại: ${(currentCredits - totalDebt).toLocaleString()}\n━{13}\n🎉 Hết nợ rồi!`,
                     threadID,
                     messageID
                 );
@@ -437,7 +437,7 @@ module.exports = {
                     delete replyContexts[event.messageReply?.messageID];
 
                     return api.sendMessage(
-                        `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Còn lại: ${(currentCredits - partialAmount).toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
+                        `✅ TRẢ NỢ THÀNH CÔNG!\n━{13}\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Còn lại: ${(currentCredits - partialAmount).toLocaleString()}\n━{13}\n🎉 Hết nợ rồi!`,
                         threadID,
                         messageID
                     );
@@ -461,7 +461,7 @@ module.exports = {
                     }
 
                     return api.sendMessage(
-                        `✅ TRẢ NỢ 1 PHẦN THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Nợ còn lại: ${newPrincipal.toLocaleString()}\n━━━━━━━━━━━━━━━━━━\n💡 Dùng !vay check để xem chi tiết`,
+                        `✅ TRẢ NỢ 1 PHẦN THÀNH CÔNG!\n━{13}\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Nợ còn lại: ${newPrincipal.toLocaleString()}\n━{13}\n💡 Dùng !vay check để xem chi tiết`,
                         threadID,
                         messageID
                     );

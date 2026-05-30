@@ -9,7 +9,7 @@ const BOSS_ID = "100037351338722";
 module.exports = {
     name: "daigia",
     description: "Xem top 10 đại gia giàu nhất",
-    usage: "\n!daigia → Xem bảng xếp hạng Top 10 người giàu nhất\n━━━━━━━━━━━━━━━━━━\n📊 Xếp hạng theo tổng xu hiện có\n🏆 Hiển thị tên, số xu và thứ hạng của bạn",
+    usage: "\n!daigia → Xem bảng xếp hạng Top 10 người giàu nhất\n━{13}\n📊 Xếp hạng theo tổng xu hiện có\n🏆 Hiển thị tên, số xu và thứ hạng của bạn",
     execute: async ({ api, event }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -74,7 +74,7 @@ module.exports = {
 
             // 4. Tạo message hiển thị
             let msg = "💎 TOP 10 ĐẠI GIA 💎\n";
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n";
+            msg += "━━━━━━━━━━━━━━━━━━━━━━━\n\n";
 
             for (let i = 0; i < rows.length; i++) {
                 const userID = String(rows[i].psid);
@@ -94,7 +94,7 @@ module.exports = {
                 msg += `${medal} ${rank}. ${userName}: ${credits.toLocaleString()} credits\n`;
             }
 
-            msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━";
+            msg += "\n━━━━━━━━━━━━━━━━━━━━━━━";
             return api.sendMessage(msg, threadID);
 
         } catch (e) {

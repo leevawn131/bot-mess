@@ -6,7 +6,7 @@ const { checkCooldown } = require('../../utils/cooldown');
 module.exports = {
     name: "grinfo",
     description: "Xem thông tin nhóm",
-    usage: "\n!grinfo → Xem thông tin chi tiết nhóm hiện tại\n━━━━━━━━━━━━━━━━━━\n📌 Hiển thị: Tên nhóm, số thành viên, QTV, ảnh nhóm",
+    usage: "\n!grinfo → Xem thông tin chi tiết nhóm hiện tại\n━{13}\n📌 Hiển thị: Tên nhóm, số thành viên, QTV, ảnh nhóm",
     execute: async ({ api, event }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -39,7 +39,7 @@ module.exports = {
 
             // 3. Soạn nội dung
             let msg = `📂 === HỒ SƠ NHÓM === 📂\n`;
-            msg += `━━━━━━━━━━━━━━━━━━\n`;
+            msg += `━{13}\n`;
             msg += `📛 Tên: ${name}\n`;
             msg += `🆔 ID Nhóm: ${threadID}\n`;
             msg += `🛡️ Phê duyệt: ${approvalMode}\n`;
@@ -47,7 +47,7 @@ module.exports = {
             msg += `👥 Tổng thành viên: ${totalMembers}\n`;
             msg += `   ♂️ Nam: ${boy} | ♀️ Nữ: ${girl} | 🌈 Khác: ${other}\n`;
             msg += `🎨 Emoji: ${emoji}\n`;
-            msg += `━━━━━━━━━━━━━━━━━━`;
+            msg += `━{13}`;
 
             // Ép kiểu messageID về chuỗi thuần túy để tránh lỗi "not String"
             const replyID = String(messageID);

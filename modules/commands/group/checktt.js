@@ -192,7 +192,7 @@ module.exports = {
   name: "checktt",
   description: "Kiểm tra tương tác, lọc/kick/reset dữ liệu tin nhắn",
   usage:
-    "\n!checktt all → Xem top tương tác tất cả thành viên\n!checktt → Xem top tương tác của 1 người\n!checktt ngày → Top tương tác hôm nay\n!checktt tuần → Top tuần này\n!checktt tháng → Top tháng này\n!checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n!checktt kickdead → Kick thành viên bị bay acc\n!checktt clear → Làm sạch dữ liệu tương tác\n!checktt reset → Reset dữ liệu nhóm (Admin)\n━━━━━━━━━━━━━━━━━━\n📊 Thống kê tự động theo ngày/tuần/tháng",
+    "\n!checktt all → Xem top tương tác tất cả thành viên\n!checktt → Xem top tương tác của 1 người\n!checktt ngày → Top tương tác hôm nay\n!checktt tuần → Top tuần này\n!checktt tháng → Top tháng này\n!checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n!checktt kickdead → Kick thành viên bị bay acc\n!checktt clear → Làm sạch dữ liệu tương tác\n!checktt reset → Reset dữ liệu nhóm (Admin)\n━{13}\n📊 Thống kê tự động theo ngày/tuần/tháng",
 
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
@@ -584,7 +584,7 @@ module.exports = {
           : `📊 TOP ${config.label}`;
         const lines = [
           `${title}`,
-          "━━━━━━━━━━━━━━━━━━",
+          "━{13}",
           ...ranked.map((item, idx) => {
             const status = item.inGroup ? "" : " (❌)";
             return `${idx + 1}. ${item.name}${status} — ${Number(item[config.metricKey] || 0)}`;
@@ -696,7 +696,7 @@ module.exports = {
 
       const lines = [
         `${title}`,
-        "━━━━━━━━━━━━━━━━━━",
+        "━━━━━━━━━━━━━",
         ...ranked.map((item, idx) => {
           const status = item.inGroup ? "" : " (❌)";
           return `${idx + 1}. ${item.name}${status} — ${item.count}`;

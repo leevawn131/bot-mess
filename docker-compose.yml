@@ -43,6 +43,8 @@ services:
       - ./youtube_cookies.txt:/app/youtube_cookies.txt
       - ./modules:/app/modules
       - ./index.js:/app/index.js
+      - bot_runtime:/app/runtime
+      - ./runtime:/app/runtime
 
 volumes:
   mysql_data:

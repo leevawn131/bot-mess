@@ -310,7 +310,7 @@ module.exports = {
             return api.sendMessage(
                 [
                     "🛠 CMD - Quản lý lệnh",
-                    "━━━━━━━━━━━━━━━━━━",
+                    "━{13}",
                     "!cmd count - xem số module đang nạp",
                     "!cmd list - xem danh sách command/event/util",
                     "!cmd info <tên...> - xem thông tin module",
@@ -371,8 +371,8 @@ module.exports = {
             return api.sendMessage(
                 [
                     `📘 Thông tin lệnh (${targets.length - missing}/${targets.length})`,
-                    "━━━━━━━━━━━━━━━━━━",
-                    outputs.join("\n\n━━━━━━━━━━━━━━━━━━\n"),
+                    "━{13}",
+                    outputs.join("\n\n━{13}\n"),
                 ].join("\n"),
                 threadID,
                 messageID,

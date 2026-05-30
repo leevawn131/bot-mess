@@ -40,7 +40,7 @@ function resolveCommand(commandName) {
 module.exports = {
   name: "help",
   description: "Xem danh sách lệnh theo nhóm",
-  usage: "\n!help → Xem danh sách tất cả lệnh theo nhóm\n!help [tên_lệnh] → Xem hướng dẫn chi tiết của 1 lệnh\n━━━━━━━━━━━━━━━━━━\n💡 Ví dụ: !help taixiu",
+  usage: "\n!help → Xem danh sách tất cả lệnh theo nhóm\n!help [tên_lệnh] → Xem hướng dẫn chi tiết của 1 lệnh\n━{13}\n💡 Ví dụ: !help taixiu",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
     const prefix = config?.prefix || "!";
@@ -71,8 +71,8 @@ module.exports = {
         {
           title: "🛡️ QTV NHÓM (Quản lý Box)",
           commands: [
-            "go", "kick", "antiout", "setwelcome", "luatnhom", "checkbd", "setbd",
-            "checkout", "antitagall", "antithuhoi"
+            "go", "kick", "anti", "setwelcome", "luatnhom", "checkbd", "setbd",
+            "checkout"
           ],
         },
         {

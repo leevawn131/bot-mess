@@ -194,7 +194,7 @@ module.exports = {
   name: "music",
   description: "Tải nhạc từ YouTube hoặc SoundCloud",
   usage:
-    "\n!music [tên bài hát] → Tìm và tải nhạc\n!music [link YouTube/SoundCloud] → Tải từ link\n━━━━━━━━━━━━━━━━━━\n🎧 Hỗ trợ: YouTube, SoundCloud\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: !music See You Again",
+    "\n!music [tên bài hát] → Tìm và tải nhạc\n!music [link YouTube/SoundCloud] → Tải từ link\n━{13}\n🎧 Hỗ trợ: YouTube, SoundCloud\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: !music See You Again",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
 

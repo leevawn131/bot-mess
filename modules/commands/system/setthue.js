@@ -1,9 +1,10 @@
 const { execute } = require("../../utils/database");
+const { ensureRentedGroupsSchema } = require("../../utils/rentalSchema");
 
 module.exports = {
   name: "setthue",
   description: "Thêm nhóm đã thuê thủ công (Chỉ Admin)",
-  usage: "\n!setthue [số_tháng] → Gia hạn cho nhóm hiện tại\n!setthue [threadID] [số_tháng] → Gia hạn cho nhóm khác\n━━━━━━━━━━━━━━━━━━\n📌 Đơn vị: số + m (tháng) hoặc số + d (ngày)\n🔒 Chỉ Admin bot mới dùng được\n💡 Ví dụ: !setthue 3m hoặc !setthue 7d",
+  usage: "\n!setthue [số_tháng] → Gia hạn cho nhóm hiện tại\n!setthue [threadID] [số_tháng] → Gia hạn cho nhóm khác\n━{13}\n📌 Đơn vị: số + m (tháng) hoặc số + d (ngày)\n🔒 Chỉ Admin bot mới dùng được\n💡 Ví dụ: !setthue 3m hoặc !setthue 7d",
   
   async execute({ api, event, args, config }) {
     // 1. Kiểm tra quyền Admin
@@ -52,12 +53,17 @@ module.exports = {
     }
 
     try {
+      await ensureRentedGroupsSchema();
+
       // 3. Cập nhật Database
       await execute(`
-        INSERT INTO rented_groups (thread_id, expire_date)
-        VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY))
-        ON DUPLICATE KEY UPDATE expire_date = DATE_ADD(expire_date, INTERVAL ? DAY)
-      `, [targetThreadID, daysToAdd, daysToAdd]);
+        INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at)
+        VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP)
+        ON DUPLICATE KEY UPDATE
+          expire_date = DATE_ADD(GREATEST(COALESCE(expire_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP), INTERVAL ? DAY),
+          renter_id = ?,
+          rented_at = CURRENT_TIMESTAMP
+      `, [targetThreadID, daysToAdd, String(event.senderID), daysToAdd, String(event.senderID)]);
 
       // 4. Lấy thời hạn mới để hiển thị
       const info = await execute(
@@ -98,7 +104,8 @@ module.exports = {
 
     } catch (error) {
       console.error("Lỗi khi setthue thủ công:", error);
-      api.sendMessage("❌ Lỗi CSDL khi thêm ngày thuê nhóm.", event.threadID);
+      const errorText = error?.sqlMessage || error?.message || "Không rõ nguyên nhân";
+      api.sendMessage(`❌ Lỗi CSDL khi thêm ngày thuê nhóm.\nChi tiết: ${errorText}`, event.threadID);
     }
   }
 };

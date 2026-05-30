@@ -6,16 +6,27 @@ async function resolveUserName(api, uid) {
   if (!id) return null;
 
   try {
-    const info = await api.getUserInfo(id, false);
+    const info = await api.getUserInfo(id);
 
-    if (info && typeof info === "object") {
-      if (typeof info.name === "string" && info.name.trim()) {
-        return info.name.trim();
-      }
+    // Handle multiple possible shapes returned by different ws3-fca versions
+    if (!info) return null;
 
-      const keyed = info[id];
-      if (keyed && typeof keyed.name === "string" && keyed.name.trim()) {
-        return keyed.name.trim();
+    // Case: { id: { name: '...' } } or { '<id>': { name: '...' } }
+    if (info[id] && typeof info[id].name === 'string' && info[id].name.trim()) {
+      return info[id].name.trim();
+    }
+
+    // Case: { name: 'Full Name' }
+    if (typeof info.name === 'string' && info.name.trim()) {
+      return info.name.trim();
+    }
+
+    // Case: array or first entry contains mapping
+    if (Array.isArray(info) && info.length > 0) {
+      const first = info[0];
+      if (first && typeof first === 'object') {
+        if (first[id] && typeof first[id].name === 'string') return first[id].name.trim();
+        if (typeof first.name === 'string') return first.name.trim();
       }
     }
   } catch {}
@@ -26,7 +37,7 @@ async function resolveUserName(api, uid) {
 module.exports = {
   name: "adminbot",
   description: "Hiển thị danh sách admin bot",
-  usage: "\n!adminbot → Xem danh sách admin của bot\n━━━━━━━━━━━━━━━━━━\n👑 Hiển thị tên và link Facebook của từng admin",
+  usage: "\n!adminbot → Xem danh sách admin của bot\n━{13}\n👑 Hiển thị tên và link Facebook của từng admin",
 
   execute: async ({ api, event }) => {
     const { threadID, messageID, senderID } = event;
@@ -65,7 +76,7 @@ module.exports = {
         adminIds.map((id) => resolveUserName(api, id)),
       );
 
-      let msg = `👑 DANH SÁCH ADMIN BOT (${adminIds.length})\n━━━━━━━━━━━━━━━━━━\n`;
+      let msg = `👑 DANH SÁCH ADMIN BOT (${adminIds.length})\n━{13}\n`;
 
       adminIds.forEach((id, index) => {
         const name = names[index] || "Không lấy được tên";

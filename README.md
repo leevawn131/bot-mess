@@ -128,7 +128,7 @@ scripts/          # Script migration/bảo trì
 
 - Kinh tế: `tien`, `bank`, `lamviec`, `diemdanh`, `shop`, `buy`, `inv`, `use`, `chuyentien`, `vay`, `cuop`, `quest`.
 - Minigame: `taixiu`, `baucua`, `lode`, `duoihinhbatchu`.
-- Nhóm: `add`, `kick`, `grinfo`, `antiout`, `checkout`, `checktt`, `setbd`.
+- Nhóm: `add`, `kick`, `grinfo`, `anti`, `checkout`, `checktt`, `setbd`.
 - Công cụ: `help`, `ai`, `dich`, `say`, `mp3`, `vidgai`, `changelog`, `reset`.
 - Hệ thống: `ping`, `uid`, `go`, `mode`, `tu`.
 

@@ -23,7 +23,7 @@ function triggerFileRestart() {
 module.exports = {
   name: "reset",
   description: "Khởi động lại Bot",
-  usage: "\n!reset → Khởi động lại bot và thông báo khi thành công\n━━━━━━━━━━━━━━━━━━\n🔄 Tự động phát hiện pm2/nodemon/docker\n🔒 Chỉ Admin bot mới dùng được",
+  usage: "\n!reset → Khởi động lại bot và thông báo khi thành công\n━{13}\n🔄 Tự động phát hiện pm2/nodemon/docker\n🔒 Chỉ Admin bot mới dùng được",
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID, messageID } = event;
     const adminIDs = config.adminIDs || [];

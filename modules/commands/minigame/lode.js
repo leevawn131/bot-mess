@@ -12,7 +12,7 @@ const RATE = 70; // Tỉ lệ 1 ăn 70
 module.exports = {
   name: "lode",
   description: "Ghi lô đề (1 ăn 70) - Xổ ngay lập tức",
-  usage: "\n!lode [số 00-99] [tiền_cược] → Ghi lô đề\n━━━━━━━━━━━━━━━━━━\n🎰 Tỉ lệ: 1 ăn 70 | Tối đa 5 con/lần\n🎲 Xổ ngay lập tức sau khi ghi\n💡 Ví dụ: !lode 69 10000\n💡 Nhiều con: !lode 12 5000 45 3000",
+  usage: "\n!lode [số 00-99] [tiền_cược] → Ghi lô đề\n━{13}\n🎰 Tỉ lệ: 1 ăn 70 | Tối đa 5 con/lần\n🎲 Xổ ngay lập tức sau khi ghi\n💡 Ví dụ: !lode 69 10000\n💡 Nhiều con: !lode 12 5000 45 3000",
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID, messageID } = event;
@@ -136,7 +136,7 @@ module.exports = {
             (now - dueDate) / (1000 * 60 * 60 * 24),
           );
           return api.sendMessage(
-            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
+            `⚠️ BẠN ĐANG NỢ TIỀN!\n━{13}\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━{13}\n💡 Trả nợ để cược bình thường!`,
             threadID,
             messageID,
           );

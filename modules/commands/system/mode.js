@@ -282,7 +282,7 @@ module.exports = {
                     : `\n⌛ Chuyển sau khoảng thời gian (dữ liệu cũ):\n   ${inTask.mode.toUpperCase()} sau ${inTask.duration || "--:--"} (dự kiến ${formatDateTimeVN(inTask.executeAt)})\n   Còn lại khoảng: ${formatCountdown(inTask.executeAt - Date.now())}`;
 
             return api.sendMessage(
-                `🎛️ MODE HIỆN TẠI\n━━━━━━━━━━━━━━━━━━\n${modeEmoji[currentMode]} Mode: ${currentMode.toUpperCase()}\n📝 ${modeDesc[currentMode]}${timerLine}${inLine}\n━━━━━━━━━━━━━━━━━━\n💡 !mode user - Đổi mode ngay\n💡 !mode qtv 23:00 - Lịch hằng ngày\n💡 !mode in 00:30 user - Đổi ngay, 30 phút sau quay về mode cũ\n💡 !mode off hoặc !mode off qtv hoặc !mode off in`,
+                `🎛️ MODE HIỆN TẠI\n━{13}\n${modeEmoji[currentMode]} Mode: ${currentMode.toUpperCase()}\n📝 ${modeDesc[currentMode]}${timerLine}${inLine}\n━{13}\n💡 !mode user - Đổi mode ngay\n💡 !mode qtv 23:00 - Lịch hằng ngày\n💡 !mode in 00:30 user - Đổi ngay, 30 phút sau quay về mode cũ\n💡 !mode off hoặc !mode off qtv hoặc !mode off in`,
                 threadID,
                 messageID
             );
@@ -354,7 +354,7 @@ module.exports = {
             await writeSchedules(schedules);
 
             return api.sendMessage(
-                `✅ ĐÃ ĐỔI MODE TẠM THỜI!\n━━━━━━━━━━━━━━━━━━\n🎛️ Mode hiện tại: ${targetMode.toUpperCase()}\n⌛ Sau ${durationArg} sẽ tự quay về: ${currentMode.toUpperCase()}\n🕒 Dự kiến quay về: ${formatDateTimeVN(restoreAt)}\n━━━━━━━━━━━━━━━━━━\n💡 Hủy lịch quay về: !mode off in`,
+                `✅ ĐÃ ĐỔI MODE TẠM THỜI!\n━{13}\n🎛️ Mode hiện tại: ${targetMode.toUpperCase()}\n⌛ Sau ${durationArg} sẽ tự quay về: ${currentMode.toUpperCase()}\n🕒 Dự kiến quay về: ${formatDateTimeVN(restoreAt)}\n━{13}\n💡 Hủy lịch quay về: !mode off in`,
                 threadID,
                 messageID
             );
@@ -462,7 +462,7 @@ module.exports = {
         // Kiểm tra mode hợp lệ
         if (!VALID_MODES.includes(newMode)) {
             return api.sendMessage(
-                `⚠️ Mode không hợp lệ!\n━━━━━━━━━━━━━━━━━━\n💡 Hợp lệ: user, qtv, adminbot\n💡 Ví dụ: !mode qtv`,
+                `⚠️ Mode không hợp lệ!\n━{13}\n💡 Hợp lệ: user, qtv, adminbot\n💡 Ví dụ: !mode qtv`,
                 threadID,
                 messageID
             );
@@ -524,7 +524,7 @@ module.exports = {
             const finalList = getThreadSchedules(schedules, threadIDStr);
 
             return api.sendMessage(
-                `✅ LƯU LỊCH MODE THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n${finalList.map((item, index) => `⏰ ${index + 1}. ${item.time} -> ${item.mode.toUpperCase()}`).join("\n")}\n━━━━━━━━━━━━━━━━━━\n💡 Tối đa 2 lịch\n💡 Xóa lịch: !mode off <mode|HH:MM>`,
+                `✅ LƯU LỊCH MODE THÀNH CÔNG!\n━{13}\n${finalList.map((item, index) => `⏰ ${index + 1}. ${item.time} -> ${item.mode.toUpperCase()}`).join("\n")}\n━{13}\n💡 Tối đa 2 lịch\n💡 Xóa lịch: !mode off <mode|HH:MM>`,
                 threadID,
                 messageID
             );
@@ -544,7 +544,7 @@ module.exports = {
         await writeSettings(settings);
 
         return api.sendMessage(
-            `✅ ĐỔI MODE THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n${modeEmoji[newMode]} Mode: ${newMode.toUpperCase()}\n📝 ${modeDesc[newMode]}\n━━━━━━━━━━━━━━━━━━\n💡 Mode này áp dụng ngay cho tất cả lệnh!`,
+            `✅ ĐỔI MODE THÀNH CÔNG!\n━{13}\n${modeEmoji[newMode]} Mode: ${newMode.toUpperCase()}\n📝 ${modeDesc[newMode]}\n━{13}\n💡 Mode này áp dụng ngay cho tất cả lệnh!`,
             threadID,
             messageID
         );

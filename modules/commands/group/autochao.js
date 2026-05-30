@@ -5,7 +5,7 @@ const { getAutochaoSetting, setAutochaoEnabled } = require("../../utils/autochao
 module.exports = {
     name: "autochao",
     description: "Bật/tắt auto chào để bot tự gửi sticker khi có người nhắn lời chào",
-    usage: "\n!autochao on → Bật auto chào\n!autochao off → Tắt auto chào\n!autochao status → Xem trạng thái hiện tại\n━━━━━━━━━━━━━━━━━━\n🤖 Bot sẽ tự gửi sticker khi phát hiện lời chào ngắn như hi/hello/chào\n🔒 Chỉ QTV nhóm hoặc chủ bot mới dùng được",
+    usage: "\n!autochao on → Bật auto chào\n!autochao off → Tắt auto chào\n!autochao status → Xem trạng thái hiện tại\n━{13}\n🤖 Bot sẽ tự gửi sticker khi phát hiện lời chào ngắn như hi/hello/chào\n🔒 Chỉ QTV nhóm hoặc chủ bot mới dùng được",
 
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;

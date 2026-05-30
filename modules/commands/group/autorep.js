@@ -131,7 +131,7 @@ function parseKeywordOnly(args) {
 module.exports = {
     name: "autorep",
     description: "Tạo autorep theo từ khóa trong nhóm",
-    usage: "\n!autorep [cụm từ] | [nội dung autorep] → Lưu autorep cho nhóm\n!autorep [cụm từ] | → Lưu chỉ media nếu bạn reply ảnh/video\n!autorep list → Xem danh sách autorep\n!autorep del [cụm từ] → Xóa autorep\nVí dụ: !autorep @Ngân Hà | Đúng rồi em\n━━━━━━━━━━━━━━━━━━\n💬 Khi tin nhắn chứa cụm từ, bot sẽ tự nhắn lại nội dung đã cài\n🖼️ Nếu reply ảnh/video khi cài, bot sẽ gửi kèm media đó\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
+    usage: "\n!autorep [cụm từ] | [nội dung autorep] → Lưu autorep cho nhóm\n!autorep [cụm từ] | → Lưu chỉ media nếu bạn reply ảnh/video\n!autorep list → Xem danh sách autorep\n!autorep del [cụm từ] → Xóa autorep\n!autorep clear → Xóa hết autorep của nhóm (chỉ chủ bot/adminBot)\nVí dụ: !autorep @Ngân Hà | Đúng rồi em\n━━━━━━━━━━━━━━━━━━\n💬 Khi tin nhắn chứa cụm từ, bot sẽ tự nhắn lại nội dung đã cài\n🖼️ Nếu reply ảnh/video khi cài, bot sẽ gửi kèm media đó",
 
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;
@@ -154,14 +154,6 @@ module.exports = {
             const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
             const isBotAdmin = adminIDs.includes(botID);
 
-            if (!isSenderAdmin && !isSenderBotAdmin) {
-                return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh autorep.", threadID, messageID);
-            }
-
-            if (!isBotAdmin) {
-                return api.sendMessage("❌ Bot cần quyền Quản Trị Viên để gửi autorep kèm media.", threadID, messageID);
-            }
-
             const action = String(args[0] || "").trim().toLowerCase();
 
             if (["list", "ls", "show"].includes(action)) {
@@ -170,6 +162,26 @@ module.exports = {
                     threadID,
                     messageID,
                 );
+            }
+
+            if (["clear", "clr", "reset"].includes(action)) {
+                // only adminBot (bot owner) can clear all rules
+                if (!isSenderBotAdmin) {
+                    return api.sendMessage("❌ Chỉ chủ bot mới được dùng lệnh clear autorep.", threadID, messageID);
+                }
+
+                const rules = listAutorepRules(threadID);
+                if (!rules.length) {
+                    return api.sendMessage("ℹ️ Nhóm chưa có autorep nào để clear.", threadID, messageID);
+                }
+
+                for (const r of rules) {
+                    try {
+                        removeAutorepRule(threadID, r.keyword);
+                    } catch (e) {}
+                }
+
+                return api.sendMessage(`✅ Đã xóa ${rules.length} autorep cho nhóm này.`, threadID, messageID);
             }
 
             if (["del", "delete", "remove", "xoa", "xóa"].includes(action)) {
@@ -184,18 +196,10 @@ module.exports = {
 
                 const removed = removeAutorepRule(threadID, keyword);
                 if (!removed) {
-                    return api.sendMessage(
-                        `❌ Không tìm thấy autorep cho từ khóa "${keyword}".`,
-                        threadID,
-                        messageID,
-                    );
+                    return api.sendMessage(`❌ Không tìm thấy autorep cho từ khóa "${keyword}".`, threadID, messageID);
                 }
 
-                return api.sendMessage(
-                    `✅ Đã xóa autorep cho từ khóa "${removed.keyword}".`,
-                    threadID,
-                    messageID,
-                );
+                return api.sendMessage(`✅ Đã xóa autorep cho từ khóa "${removed.keyword}".`, threadID, messageID);
             }
 
             const replyAttachment = getThreadAttachment(event);

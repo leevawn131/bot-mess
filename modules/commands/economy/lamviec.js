@@ -6,7 +6,7 @@ const { consumeEnergy } = require("../../utils/energySystem");
 module.exports = {
   name: "lamviec",
   description: "Làm việc kiếm tiền",
-  usage: "\n!lamviec → Làm việc kiếm xu (nghề ngẫu nhiên)\n━━━━━━━━━━━━━━━━━━\n💼 Mỗi lần làm nhận xu ngẫu nhiên theo nghề\n⚡ Tốn năng lượng mỗi lần làm\n🎰 Có cơ hội thưởng tăng ca x2\n⏳ Cooldown: 60 giây",
+  usage: "\n!lamviec → Làm việc kiếm xu (nghề ngẫu nhiên)\n━{13}\n💼 Mỗi lần làm nhận xu ngẫu nhiên theo nghề\n⚡ Tốn năng lượng mỗi lần làm\n🎰 Có cơ hội thưởng tăng ca x2\n⏳ Cooldown: 60 giây",
   execute: async ({ api, event, config }) => {
     const { threadID, messageID, senderID } = event;
 

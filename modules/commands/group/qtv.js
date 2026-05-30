@@ -3,7 +3,7 @@ const { checkCooldown } = require('../../utils/cooldown');
 module.exports = {
     name: "qtv",
     description: "Xem danh sách Quản trị viên nhóm",
-    usage: "\n!qtv → Xem danh sách QTV của nhóm hiện tại\n━━━━━━━━━━━━━━━━━━\n🛡️ Hiển thị STT và tên từng QTV",
+    usage: "\n!qtv → Xem danh sách QTV của nhóm hiện tại\n━{13}\n🛡️ Hiển thị STT và tên từng QTV",
     execute: async ({ api, event }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -27,7 +27,7 @@ module.exports = {
             // 3. Lấy mảng thông tin thành viên có sẵn trong nhóm
             const memberInfo = threadInfo.userInfo || [];
 
-            let msg = `🛡️ DANH SÁCH QUẢN TRỊ VIÊN (${adminIDs.length})\n━━━━━━━━━━━━━━━━━━\n`;
+            let msg = `🛡️ DANH SÁCH QUẢN TRỊ VIÊN (${adminIDs.length})\n━{13}\n`;
             
             // 4. Duyệt qua danh sách Admin
             adminIDs.forEach((id, index) => {

@@ -49,8 +49,8 @@ module.exports = {
         }
 
         // Validate độ dài
-        if (nickname.length > 128) {
-            return api.sendMessage("⚠️ Biệt danh quá dài (tối đa 128 ký tự).", threadID);
+        if (nickname.length > 32) {
+            return api.sendMessage("⚠️ Biệt danh quá dài (tối đa 32 ký tự).", threadID);
         }
 
         // 2. LẤY THÔNG TIN QUYỀN HẠN TRONG NHÓM
@@ -70,24 +70,21 @@ module.exports = {
         const isSenderAdmin = adminIDs.includes(String(senderID)); // Người dùng lệnh có phải Admin không?
         const adminBotUIDs = getAdminBotUIDs();
         const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
-        const isSenderBot = String(senderID) === botID;           // Sender có phải là bot không?
-        const isSetBotOwnName = isSenderBot && String(targetID) === botID;  // Bot set cho chính nó không?
 
         // 3. KIỂM TRA QUYỀN (LOGIC BẢO MẬT)
 
-        // Rule 1: Nếu bot set tên cho người khác (không phải chính nó), bot phải là Admin
-        if (!isSetBotOwnName && !isBotAdmin) {
-            return api.sendMessage("🚫 Bot cần quyền Quản trị viên nhóm để thực hiện lệnh này.", threadID);
-        }
-
-        // Rule 2: Chỉ Admin, QTV nhóm, hoặc bot tự dùng mới được dùng lệnh
-        if (!isSenderAdmin && !isSenderBotAdmin && !isSenderBot) {
+        if (!isSenderAdmin && !isSenderBotAdmin) {
             return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh setbd!", threadID);
         }
 
-        // Rule 3: Nếu đổi tên cho NGƯỜI KHÁC (không phải chính mình), phải là Admin
+        // Rule 1: Bot bắt buộc phải là Admin mới đổi được tên (để tránh lỗi permission)
+        if (!isBotAdmin) {
+            return api.sendMessage("🚫 Bot cần quyền Quản trị viên nhóm để thực hiện lệnh này.", threadID);
+        }
+
+        // Rule 2: Nếu đổi tên cho NGƯỜI KHÁC, người dùng lệnh phải là Admin
         if (targetID !== senderID) {
-            if (!isSenderAdmin && !isSenderBotAdmin && !isSenderBot) {
+            if (!isSenderAdmin && !isSenderBotAdmin) {
                 return api.sendMessage("⚠️ Chỉ Quản trị viên mới được đổi biệt danh cho người khác!", threadID);
             }
         }
