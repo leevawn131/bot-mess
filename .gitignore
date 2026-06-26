@@ -76,3 +76,5 @@ venv/
 
 # Lock files (keep package-lock.json)
 # package-lock.json
+
+youtube_cookies.txt

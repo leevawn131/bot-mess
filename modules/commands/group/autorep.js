@@ -3,7 +3,8 @@ const path = require("path");
 const axios = require("axios");
 const { pipeline } = require("stream/promises");
 const { checkCooldown } = require("../../utils/cooldown");
-const { getAdminBotUIDs } = require("../../utils/checkPermission");
+const { getAdminBotUIDs, toAdminIdList } = require("../../utils/checkPermission");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
 const {
     buildMediaPath,
     listAutorepRules,
@@ -11,6 +12,7 @@ const {
     sanitizeFileName,
     upsertAutorepRule,
 } = require("../../utils/autorepSettings");
+const prefix = process.env.BOT_PREFIX;
 
 function getThreadAttachment(event) {
     const replyAttachments = Array.isArray(event?.messageReply?.attachments)
@@ -131,10 +133,11 @@ function parseKeywordOnly(args) {
 module.exports = {
     name: "autorep",
     description: "Tạo autorep theo từ khóa trong nhóm",
-    usage: "\n!autorep [cụm từ] | [nội dung autorep] → Lưu autorep cho nhóm\n!autorep [cụm từ] | → Lưu chỉ media nếu bạn reply ảnh/video\n!autorep list → Xem danh sách autorep\n!autorep del [cụm từ] → Xóa autorep\n!autorep clear → Xóa hết autorep của nhóm (chỉ chủ bot/adminBot)\nVí dụ: !autorep @Ngân Hà | Đúng rồi em\n━━━━━━━━━━━━━━━━━━\n💬 Khi tin nhắn chứa cụm từ, bot sẽ tự nhắn lại nội dung đã cài\n🖼️ Nếu reply ảnh/video khi cài, bot sẽ gửi kèm media đó",
+    usage: `\n${prefix}autorep [cụm từ] | [nội dung autorep] → Lưu autorep cho nhóm\n${prefix}autorep [cụm từ] | → Lưu chỉ media nếu bạn reply ảnh/video\n${prefix}autorep list → Xem danh sách autorep\n${prefix}autorep del [cụm từ] → Xóa autorep\n${prefix}autorep clear → Xóa hết autorep của nhóm (chỉ chủ bot/adminBot)\nVí dụ: ${prefix}autorep @Ngân Hà | Đúng rồi em\n━━━━━━━━━━━━━━━━━━\n💬 Khi tin nhắn chứa cụm từ, bot sẽ tự nhắn lại nội dung đã cài\n🖼️ Nếu reply ảnh/video khi cài, bot sẽ gửi kèm media đó`,
 
-    execute: async ({ api, event, args }) => {
+    execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
+        const prefix = config?.prefix || "!";
 
         const cooldown = checkCooldown({ command: "autorep", key: senderID, durationMs: 5000 });
         if (!cooldown.allowed) {
@@ -142,12 +145,12 @@ module.exports = {
         }
 
         try {
-            const threadInfo = await api.getThreadInfo(threadID);
+            const threadInfo = await getThreadInfoCached(api, threadID);
             if (!threadInfo || typeof threadInfo !== "object" || !threadInfo.isGroup) {
                 return api.sendMessage("⚠️ Lệnh này chỉ dùng trong nhóm.", threadID, messageID);
             }
 
-            const adminIDs = (threadInfo.adminIDs || []).map((item) => String(item.id || item.userID || item.adminID || item));
+            const adminIDs = toAdminIdList(threadInfo);
             const botID = String(api.getCurrentUserID());
             const isSenderAdmin = adminIDs.includes(String(senderID));
             const adminBotUIDs = getAdminBotUIDs();
@@ -188,7 +191,7 @@ module.exports = {
                 const keyword = parseKeywordOnly(args.slice(1));
                 if (!keyword) {
                     return api.sendMessage(
-                        "⚠️ Cách dùng: !autorep del [cụm từ]\nVí dụ: !autorep del @Ngân Hà",
+                        `⚠️ Cách dùng: ${prefix}autorep del [cụm từ]\nVí dụ: ${prefix}autorep del @Ngân Hà`,
                         threadID,
                         messageID,
                     );
@@ -207,7 +210,7 @@ module.exports = {
 
             if (!keyword || (!responseText && !replyAttachment)) {
                 return api.sendMessage(
-                    `⚠️ Cách dùng: !autorep [cụm từ] | [nội dung autorep]\nVí dụ: !autorep @Ngân Hà | Đúng rồi em\nHoặc: !autorep @Ngân Hà | (reply ảnh/video để lưu chỉ media)\n\n${formatAutorepRules(threadID)}`,
+                    `⚠️ Cách dùng: ${prefix}autorep [cụm từ] | [nội dung autorep]\nVí dụ: ${prefix}autorep @Ngân Hà | Đúng rồi em\nHoặc: ${prefix}autorep @Ngân Hà | (reply ảnh/video để lưu chỉ media)\n\n${formatAutorepRules(threadID)}`,
                     threadID,
                     messageID,
                 );
@@ -216,8 +219,41 @@ module.exports = {
 
             if (replyAttachment) {
                 const extension = getExtensionFromAttachment(replyAttachment);
-                const targetPath = buildMediaPath(threadID, `${keyword}_${Date.now()}`, extension);
+                let targetPath = buildMediaPath(threadID, `${keyword}_${Date.now()}`, extension);
                 await downloadAttachment(replyAttachment, targetPath);
+
+                const isVideo = String(replyAttachment.type || "").toLowerCase().includes("video") || extension === ".mp4" || extension === ".mov" || extension === ".webm";
+                if (isVideo) {
+                    try {
+                        const compressedPath = buildMediaPath(threadID, `${keyword}_compressed_${Date.now()}`, ".mp4");
+                        const ffmpeg = require("fluent-ffmpeg");
+                        const ffmpegPath = require("ffmpeg-static");
+                        ffmpeg.setFfmpegPath(ffmpegPath);
+
+                        await new Promise((resolve, reject) => {
+                            ffmpeg(targetPath)
+                                .outputOptions([
+                                    "-vcodec libx264",
+                                    "-crf 30",
+                                    "-preset veryfast",
+                                    "-acodec aac",
+                                    "-b:a 64k",
+                                    "-vf scale=-2:480"
+                                ])
+                                .on("end", () => resolve())
+                                .on("error", (err) => reject(err))
+                                .save(compressedPath);
+                        });
+
+                        if (fs.existsSync(targetPath)) {
+                            fs.unlinkSync(targetPath);
+                        }
+                        targetPath = compressedPath;
+                    } catch (compressError) {
+                        console.error("⚠️ [autorep] Lỗi nén video, sử dụng video gốc:", compressError);
+                    }
+                }
+
                 media = {
                     path: targetPath,
                     type: String(replyAttachment.type || "").trim(),

@@ -1,13 +1,16 @@
 const { checkCooldown } = require('../../utils/cooldown');
-const { getAdminBotUIDs } = require('../../utils/checkPermission');
+const { getAdminBotUIDs, toAdminIdList } = require('../../utils/checkPermission');
 const { getGroupRule, setGroupRule } = require('../../utils/groupRulesSettings');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
     name: "luatnhom",
     description: "Lưu luật riêng cho từng nhóm",
-    usage: "\n!luatnhom → Xem luật hiện tại của nhóm\n!luatnhom set [nội dung] → Lưu luật mới\n!luatnhom reset → Xóa luật riêng của nhóm\n━{13}\n📌 Tối đa 2000 ký tự\n🔒 Chỉ QTV nhóm/chủ bot mới cài được\n💡 VD: !luatnhom set Không spam, không toxic",
-    execute: async ({ api, event, args }) => {
+    usage: `\n${prefix}luatnhom → Xem luật hiện tại của nhóm\n${prefix}luatnhom set [nội dung] → Lưu luật mới\n${prefix}luatnhom reset → Xóa luật riêng của nhóm\n━━━━━━━━━━━━━\n📌 Tối đa 2000 ký tự\n🔒 Chỉ QTV nhóm/chủ bot mới cài được\n💡 VD: ${prefix}luatnhom set Không spam, không toxic`,
+    execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
+        const prefix = config?.prefix || "!";
 
         const cooldown = checkCooldown({ command: "luatnhom", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
@@ -16,7 +19,7 @@ module.exports = {
 
         let threadInfo;
         try {
-            threadInfo = await api.getThreadInfo(threadID);
+            threadInfo = await getThreadInfoCached(api, threadID);
         } catch (error) {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
         }
@@ -29,7 +32,7 @@ module.exports = {
             return api.sendMessage("⚠️ Lệnh này chỉ dùng trong nhóm chat.", threadID, messageID);
         }
 
-        const adminIDs = (threadInfo.adminIDs || []).map((item) => String(item.id));
+        const adminIDs = toAdminIdList(threadInfo);
         const botID = String(api.getCurrentUserID());
         const isBotAdmin = adminIDs.includes(botID);
         const isSenderAdmin = adminIDs.includes(String(senderID));
@@ -51,7 +54,7 @@ module.exports = {
             return api.sendMessage(
                 currentRule
                     ? `📌 LUẬT HIỆN TẠI CỦA NHÓM:\n${currentRule}`
-                    : `📌 Nhóm chưa có luật riêng.\nDùng !luatnhom set <nội dung> để lưu luật.`,
+                    : `📌 Nhóm chưa có luật riêng.\nDùng ${prefix}luatnhom set <nội dung> để lưu luật.`,
                 threadID,
                 messageID,
             );
@@ -69,11 +72,11 @@ module.exports = {
 
         if (!ruleText) {
             return api.sendMessage(
-                `📌 HƯỚNG DẪN !luatnhom\n━{13}\n` +
-                `• Xem luật: !luatnhom check\n` +
-                `• Lưu luật: !luatnhom set <nội dung luật>\n` +
-                `• Xoá luật: !luatnhom reset\n\n` +
-                `Ví dụ:\n!luatnhom set Không spam, không toxic, không đăng link bậy.`,
+                `📌 HƯỚNG DẪN ${prefix}luatnhom\n━━━━━━━━━━━━━\n` +
+                `• Xem luật: ${prefix}luatnhom check\n` +
+                `• Lưu luật: ${prefix}luatnhom set <nội dung luật>\n` +
+                `• Xoá luật: ${prefix}luatnhom reset\n\n` +
+                `Ví dụ:\n${prefix}luatnhom set Không spam, không toxic, không đăng link bậy.`,
                 threadID,
                 messageID,
             );
@@ -85,7 +88,7 @@ module.exports = {
 
         setGroupRule(threadID, ruleText);
         return api.sendMessage(
-            `✅ Đã lưu luật riêng cho nhóm.\nDùng !luatnhom check để xem lại.`,
+            `✅ Đã lưu luật riêng cho nhóm.\nDùng ${prefix}luatnhom check để xem lại.`,
             threadID,
             messageID,
         );

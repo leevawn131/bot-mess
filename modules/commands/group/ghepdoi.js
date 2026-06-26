@@ -1,10 +1,12 @@
 const { checkCooldown } = require('../../utils/cooldown');
 const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
     name: "ghepdoi",
     description: "Ghép đôi (Hỗ trợ ghép 2 người cụ thể)",
-    usage: "\n!ghepdoi → Ghép đôi ngẫu nhiên 2 người\n!ghepdoi tao → Tìm duyên cho bản thân\n!ghepdoi @A @B → Ghép đôi 2 người chỉ định\n━━━━━━━━━━━━━━━━━━\n💘 Hiển thị tỉ lệ hợp đôi và nhận xét vui\n💡 Hỗ trợ: tag, reply, hoặc tìm tên",
+    usage: `\n${prefix}ghepdoi → Ghép đôi ngẫu nhiên 2 người\n${prefix}ghepdoi tao → Tìm duyên cho bản thân\n${prefix}ghepdoi @A @B → Ghép đôi 2 người chỉ định\n━━━━━━━━━━━━━━━━━━\n💘 Hiển thị tỉ lệ hợp đôi và nhận xét vui\n💡 Hỗ trợ: tag, reply, hoặc tìm tên`,
 
     async execute({ api, event, args }) {
         await ensureMentionsFromHistory(api, event);
@@ -18,7 +20,7 @@ module.exports = {
 
         try {
             // 1. Lấy danh sách thành viên
-            const threadInfo = await api.getThreadInfo(threadID);
+            const threadInfo = await getThreadInfoCached(api, threadID);
             
             if (!threadInfo || typeof threadInfo !== 'object' || !threadInfo.userInfo) {
                 return api.sendMessage("❌ Không thể lấy danh sách thành viên nhóm.", threadID);

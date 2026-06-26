@@ -1,6 +1,8 @@
 const { checkCooldown } = require("../../utils/cooldown");
 const { getAdminBotUIDs } = require("../../utils/checkPermission");
+const { getThreadInfoCached, clearThreadInfoCache } = require("../../utils/threadInfo");
 const axios = require("axios");
+const prefix = process.env.BOT_PREFIX;
 
 function isNumericUid(value) {
   return /^\d{6,}$/.test(String(value || "").trim());
@@ -449,7 +451,8 @@ async function verifyMemberJoined(
 ) {
   for (let i = 0; i <= retry; i++) {
     try {
-      const info = await api.getThreadInfo(threadID);
+      clearThreadInfoCache(threadID);
+      const info = await getThreadInfoCached(api, threadID);
       const memberIds = (info?.participantIDs || []).map((id) => String(id));
       console.log(
         `[verifyMember] attempt ${i}/${retry}: participantIDs count=${memberIds.length}, target in list=${memberIds.includes(String(targetUID))}`,
@@ -697,7 +700,8 @@ async function performAddToGroup({
 
   let latestThreadInfo = threadInfo;
   try {
-    latestThreadInfo = await api.getThreadInfo(threadID);
+    clearThreadInfoCache(threadID);
+    latestThreadInfo = await getThreadInfoCached(api, threadID);
     console.log(
       `[performAdd] latestThreadInfo: participantIDs count=${latestThreadInfo?.participantIDs?.length || 0}, approvalQueue=${latestThreadInfo?.approvalQueue?.length || 0}, approvalMode=${latestThreadInfo?.approvalMode}`,
     );
@@ -734,7 +738,7 @@ async function performAddToGroup({
 module.exports = {
   name: "add",
   description: "Mời thành viên vào nhóm bằng UID hoặc link Facebook",
-  usage: "\n!add [uid] → Thêm bằng User ID\n!add [link Facebook] → Thêm bằng link profile\n━{13}\n📌 Hỗ trợ link dạng: facebook.com/username hoặc fb://profile/id\n⚠️ Bot cần quyền QTV nhóm để thêm thành viên\n💡 Ví dụ: !add 100012345678",
+  usage: `\n${prefix}add [uid] → Thêm bằng User ID\n${prefix}add [link Facebook] → Thêm bằng link profile\n━━━━━━━━━━━━━\n📌 Hỗ trợ link dạng: facebook.com/username hoặc fb://profile/id\n⚠️ Bot cần quyền QTV nhóm để thêm thành viên\n💡 Ví dụ: ${prefix}add 100012345678`,
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
 
@@ -752,7 +756,7 @@ module.exports = {
     }
 
     try {
-      const threadInfo = await api.getThreadInfo(threadID);
+      const threadInfo = await getThreadInfoCached(api, threadID);
       if (!threadInfo?.isGroup) {
         return api.sendMessage(
           "⚠️ Lệnh này chỉ dùng trong nhóm chat.",

@@ -2,6 +2,8 @@ const { execute } = require('../../utils/database');
 const path = require("path");
 const fs = require("fs");
 const { checkCooldown } = require('../../utils/cooldown');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
+const prefix = process.env.BOT_PREFIX;
 
 // ID CỦA BẠN (Sẽ bị loại khỏi danh sách xếp hạng)
 const BOSS_ID = "100037351338722";
@@ -9,7 +11,7 @@ const BOSS_ID = "100037351338722";
 module.exports = {
     name: "daigia",
     description: "Xem top 10 đại gia giàu nhất",
-    usage: "\n!daigia → Xem bảng xếp hạng Top 10 người giàu nhất\n━{13}\n📊 Xếp hạng theo tổng xu hiện có\n🏆 Hiển thị tên, số xu và thứ hạng của bạn",
+    usage: `\n${prefix}daigia → Xem bảng xếp hạng Top 10 người giàu nhất\n━━━━━━━━━━━━━\n📊 Xếp hạng theo tổng xu hiện có\n🏆 Hiển thị tên, số xu và thứ hạng của bạn`,
     execute: async ({ api, event }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -23,7 +25,7 @@ module.exports = {
             // 2. Lấy thông tin nhóm để lấy danh sách thành viên
             let memberInfo = [];
             try {
-                const threadInfo = await api.getThreadInfo(threadID);
+                const threadInfo = await getThreadInfoCached(api, threadID);
                 memberInfo = threadInfo.userInfo || [];
             } catch (e) {
                 console.error("Lỗi lấy threadInfo:", e);

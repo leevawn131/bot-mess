@@ -4,6 +4,8 @@ const { recordAction } = require("../../utils/questSystem");
 const { getBotConfig } = require("../../utils/envConfig");
 const { info, warn, error } = require("../../utils/logger");
 const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
+const prefix = process.env.BOT_PREFIX;
 
 const TRANSFER_TAX_RATE = 0.02;
 
@@ -16,8 +18,8 @@ function getBossID() {
 module.exports = {
   name: "tien",
   description: "Xem tiền & chuyển tiền",
-  usage: "\n!tien → Xem số dư & hạn mức chuyển tiền\n!tien chuyen [số_tiền] @tag → Chuyển tiền cho người được tag\n!tien chuyen [số_tiền] (reply) → Chuyển cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Phí chuyển: 2% | Hạn mức/ngày có giới hạn\n💡 Hoặc dùng tắt: !chuyentien [số_tiền] @tag",
-  execute: async ({ api, event, args, transferMode = false }) => {
+  usage: `\n${prefix}tien → Xem số dư & hạn mức chuyển tiền\n${prefix}tien chuyen [số_tiền] @tag → Chuyển tiền cho người được tag\n${prefix}tien chuyen [số_tiền] (reply) → Chuyển cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Phí chuyển: 2% | Hạn mức/ngày có giới hạn\n💡 Hoặc dùng tắt: ${prefix}chuyentien [số_tiền] @tag`,
+  execute: async ({ api, event, args, config, transferMode = false }) => {
     await ensureMentionsFromHistory(api, event);
     const { threadID, messageID, senderID, mentions, type, messageReply } =
       event;
@@ -59,7 +61,7 @@ module.exports = {
         // Cách C: QUÉT THÀNH VIÊN NHÓM (Cứu cánh khi cách B thất bại)
         // Bot sẽ lấy danh sách tất cả thành viên trong nhóm hiện tại để tìm tên
         try {
-          const threadInfo = await api.getThreadInfo(threadID);
+          const threadInfo = await getThreadInfoCached(api, threadID);
           const mem = threadInfo.userInfo.find((u) => u.id == uid);
           if (mem && mem.name) return mem.name;
         } catch (e) {}
@@ -126,9 +128,10 @@ module.exports = {
 
       // CHUYỂN TIỀN
       if (["chuyen", "pay", "give"].includes(command)) {
+        const prefix = config?.prefix || "!";
         if (!transferMode) {
           return api.sendMessage(
-            "⚠️ Lệnh chuyển tiền đã tách riêng. Dùng: !chuyentien <số_tiền> (tag/reply/ID).",
+            `⚠️ Lệnh chuyển tiền đã tách riêng. Dùng: ${prefix}chuyentien <số_tiền> (tag/reply/ID).`,
             threadID,
             messageID,
           );
@@ -138,7 +141,7 @@ module.exports = {
         if (Object.keys(mentions).length > 0)
           targetID = Object.keys(mentions)[0];
         else if (type === "message_reply") targetID = messageReply.senderID;
-        else if (args[2] && !isNaN(args[2])) targetID = args[2]; // !tien chuyen 50k [ID]
+        else if (args[2] && !isNaN(args[2])) targetID = args[2]; // tien chuyen 50k [ID]
 
         if (!targetID)
           return api.sendMessage(

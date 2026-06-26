@@ -270,7 +270,7 @@ module.exports = {
   name: "voice2text",
   description: "Chuyển audio/voice thành văn bản",
   usage:
-    "\n!voice2text (reply voice/audio) → Chuyển file âm thanh được reply thành text\n!voice2text [link audio] → Chuyển audio từ link thành text\n━{13}\n🎙️ Hỗ trợ voice note, file audio, và link audio\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: reply voice rồi gõ !voice2text",
+    "\n!voice2text (reply voice/audio) → Chuyển file âm thanh được reply thành text\n!voice2text [link audio] → Chuyển audio từ link thành text\n━━━━━━━━━━━━━\n🎙️ Hỗ trợ voice note, file audio, và link audio\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: reply voice rồi gõ !voice2text",
   execute: async ({ api, event, args, config }) => {
     const threadID = String(event.threadID);
     const { messageID, senderID } = event;
@@ -351,7 +351,7 @@ module.exports = {
 
       const text = transcript.length > 3500 ? `${transcript.slice(0, 3500)}...` : transcript;
       return api.sendMessage(
-        `📝 Nội dung chuyển âm thành text:\n━{13}\n${text}`,
+        `📝 Nội dung chuyển âm thành text:\n━━━━━━━━━━━━━\n${text}`,
         threadID,
         messageID,
       );

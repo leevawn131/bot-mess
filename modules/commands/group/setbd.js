@@ -1,15 +1,16 @@
 const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
     name: "setbd",
     description: "Đổi biệt danh",
-    usage: "\n!setbd [tên mới] → Đổi biệt danh cho bản thân\n!setbd @tag [tên mới] → Đổi cho người được tag\n!setbd (reply) [tên mới] → Đổi cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Tối đa 32 ký tự | Bỏ trống = xóa biệt danh\n⚠️ Bot cần quyền QTV nhóm\n🔒 Chỉ QTV mới được đổi cho người khác",
+    usage: `\n${prefix}setbd [tên mới] → Đổi biệt danh cho bản thân\n${prefix}setbd @tag [tên mới] → Đổi cho người được tag\n${prefix}setbd (reply) [tên mới] → Đổi cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Tối đa 32 ký tự | Bỏ trống = xóa biệt danh\n⚠️ Bot cần quyền QTV nhóm\n🔒 Chỉ QTV mới được đổi cho người khác`,
     execute: async ({ api, event, args }) => {
         await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;
         const botID = String(api.getCurrentUserID());
         const { checkCooldown } = require('../../utils/cooldown');
-        const { getAdminBotUIDs } = require('../../utils/checkPermission');
+        const { getAdminBotUIDs, toAdminIdList } = require('../../utils/checkPermission');
 
         // Cooldown 5s
         const cooldown = checkCooldown({ command: "setbd", key: senderID, durationMs: 10000 });
@@ -29,10 +30,15 @@ module.exports = {
         // Cách 1: Tag người dùng
         if (Object.keys(mentions).length > 0) {
             targetID = Object.keys(mentions)[0];
-            const tagContent = mentions[targetID].replace("@", "");
+            const tag = mentions[targetID];
+            const tagContent = tag.replace("@", "");
             const body = event.body || "";
-            // Xử lý chuỗi để lấy phần biệt danh sạch sẽ
-            nickname = body.replace(/!setbd/i, "").replace(mentions[targetID], "").replace(tagContent, "").trim();
+            // Xử lý chuỗi để lấy phần biệt danh sạch sẽ (hỗ trợ mọi prefix dynamically)
+            let temp = body.replace(/^.*?setbd/i, "");
+            // Xóa phần tag (case-insensitive) của người dùng
+            const escapedTagContent = tagContent.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            temp = temp.replace(new RegExp("@?" + escapedTagContent, "i"), "");
+            nickname = temp.trim();
         } 
         // Cách 2: Reply tin nhắn
         else if (messageReply) {
@@ -54,9 +60,10 @@ module.exports = {
         }
 
         // 2. LẤY THÔNG TIN QUYỀN HẠN TRONG NHÓM
+        const { getThreadInfoCached } = require('../../utils/threadInfo');
         let threadInfo;
         try {
-            threadInfo = await api.getThreadInfo(threadID);
+            threadInfo = await getThreadInfoCached(api, threadID);
         } catch (e) {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm để kiểm tra quyền.", threadID);
         }
@@ -65,7 +72,7 @@ module.exports = {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm để kiểm tra quyền.", threadID);
         }
 
-        const adminIDs = (threadInfo.adminIDs || []).map(item => String(item.id)); // Danh sách ID Quản trị viên
+        const adminIDs = toAdminIdList(threadInfo); // Danh sách ID Quản trị viên
         const isBotAdmin = adminIDs.includes(botID);              // Bot có phải Admin không?
         const isSenderAdmin = adminIDs.includes(String(senderID)); // Người dùng lệnh có phải Admin không?
         const adminBotUIDs = getAdminBotUIDs();
@@ -73,19 +80,15 @@ module.exports = {
 
         // 3. KIỂM TRA QUYỀN (LOGIC BẢO MẬT)
 
-        if (!isSenderAdmin && !isSenderBotAdmin) {
-            return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh setbd!", threadID);
-        }
-
         // Rule 1: Bot bắt buộc phải là Admin mới đổi được tên (để tránh lỗi permission)
         if (!isBotAdmin) {
             return api.sendMessage("🚫 Bot cần quyền Quản trị viên nhóm để thực hiện lệnh này.", threadID);
         }
 
-        // Rule 2: Nếu đổi tên cho NGƯỜI KHÁC, người dùng lệnh phải là Admin
-        if (targetID !== senderID) {
+        // Rule 2: Nếu đổi tên cho NGƯỜI KHÁC, người dùng lệnh phải là Admin hoặc chủ bot
+        if (String(targetID) !== String(senderID)) {
             if (!isSenderAdmin && !isSenderBotAdmin) {
-                return api.sendMessage("⚠️ Chỉ Quản trị viên mới được đổi biệt danh cho người khác!", threadID);
+                return api.sendMessage("⚠️ Chỉ Quản trị viên nhóm hoặc chủ bot mới được đổi biệt danh cho người khác!", threadID);
             }
         }
 

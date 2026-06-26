@@ -2,12 +2,13 @@
   "_note": "For production use, set environment variables instead of hardcoded values. See .env.example for reference.",
   "adminID": [],
   "adminIDs": [
-    "100037351338722",
-    "100054150197536"
-  ],
+    "100037351338722"
+    ],
   "adminOnly": false,
   "ai": {
-    "autoReplyOnlyGroups": false
+    "autoReplyOnlyGroups": false,
+    "ollamaHost": "http://172.27.192.1:11434",
+    "model": "qwen2.5:3b"
   },
   "botName": "DarkWin",
   "database": {
@@ -25,7 +26,7 @@
     "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   },
   "language": "vi",
-  "prefix": "!",
+  "prefix": "/",
   "greetingStickers": [
     1702931226959443,
     1653951868524046,

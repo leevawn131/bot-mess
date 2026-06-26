@@ -41,6 +41,73 @@ function setMediaBuffer(key, buf) {
     } catch {}
 }
 
+// Background pre-upload pools for media attachments (to make sending fast)
+const attachmentIdPools = new Map();
+const activeUploads = new Set();
+const MAX_POOL_SIZE = 2;
+
+async function uploadMediaToFb(mediaPath) {
+    const api = global.api_instance;
+    if (!api) return null;
+    if (!fs.existsSync(mediaPath)) return null;
+
+    try {
+        const stream = fs.createReadStream(mediaPath);
+        const res = await api.postFormData('https://upload.facebook.com/ajax/mercury/upload.php', {
+            upload_1024: stream
+        });
+        const bodyText = res.body?.replace('for (;;);', '') || "{}";
+        const json = JSON.parse(bodyText);
+        const metadata = json.payload?.metadata?.[0];
+        if (metadata) {
+            return Object.entries(metadata)[0]; // e.g. ["video_id", 12345]
+        }
+    } catch (e) {
+        console.error(`[autorep-pool] Failed to upload ${mediaPath}:`, e);
+    }
+    return null;
+}
+
+function refillPreuploadedPool(mediaPath) {
+    const api = global.api_instance;
+    if (!api) return;
+    if (activeUploads.has(mediaPath)) return;
+
+    const pool = attachmentIdPools.get(mediaPath) || [];
+    if (pool.length >= MAX_POOL_SIZE) return;
+
+    activeUploads.add(mediaPath);
+    console.log(`[autorep-pool] Starting pre-upload for ${mediaPath}. Pool size: ${pool.length}`);
+
+    uploadMediaToFb(mediaPath).then(entry => {
+        activeUploads.delete(mediaPath);
+        if (entry) {
+            const p = attachmentIdPools.get(mediaPath) || [];
+            p.push(entry);
+            attachmentIdPools.set(mediaPath, p);
+            console.log(`[autorep-pool] Pre-upload completed for ${mediaPath}. Pool size: ${p.length}`);
+
+            if (p.length < MAX_POOL_SIZE) {
+                refillPreuploadedPool(mediaPath);
+            }
+        }
+    }).catch(err => {
+        activeUploads.delete(mediaPath);
+        console.error(`[autorep-pool] Pre-upload promise error for ${mediaPath}:`, err);
+    });
+}
+
+function getPreuploadedAttachment(mediaPath) {
+    const pool = attachmentIdPools.get(mediaPath) || [];
+    if (pool.length > 0) {
+        const entry = pool.shift();
+        attachmentIdPools.set(mediaPath, pool);
+        return entry;
+    }
+    return null;
+}
+
+
 function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -144,6 +211,7 @@ function upsertAutorepRule(threadID, keyword, responseText, media = null, update
 
     if (existing?.media?.path && (!nextMedia || existing.media.path !== nextMedia.path)) {
         removeMediaFile(existing.media.path);
+        attachmentIdPools.delete(existing.media.path);
     }
 
     settings[threadKey][normalizedKeyword] = {
@@ -168,6 +236,7 @@ function upsertAutorepRule(threadID, keyword, responseText, media = null, update
             } else {
                 setMediaBuffer(key, null);
             }
+            refillPreuploadedPool(nextMedia.path);
         } else {
             setMediaBuffer(key, null);
         }
@@ -191,6 +260,7 @@ function removeAutorepRule(threadID, keyword) {
 
     if (existing.media?.path) {
         removeMediaFile(existing.media.path);
+        attachmentIdPools.delete(existing.media.path);
     }
 
     delete settings[threadKey][normalizedKeyword];
@@ -237,6 +307,7 @@ function preloadMediaCache() {
                             const key = `${String(threadID)}|${String(nk)}`;
                             setMediaBuffer(key, buf);
                         }
+                        refillPreuploadedPool(media.path);
                     }
                 } catch {}
             }
@@ -271,4 +342,6 @@ module.exports = {
     writeAutorepSettings,
     getMediaBuffer,
     preloadMediaCache,
+    getPreuploadedAttachment,
+    refillPreuploadedPool,
 };

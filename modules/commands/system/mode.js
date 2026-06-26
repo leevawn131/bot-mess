@@ -3,6 +3,8 @@ const path = require('path');
 const { getAdminBotUIDs, readSettings } = require('../../utils/checkPermission');
 const { readJsonFile, writeJsonFile } = require('../../utils/secureFileOps');
 const { info, warn } = require('../../utils/logger');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
+const prefix = process.env.BOT_PREFIX;
 
 // Đường dẫn file lưu mode settings
 const SETTINGS_PATH = path.join(__dirname, '../../../mode_settings.json');
@@ -218,12 +220,13 @@ function saveThreadSchedules(schedules, threadID, list, inTask) {
 module.exports = {
     name: "mode",
     description: "Quản lý mode quyền của nhóm và hẹn giờ đổi mode",
-    usage: "\n!mode - Xem mode hiện tại\n!mode <user|qtv|adminbot> - Đổi mode ngay\n!mode <user|qtv|adminbot> <HH:MM> - Lịch hằng ngày\n!mode in <HH:MM> <user|qtv|adminbot> - Đổi mode ngay, hết thời gian sẽ quay về mode cũ\n!mode off - Tắt toàn bộ lịch\n!mode off <mode|HH:MM|in> - Xóa 1 lịch",
+    usage: `\n${prefix}mode - Xem mode hiện tại\n${prefix}mode <user|qtv|adminbot> - Đổi mode ngay\n${prefix}mode <user|qtv|adminbot> <HH:MM> - Lịch hằng ngày\n${prefix}mode in <HH:MM> <user|qtv|adminbot> - Đổi mode ngay, hết thời gian sẽ quay về mode cũ\n${prefix}mode off - Tắt toàn bộ lịch\n${prefix}mode off <mode|HH:MM|in> - Xóa 1 lịch`,
 
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID } = event;
         const senderID = String(event.senderID);
         const threadIDStr = String(threadID);
+        const prefix = config?.prefix || "!";
 
         const settings = await readModeSettings();
         const schedules = await readSchedules();
@@ -233,23 +236,28 @@ module.exports = {
         const secondArg = args[1]?.toLowerCase();
 
         // === KIỂM TRA QUYỀN ===
-        // Nếu không có arg: chỉ xem mode (cho phép QTV nhóm hoặc chủ bot)
         const adminBotUIDs = getAdminBotUIDs();
-        const isBotAdmin = adminBotUIDs.includes(senderID);
+        let isBotAdmin = adminBotUIDs.includes(senderID);
+        
         let isAdmin = false;
+        try {
+            const threadInfo = await getThreadInfoCached(api, threadIDStr);
+            const adminIDs = toAdminIdList(threadInfo);
+            isAdmin = adminIDs.includes(senderID);
+        } catch (e) {
+            warn("Error getting thread info", { error: e.message, threadID });
+        }
+
+        // Kiểm tra xem nhóm có đang thuê gói admin không
+        const { checkIsAdminRental } = require('../../utils/rental');
+        const isAdminRental = await checkIsAdminRental(threadIDStr);
+
+        // Nếu nhóm thuê gói admin, QTV nhóm có quyền đổi mode như Bot Admin
+        if (isAdminRental && isAdmin) {
+            isBotAdmin = true;
+        }
 
         if (!newMode) {
-            // viewing handled above, but keep compatibility: allow QTV or bot admin
-            let isAdmin = false;
-            if (!isBotAdmin) {
-                try {
-                    const threadInfo = await api.getThreadInfo(threadIDStr);
-                    const adminIDs = toAdminIdList(threadInfo);
-                    isAdmin = adminIDs.includes(senderID);
-                } catch (e) {
-                    warn("Error getting thread info", { error: e.message, threadID });
-                }
-            }
             if (!isAdmin && !isBotAdmin) {
                 return api.sendMessage(
                     "❌ chỉ QTV nhóm hoặc chủ bot mới được xem mode!",
@@ -258,7 +266,7 @@ module.exports = {
                 );
             }
         } else {
-            // Changing mode: chỉ CHỦ BOT (adminBotUIDs) mới được thực hiện
+            // Changing mode: chỉ CHỦ BOT (hoặc QTV nhóm nếu thuê gói admin) mới được thực hiện
             if (!isBotAdmin) {
                 return api.sendMessage(
                     "❌ Chỉ chủ bot mới được dùng lệnh mode để đổi mode!",
@@ -282,7 +290,7 @@ module.exports = {
                     : `\n⌛ Chuyển sau khoảng thời gian (dữ liệu cũ):\n   ${inTask.mode.toUpperCase()} sau ${inTask.duration || "--:--"} (dự kiến ${formatDateTimeVN(inTask.executeAt)})\n   Còn lại khoảng: ${formatCountdown(inTask.executeAt - Date.now())}`;
 
             return api.sendMessage(
-                `🎛️ MODE HIỆN TẠI\n━{13}\n${modeEmoji[currentMode]} Mode: ${currentMode.toUpperCase()}\n📝 ${modeDesc[currentMode]}${timerLine}${inLine}\n━{13}\n💡 !mode user - Đổi mode ngay\n💡 !mode qtv 23:00 - Lịch hằng ngày\n💡 !mode in 00:30 user - Đổi ngay, 30 phút sau quay về mode cũ\n💡 !mode off hoặc !mode off qtv hoặc !mode off in`,
+                `🎛️ MODE HIỆN TẠI\n━━━━━━━━━━━━━\n${modeEmoji[currentMode]} Mode: ${currentMode.toUpperCase()}\n📝 ${modeDesc[currentMode]}${timerLine}${inLine}\n━━━━━━━━━━━━━\n💡 ${prefix}mode user - Đổi mode ngay\n💡 ${prefix}mode qtv 23:00 - Lịch hằng ngày\n💡 ${prefix}mode in 00:30 user - Đổi ngay, 30 phút sau quay về mode cũ\n💡 ${prefix}mode off hoặc ${prefix}mode off qtv hoặc ${prefix}mode off in`,
                 threadID,
                 messageID
             );
@@ -303,7 +311,7 @@ module.exports = {
 
             if (!durationArg || !targetMode) {
                 return api.sendMessage(
-                    "⚠️ Thiếu tham số!\n💡 Dùng: !mode in <HH:MM> <user|qtv|adminbot>",
+                    `⚠️ Thiếu tham số!\n💡 Dùng: ${prefix}mode in <HH:MM> <user|qtv|adminbot>`,
                     threadID,
                     messageID
                 );
@@ -312,7 +320,7 @@ module.exports = {
             const delayMs = durationHHMMToMs(durationArg);
             if (!delayMs) {
                 return api.sendMessage(
-                    "⚠️ Thời gian không hợp lệ!\n💡 Định dạng: HH:MM và phải lớn hơn 00:00\n💡 Ví dụ: !mode in 00:30 user",
+                    `⚠️ Thời gian không hợp lệ!\n💡 Định dạng: HH:MM và phải lớn hơn 00:00\n💡 Ví dụ: ${prefix}mode in 00:30 user`,
                     threadID,
                     messageID
                 );
@@ -354,7 +362,7 @@ module.exports = {
             await writeSchedules(schedules);
 
             return api.sendMessage(
-                `✅ ĐÃ ĐỔI MODE TẠM THỜI!\n━{13}\n🎛️ Mode hiện tại: ${targetMode.toUpperCase()}\n⌛ Sau ${durationArg} sẽ tự quay về: ${currentMode.toUpperCase()}\n🕒 Dự kiến quay về: ${formatDateTimeVN(restoreAt)}\n━{13}\n💡 Hủy lịch quay về: !mode off in`,
+                `✅ ĐÃ ĐỔI MODE TẠM THỜI!\n━━━━━━━━━━━━━\n🎛️ Mode hiện tại: ${targetMode.toUpperCase()}\n⌛ Sau ${durationArg} sẽ tự quay về: ${currentMode.toUpperCase()}\n🕒 Dự kiến quay về: ${formatDateTimeVN(restoreAt)}\n━━━━━━━━━━━━━\n💡 Hủy lịch quay về: ${prefix}mode off in`,
                 threadID,
                 messageID
             );
@@ -403,7 +411,7 @@ module.exports = {
                 nextInTask = null;
             } else {
                 return api.sendMessage(
-                    "⚠️ Cú pháp xóa lịch không hợp lệ!\n💡 Dùng: !mode off <user|qtv|adminbot|HH:MM|in>",
+                    `⚠️ Cú pháp xóa lịch không hợp lệ!\n💡 Dùng: ${prefix}mode off <user|qtv|adminbot|HH:MM|in>`,
                     threadID,
                     messageID
                 );
@@ -462,7 +470,7 @@ module.exports = {
         // Kiểm tra mode hợp lệ
         if (!VALID_MODES.includes(newMode)) {
             return api.sendMessage(
-                `⚠️ Mode không hợp lệ!\n━{13}\n💡 Hợp lệ: user, qtv, adminbot\n💡 Ví dụ: !mode qtv`,
+                `⚠️ Mode không hợp lệ!\n━━━━━━━━━━━━━\n💡 Hợp lệ: user, qtv, adminbot\n💡 Ví dụ: ${prefix}mode qtv`,
                 threadID,
                 messageID
             );
@@ -502,7 +510,7 @@ module.exports = {
             } else {
                 if (timerList.length >= MAX_SCHEDULES_PER_THREAD) {
                     return api.sendMessage(
-                        "⚠️ Nhóm chỉ lưu tối đa 2 lịch mode.\n💡 Xóa bớt bằng: !mode off <mode|HH:MM>",
+                        `⚠️ Nhóm chỉ lưu tối đa 2 lịch mode.\n💡 Xóa bớt bằng: ${prefix}mode off <mode|HH:MM>`,
                         threadID,
                         messageID
                     );
@@ -524,7 +532,7 @@ module.exports = {
             const finalList = getThreadSchedules(schedules, threadIDStr);
 
             return api.sendMessage(
-                `✅ LƯU LỊCH MODE THÀNH CÔNG!\n━{13}\n${finalList.map((item, index) => `⏰ ${index + 1}. ${item.time} -> ${item.mode.toUpperCase()}`).join("\n")}\n━{13}\n💡 Tối đa 2 lịch\n💡 Xóa lịch: !mode off <mode|HH:MM>`,
+                `✅ LƯU LỊCH MODE THÀNH CÔNG!\n━━━━━━━━━━━━━\n${finalList.map((item, index) => `⏰ ${index + 1}. ${item.time} -> ${item.mode.toUpperCase()}`).join("\n")}\n━━━━━━━━━━━━━\n💡 Tối đa 2 lịch\n💡 Xóa lịch: ${prefix}mode off <mode|HH:MM>`,
                 threadID,
                 messageID
             );
@@ -544,7 +552,7 @@ module.exports = {
         await writeSettings(settings);
 
         return api.sendMessage(
-            `✅ ĐỔI MODE THÀNH CÔNG!\n━{13}\n${modeEmoji[newMode]} Mode: ${newMode.toUpperCase()}\n📝 ${modeDesc[newMode]}\n━{13}\n💡 Mode này áp dụng ngay cho tất cả lệnh!`,
+            `✅ ĐỔI MODE THÀNH CÔNG!\n━━━━━━━━━━━━━\n${modeEmoji[newMode]} Mode: ${newMode.toUpperCase()}\n📝 ${modeDesc[newMode]}\n━━━━━━━━━━━━━\n💡 Mode này áp dụng ngay cho tất cả lệnh!`,
             threadID,
             messageID
         );

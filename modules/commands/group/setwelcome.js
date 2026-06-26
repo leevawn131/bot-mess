@@ -1,14 +1,17 @@
 const { checkCooldown } = require('../../utils/cooldown');
-const { getAdminBotUIDs } = require('../../utils/checkPermission');
+const { getAdminBotUIDs, toAdminIdList } = require('../../utils/checkPermission');
 const { getJoinGreeting, setJoinGreeting } = require('../../utils/joinGreetingSettings');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
     name: "setwelcome",
     description: "Cài câu chào khi có người vào nhóm",
-    usage: "\n!setwelcome [câu chào] → Cài câu chào riêng cho nhóm\n!setwelcome check → Xem câu chào hiện tại\n!setwelcome reset → Quay về câu chào mặc định\n━{13}\n📌 Biến hỗ trợ: {name}, {names}, {count}, {@tag}, {@tags}\n💡 VD: !setwelcome Chào {@tag}, nhớ đọc nội quy nha!",
-    execute: async ({ api, event, args }) => {
+    usage: `\n${prefix}setwelcome [câu chào] → Cài câu chào riêng cho nhóm\n${prefix}setwelcome check → Xem câu chào hiện tại\n${prefix}setwelcome reset → Quay về câu chào mặc định\n━━━━━━━━━━━━━\n📌 Biến hỗ trợ: {name}, {names}, {count}, {@tag}, {@tags}\n💡 VD: ${prefix}setwelcome Chào {@tag}, nhớ đọc nội quy nha!`,
+    execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
-        const prefix = "!setwelcome";
+        const botPrefix = config?.prefix || "!";
+        const prefix = `${botPrefix}setwelcome`;
 
         const cooldown = checkCooldown({ command: "setwelcome", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
@@ -17,7 +20,7 @@ module.exports = {
 
         let threadInfo;
         try {
-            threadInfo = await api.getThreadInfo(threadID);
+            threadInfo = await getThreadInfoCached(api, threadID);
         } catch (error) {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
         }
@@ -26,7 +29,7 @@ module.exports = {
             return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
         }
 
-        const adminIDs = (threadInfo.adminIDs || []).map((item) => String(item.id));
+        const adminIDs = toAdminIdList(threadInfo);
         const isBotAdmin = adminIDs.includes(String(api.getCurrentUserID()));
         const isSenderAdmin = adminIDs.includes(String(senderID));
         const adminBotUIDs = getAdminBotUIDs();
@@ -45,13 +48,13 @@ module.exports = {
             const current = getJoinGreeting(threadID);
             return api.sendMessage(
                 current
-                    ? `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━{13}\n` +
+                    ? `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━━━━━━━━━━━━━\n` +
                       `• Câu chào hiện tại:\n${current}\n\n` +
                       `• Cú pháp:\n${prefix} check\n${prefix} <nội dung câu chào>\n${prefix} reset\n\n` +
                                             `• Biến hỗ trợ:\n{name} = tên người vào nhóm đầu tiên\n{names} = danh sách tất cả tên\n{count} = số người vừa vào\n{@tag} = tag người vào đầu tiên\n{@tags} = tag tất cả người vừa vào\n\n` +
                                             `• Ví dụ:\n${prefix} Chào {@tag}, nhớ đọc nội quy nha!\n${prefix} Chào {@tags}, chào mừng đến với nhóm!\n\n` +
                       `• Dùng ${prefix} reset để quay về câu chào mặc định hiện tại.`
-                    : `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━{13}\n` +
+                    : `📌 HƯỚNG DẪN ${prefix.toUpperCase()}\n━━━━━━━━━━━━━\n` +
                       `• Nhóm đang dùng câu chào mặc định:\nChào mừng {names} đã tham gia nhóm! 🥳\n\n` +
                       `• Cú pháp:\n${prefix} check\n${prefix} <nội dung câu chào>\n${prefix} reset\n\n` +
                                             `• Biến hỗ trợ:\n{name} = tên người vào nhóm đầu tiên\n{names} = danh sách tất cả tên\n{count} = số người vừa vào\n{@tag} = tag người vào đầu tiên\n{@tags} = tag tất cả người vừa vào\n\n` +

@@ -4,6 +4,7 @@ const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require('../../utils/cooldown');
 const { consumeEnergy, getDBConfigFromRuntime } = require('../../utils/energySystem');
 const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
 
 const PUNCH_GIF_DIR = path.resolve(__dirname, '../cache/punch');
 const PUNCH_MESSAGES = [
@@ -45,7 +46,7 @@ async function getUserName(api, userID, fallback = 'Người dùng') {
 
 async function getUserNameFromThread(api, threadID, userID) {
     try {
-        const threadInfo = await api.getThreadInfo(threadID);
+        const threadInfo = await getThreadInfoCached(api, threadID);
         const members = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
         const found = members.find((user) => String(user.id) === String(userID));
         return found?.name || null;
@@ -61,6 +62,7 @@ module.exports = {
     execute: async ({ api, event, config }) => {
         await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;
+        const prefix = config?.prefix || "!";
 
         const cooldown = checkCooldown({ command: 'đấm', key: senderID, durationMs: 20000 });
         if (!cooldown.allowed) {
@@ -110,11 +112,11 @@ module.exports = {
                 if (energyUse.reason === 'not_enough') {
                     return api.sendMessage(energyUse.message, threadID, messageID);
                 }
-                return api.sendMessage('❌ Không thể kiểm tra thể lực lúc này.', threadID, messageID);
+                return api.sendMessage(`❌ Không thể kiểm tra thể lực lúc này.\nGõ ${prefix}tien để có thể lực.`, threadID, messageID);
             }
         } catch (error) {
             console.error('Energy check error (dam):', error);
-            return api.sendMessage('❌ Lỗi hệ thống thể lực.', threadID, messageID);
+            return api.sendMessage(`❌ Lỗi hệ thống thể lực.\nGõ ${prefix}tien để có thể lực.`, threadID, messageID);
         } finally {
             if (connection) connection.release();
         }

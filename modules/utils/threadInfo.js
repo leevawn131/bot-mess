@@ -31,4 +31,9 @@ async function getThreadInfoCached(api, threadID) {
   }
 }
 
-module.exports = { getThreadInfoCached };
+function clearThreadInfoCache(threadID) {
+  const key = String(threadID);
+  _threadInfoCache.delete(key);
+}
+
+module.exports = { getThreadInfoCached, clearThreadInfoCache };

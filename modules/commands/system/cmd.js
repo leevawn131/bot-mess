@@ -4,6 +4,7 @@ const path = require("path");
 const COMMANDS_ROOT = path.join(__dirname, "..");
 const EVENTS_ROOT = path.join(__dirname, "..", "..", "events");
 const UTILS_ROOT = path.join(__dirname, "..", "..", "utils");
+const prefix = process.env.BOT_PREFIX;
 
 const MODULE_ROOTS = [
     { type: "command", dir: COMMANDS_ROOT },
@@ -292,7 +293,7 @@ module.exports = {
     name: "cmd",
     aliases: ["command"],
     description: "Quản lý module bot (commands/events/utils)",
-    usage: "\n!cmd count\n!cmd list\n!cmd info <tên...>\n!cmd load <tên...>\n!cmd unload <tên...>\n!cmd reload <tên...>\n(ví dụ: !cmd load kiss likeDelete mentionResolver)",
+    usage: `\n${prefix}cmd count\n${prefix}cmd list\n${prefix}cmd info <tên...>\n${prefix}cmd load <tên...>\n${prefix}cmd unload <tên...>\n${prefix}cmd reload <tên...>\n(ví dụ: ${prefix}cmd load kiss likeDelete mentionResolver)`,
 
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -310,13 +311,13 @@ module.exports = {
             return api.sendMessage(
                 [
                     "🛠 CMD - Quản lý lệnh",
-                    "━{13}",
-                    "!cmd count - xem số module đang nạp",
-                    "!cmd list - xem danh sách command/event/util",
-                    "!cmd info <tên...> - xem thông tin module",
-                    "!cmd load <tên...> - nạp module từ 3 folder",
-                    "!cmd unload <tên...> - gỡ module khỏi bộ nhớ",
-                    "!cmd reload <tên...> - nạp lại module",
+                    "━━━━━━━━━━━━━",
+                    `${prefix}cmd count - xem số module đang nạp`,
+                    `${prefix}cmd list - xem danh sách command/event/util`,
+                    `${prefix}cmd info <tên...> - xem thông tin module`,
+                    `${prefix}cmd load <tên...> - nạp module từ 3 folder`,
+                    `${prefix}cmd unload <tên...> - gỡ module khỏi bộ nhớ`,
+                    `${prefix}cmd reload <tên...> - nạp lại module`,
                     "Có thể nhập nhiều tên bằng dấu cách hoặc dấu phẩy",
                 ].join("\n"),
                 threadID,
@@ -371,8 +372,8 @@ module.exports = {
             return api.sendMessage(
                 [
                     `📘 Thông tin lệnh (${targets.length - missing}/${targets.length})`,
-                    "━{13}",
-                    outputs.join("\n\n━{13}\n"),
+                    "━━━━━━━━━━━━━",
+                    outputs.join("\n\n━━━━━━━━━━━━━\n"),
                 ].join("\n"),
                 threadID,
                 messageID,
@@ -450,7 +451,7 @@ module.exports = {
         }
 
         return api.sendMessage(
-            "⚠️ Subcommand không hợp lệ. Dùng !cmd help để xem hướng dẫn.",
+            `⚠️ Subcommand không hợp lệ. Dùng ${prefix}cmd help để xem hướng dẫn.`,
             threadID,
             messageID,
         );

@@ -4,7 +4,7 @@ const { ensureRentedGroupsSchema } = require("../../utils/rentalSchema");
 module.exports = {
   name: "setthue",
   description: "Thêm nhóm đã thuê thủ công (Chỉ Admin)",
-  usage: "\n!setthue [số_tháng] → Gia hạn cho nhóm hiện tại\n!setthue [threadID] [số_tháng] → Gia hạn cho nhóm khác\n━{13}\n📌 Đơn vị: số + m (tháng) hoặc số + d (ngày)\n🔒 Chỉ Admin bot mới dùng được\n💡 Ví dụ: !setthue 3m hoặc !setthue 7d",
+  usage: "\n!setthue [số_tháng] → Gia hạn gói thường cho nhóm hiện tại\n!setthue [thuong|admin] [số_tháng] → Gia hạn gói thường/admin cho nhóm hiện tại\n!setthue [threadID] [thuong|admin] [số_tháng] → Gia hạn cho nhóm khác\n━━━━━━━━━━━━━\n📌 Đơn vị: số + m (tháng) hoặc số + d (ngày)\n🔒 Chỉ Admin bot mới dùng được\n💡 Ví dụ: !setthue admin 3m hoặc !setthue 123456789 admin 7d",
   
   async execute({ api, event, args, config }) {
     // 1. Kiểm tra quyền Admin
@@ -17,24 +17,40 @@ module.exports = {
     if (args.length === 0) {
       return api.sendMessage(
         "❌ Sai cú pháp!\n" +
-        "Sử dụng: !setthue [số tháng] (để gia hạn cho nhóm hiện tại)\n" +
-        "Hoặc: !setthue [threadID] [số tháng] (để gia hạn cho nhóm khác)", 
+        "Sử dụng: !setthue [thuong|admin] [số tháng] (để gia hạn cho nhóm hiện tại)\n" +
+        "Hoặc: !setthue [threadID] [thuong|admin] [số tháng] (để gia hạn cho nhóm khác)", 
         event.threadID
       );
     }
 
     let targetThreadID = String(event.threadID);
+    let packageType = "thuong"; // mặc định
     let timeInput = "1m";
+
+    const packageTypes = ["thuong", "normal", "admin", "adm"];
 
     if (args.length === 1) {
       // !setthue [thời gian]
       timeInput = String(args[0]).toLowerCase();
-    } else {
-      // !setthue [threadID] [thời gian]
+    } else if (args.length === 2) {
+      // A. !setthue [thuong/admin] [thời gian]
+      // B. !setthue [threadID] [thời gian]
+      const arg0 = String(args[0]).toLowerCase();
+      if (packageTypes.includes(arg0)) {
+        packageType = arg0;
+        timeInput = String(args[1]).toLowerCase();
+      } else {
+        targetThreadID = String(args[0]);
+        timeInput = String(args[1]).toLowerCase();
+      }
+    } else if (args.length >= 3) {
+      // !setthue [threadID] [thuong/admin] [thời gian]
       targetThreadID = String(args[0]);
-      timeInput = String(args[1]).toLowerCase();
+      packageType = String(args[1]).toLowerCase();
+      timeInput = String(args[2]).toLowerCase();
     }
 
+    const isAdminPlan = ["admin", "adm"].includes(packageType);
     let daysToAdd = 30;
     let timeStr = "";
 
@@ -57,13 +73,21 @@ module.exports = {
 
       // 3. Cập nhật Database
       await execute(`
-        INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at)
-        VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP)
+        INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at, is_admin_rental)
+        VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP, ?)
         ON DUPLICATE KEY UPDATE
           expire_date = DATE_ADD(GREATEST(COALESCE(expire_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP), INTERVAL ? DAY),
           renter_id = ?,
-          rented_at = CURRENT_TIMESTAMP
-      `, [targetThreadID, daysToAdd, String(event.senderID), daysToAdd, String(event.senderID)]);
+          rented_at = CURRENT_TIMESTAMP,
+          is_admin_rental = ?
+      `, [targetThreadID, daysToAdd, String(event.senderID), isAdminPlan ? 1 : 0, daysToAdd, String(event.senderID), isAdminPlan ? 1 : 0]);
+
+      try {
+        const { clearRentalCache } = require("../../utils/rental");
+        clearRentalCache(targetThreadID);
+      } catch (e) {
+        console.error("Lỗi xóa cache thuê bot khi setthue:", e);
+      }
 
       // 4. Lấy thời hạn mới để hiển thị
       const info = await execute(
@@ -78,9 +102,13 @@ module.exports = {
         expireStr = date.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
       }
 
+      const planName = isAdminPlan ? "ADMIN-BOT" : "THƯỜNG";
+      const unlockMsg = isAdminPlan ? "\n👑 Quyền đổi mode đã được mở khóa cho tất cả QTV nhóm!" : "";
+
       api.sendMessage(
         `✅ Đã cộng thêm thời gian sử dụng cho nhóm:\n` +
         `🆔 ID: ${targetThreadID}\n` +
+        `📦 Gói: ${planName}\n` +
         `⏱️ Thời gian cộng: ${timeStr}\n` +
         `⏰ Hạn sử dụng mới: ${expireStr}`,
         event.threadID
@@ -89,15 +117,15 @@ module.exports = {
       // Nếu thêm nhóm hiện tại, gửi luôn thông báo vô nhóm
       if (targetThreadID === String(event.threadID)) {
         api.sendMessage(
-          `🎉 Chúc mừng! Nhóm đã được Admin kích hoạt thủ công thêm ${timeStr} sử dụng Bot.\n` +
-          `Các lệnh giải trí/tiện ích đã được mở khóa!`,
+          `🎉 Chúc mừng! Nhóm đã được Admin kích hoạt thủ công thêm ${timeStr} sử dụng Bot (Gói: ${planName}).\n` +
+          `Các lệnh giải trí/tiện ích đã được mở khóa!${unlockMsg}`,
           event.threadID
         );
       } else {
         // Gửi thông báo đến nhóm mục tiêu
         api.sendMessage(
-          `🎉 Chúc mừng! Nhóm bạn đã được Admin kích hoạt thủ công thêm ${timeStr} sử dụng Bot.\n` +
-          `Các lệnh giải trí/tiện ích đã được mở khóa!`,
+          `🎉 Chúc mừng! Nhóm bạn đã được Admin kích hoạt thủ công thêm ${timeStr} sử dụng Bot (Gói: ${planName}).\n` +
+          `Các lệnh giải trí/tiện ích đã được mở khóa!${unlockMsg}`,
           targetThreadID
         ).catch(e => console.error("Không thể gửi tin nhắn đến nhóm:", targetThreadID));
       }

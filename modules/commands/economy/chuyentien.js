@@ -1,10 +1,11 @@
 const { checkCooldown } = require("../../utils/cooldown");
 const tienCommand = require("./tien");
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
   name: "chuyentien",
   description: "Chuyển tiền cho người khác",
-  usage: "\n!chuyentien [số_tiền] @tag → Chuyển cho người được tag\n!chuyentien [số_tiền] (reply) → Chuyển cho người được reply\n━{13}\n📌 Phí chuyển: 2%\n💡 Ví dụ: !chuyentien 50000 @Minh",
+  usage: `\n${prefix}chuyentien [số_tiền] @tag → Chuyển cho người được tag\n${prefix}chuyentien [số_tiền] (reply) → Chuyển cho người được reply\n━━━━━━━━━━━━━\n📌 Phí chuyển: 2%\n💡 Ví dụ: ${prefix}chuyentien 50000 @Minh`,
   execute: async (ctx) => {
     const { api, event } = ctx;
     const { threadID, messageID, senderID } = event;
@@ -24,8 +25,9 @@ module.exports = {
 
     const rawArgs = Array.isArray(ctx.args) ? ctx.args : [];
     if (rawArgs.length === 0) {
+      const prefix = ctx.config?.prefix || "!";
       return api.sendMessage(
-        "⚠️ Dung: !chuyentien <so_tien> (tag/reply/ID)",
+        `⚠️ Dung: ${prefix}chuyentien <so_tien> (tag/reply/ID)`,
         threadID,
         messageID,
       );

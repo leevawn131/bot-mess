@@ -1,4 +1,8 @@
 const { getThreadInfoCached } = require("./threadInfo");
+const fs = require("fs");
+const path = require("path");
+
+// No mention overrides: prefer authoritative mapping and deterministic inference
 
 function normalizeMentionLabel(text) {
   const raw = String(text || "").replace(/^@+/, "").replace(/\u200b/g, "");
@@ -87,7 +91,108 @@ function addLabelIndex(labelMap, rawLabel, uid) {
   labelMap.get(label).add(String(uid));
 }
 
-async function remapMentionsByThreadInfo(api, threadID, entries) {
+function getUniqueUIDFromCandidates(candidates) {
+  if (!candidates || candidates.size !== 1) return null;
+  return String([...candidates][0] || "").trim() || null;
+}
+
+function splitMentionLabelQualifier(rawLabel) {
+  const label = String(rawLabel || "").trim();
+  const match = label.match(/^(.*?)(?:\s*\(([^()]+)\))\s*$/);
+  if (!match) {
+    return { baseLabel: label, qualifier: "" };
+  }
+
+  return {
+    baseLabel: String(match[1] || "").trim(),
+    qualifier: String(match[2] || "").trim().toLowerCase(),
+  };
+}
+
+function pickUIDByQualifier(candidates, qualifier) {
+  const list = Array.from(candidates || [])
+    .map((uid) => String(uid || "").trim())
+    .filter(Boolean);
+
+  if (list.length === 0) return null;
+  if (list.length === 1) return list[0];
+
+  const normalized = String(qualifier || "").trim().toLowerCase();
+  if (!normalized) return list[0];
+
+  if (/^\d+$/.test(normalized)) {
+    const index = Number(normalized) - 1;
+    return list[index] || null;
+  }
+
+  const letter = normalized.charCodeAt(0);
+  if (letter >= 97 && letter <= 122) {
+    const index = letter - 97;
+    return list[index] || null;
+  }
+
+  return list[0];
+}
+
+async function getAuthoritativeThreadHistory(api, threadID, limit) {
+  if (api && typeof api.getThreadHistory === "function") {
+    try {
+      return await api.getThreadHistory(threadID, limit, null);
+    } catch (e) {}
+  }
+
+  if (typeof global._quietGetThreadHistory === "function") {
+    try {
+      return await global._quietGetThreadHistory(api, threadID, limit);
+    } catch (e) {}
+  }
+
+  return null;
+}
+
+function findUniqueMemberUIDByLabel(threadInfo, rawLabel) {
+  const { baseLabel, qualifier } = splitMentionLabelQualifier(rawLabel);
+  const normalizedLabel = normalizeMentionLabel(baseLabel);
+  if (!normalizedLabel) return null;
+
+  const memberInfo = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
+
+  const exactMatches = memberInfo
+    .map((user) => ({
+      uid: String(user?.id || "").trim(),
+      label: normalizeMentionLabel(user?.name || ""),
+    }))
+    .filter((item) => item.uid && item.label === normalizedLabel);
+
+
+
+  if (exactMatches.length === 1) {
+    return exactMatches[0].uid;
+  }
+
+  if (exactMatches.length > 1) {
+    if (qualifier) {
+      return pickUIDByQualifier(exactMatches.map((item) => item.uid), qualifier);
+    }
+    return null;
+  }
+
+  const labelToUIDs = indexMembersForLookup(threadInfo);
+
+  if (normalizedLabel.length < 4) return null;
+
+  const partialMatches = new Set();
+  for (const [label, uids] of labelToUIDs.entries()) {
+    if (!label || label.length < 4) continue;
+    if (label.includes(normalizedLabel) || normalizedLabel.includes(label)) {
+      for (const uid of uids) partialMatches.add(String(uid));
+    }
+  }
+
+  return partialMatches.size === 1 ? [...partialMatches][0] : null;
+}
+
+async function remapMentionsByThreadInfo(api, threadID, entries, body) {
   if (!Array.isArray(entries) || entries.length === 0) return entries;
 
   let threadInfo = null;
@@ -121,6 +226,30 @@ async function remapMentionsByThreadInfo(api, threadID, entries) {
 
     const candidates = labelToUIDs.get(normalizedTag);
     if (!candidates || candidates.size !== 1) {
+      // If multiple candidates, attempt qualifier-based disambiguation.
+      if (candidates && candidates.size > 1) {
+        // Check if the tag itself contains a qualifier like "Name (2)".
+        const { qualifier, baseLabel } = splitMentionLabelQualifier(tag);
+        let chosen = null;
+        if (qualifier) {
+          chosen = pickUIDByQualifier(candidates, qualifier);
+        }
+
+        // If not found in tag, try to locate a qualifier in the raw message body after the mention text.
+        if (!chosen && typeof body === "string" && body.length > 0) {
+          try {
+            const esc = (s) => String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const baseNoAt = String(baseLabel || "").replace(/^@+/, "").trim();
+            const regex = new RegExp("@?" + esc(baseNoAt) + "\\s*\\(([^)]+)\\)", "i");
+            const m = body.match(regex);
+            if (m && m[1]) {
+              chosen = pickUIDByQualifier(candidates, String(m[1] || "").trim().toLowerCase());
+            }
+          } catch (e) {}
+        }
+
+        if (chosen) return { id: String(chosen), tag };
+      }
       return { id: uid, tag };
     }
 
@@ -168,18 +297,12 @@ function indexMembersForLookup(threadInfo) {
 function inferMentionEntriesFromBody(threadInfo, body) {
   const labels = parseMentionLabelsFromBody(body);
   if (labels.length === 0) return [];
-
-  const labelToUIDs = indexMembersForLookup(threadInfo);
   const inferred = [];
 
   for (const rawLabel of labels) {
-    const normalized = normalizeMentionLabel(rawLabel);
-    if (!normalized) continue;
+    const uid = findUniqueMemberUIDByLabel(threadInfo, rawLabel);
+    if (!uid) continue;
 
-    const candidates = labelToUIDs.get(normalized);
-    if (!candidates || candidates.size !== 1) continue;
-
-    const uid = [...candidates][0];
     inferred.push({
       id: String(uid),
       tag: toTagText(rawLabel),
@@ -222,12 +345,51 @@ async function ensureMentionsFromHistory(api, event) {
     threadInfo = await getThreadInfoCached(api, event.threadID);
   } catch (e) {}
 
+  // Authoritative path: if the live event lost mention metadata, look up the
+  // original message in thread history, where ws3-fca preserves entity.id.
   if (entries.length === 0) {
     try {
-      const history = await api.getThreadHistory(event.threadID, 15);
-      const originalMsg = findOriginalMessageFromHistory(history, event);
-      entries = mentionMapToEntries(originalMsg?.mentions || {});
+      const history = await getAuthoritativeThreadHistory(api, String(event.threadID || ""), 25);
+      const original = findOriginalMessageFromHistory(history, event);
+      if (original && original.mentions && Object.keys(original.mentions).length > 0) {
+        event.mentions = mentionEntriesToMap(uniqueMentions(mentionMapToEntries(original.mentions)));
+        entries = mentionMapToEntries(event.mentions || {});
+      }
     } catch (e) {}
+  }
+
+  // Normalize mention keys if they look like numeric indices (some delta paths use indices)
+  try {
+    const rawMentions = event.mentions || {};
+    const keys = Object.keys(rawMentions || {});
+    const hasNonUidKey = keys.some((k) => !/^\d{6,}$/.test(k));
+    if (keys.length > 0 && hasNonUidKey && threadInfo) {
+      const participantIDs = Array.isArray(threadInfo.participantIDs)
+        ? threadInfo.participantIDs
+        : (Array.isArray(threadInfo.userInfo) ? threadInfo.userInfo.map((u) => String(u.id)) : []);
+      if (participantIDs && participantIDs.length > 0) {
+        const remapped = {};
+        for (const [k, v] of Object.entries(rawMentions)) {
+          if (/^\d+$/.test(k)) {
+            const idx = Number(k);
+            const uid = participantIDs[idx] || participantIDs[Number(k) - 1] || null;
+            if (uid) remapped[String(uid)] = String(v || "");
+            else remapped[String(k)] = String(v || "");
+          } else {
+            remapped[String(k)] = String(v || "");
+          }
+        }
+        event.mentions = remapped;
+      }
+    }
+  } catch (e) {}
+
+  // Rebuild entries in case we changed event.mentions
+  entries = mentionMapToEntries(event.mentions || {});
+
+  if (entries.length === 0) {
+    // Some ws3-fca builds expose getThreadHistory with a broken ctx binding.
+    // Avoid calling it here; fall back to body/thread member inference only.
   }
 
   if (entries.length === 0 && threadInfo) {
@@ -241,7 +403,6 @@ async function ensureMentionsFromHistory(api, event) {
 
     if (shouldDebug) {
       try {
-        const history = await api.getThreadHistory(event.threadID, 15);
         console.log("[mentionResolver DEBUG] event:", JSON.stringify({
           messageID: event.messageID,
           threadID: event.threadID,
@@ -250,16 +411,9 @@ async function ensureMentionsFromHistory(api, event) {
           mentions: event.mentions,
         }, null, 2));
         console.log("[mentionResolver DEBUG] threadInfo:", JSON.stringify(threadInfo || {}, null, 2));
-        console.log(
-          "[mentionResolver DEBUG] history:",
-          JSON.stringify(
-            (history || []).map((h) => ({ messageID: h.messageID, senderID: h.senderID, body: h.body, mentions: h.mentions })),
-            null,
-            2,
-          ),
-        );
+        console.log("[mentionResolver DEBUG] parsed labels:", JSON.stringify(parseMentionLabelsFromBody(event.body), null, 2));
       } catch (e) {
-        console.log("[mentionResolver DEBUG] failed to fetch history for debug", e);
+        console.log("[mentionResolver DEBUG] debug dump failed", e);
       }
     }
 
@@ -267,7 +421,7 @@ async function ensureMentionsFromHistory(api, event) {
   }
 
   const remapped = threadInfo
-    ? await remapMentionsByThreadInfo(api, event.threadID, entries)
+    ? await remapMentionsByThreadInfo(api, event.threadID, entries, String(event.body || ""))
     : entries;
   event.mentions = mentionEntriesToMap(uniqueMentions(remapped));
   return event;

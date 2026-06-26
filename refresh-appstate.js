@@ -8,7 +8,7 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
-const { login } = require("ws3-fca");
+const login = require("./includes/f");
 
 const args = process.argv.slice(2);
 const envEmail = process.env.FB_EMAIL || process.env.FACEBOOK_EMAIL || "";
@@ -41,10 +41,11 @@ login({
 }, (err, api) => {
   if (err) {
     console.error("❌ Lỗi đăng nhập:");
-    if (err.message.includes("2-FA") || err.message.includes("2FA")) {
+    const errMsg = String(err?.message || err || "");
+    if (errMsg.includes("2-FA") || errMsg.includes("2FA")) {
       console.error("ℹ️  Tài khoản bật 2FA, cần vô hiệu hóa tạm thời hoặc dùng app password");
     } else {
-      console.error(err.message || err);
+      console.error(errMsg);
     }
     process.exit(1);
   }

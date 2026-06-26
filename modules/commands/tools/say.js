@@ -46,7 +46,7 @@ function splitTextIntoChunks(text, maxLen = MAX_TTS_CHARS_PER_CHUNK) {
 module.exports = {
   name: "say",
   description: "Chuyển tin nhắn được reply thành voice (giọng nói)",
-  usage: "\n!say (reply tin nhắn) → Chuyển nội dung được reply thành giọng nói\n━{13}\n🎙️ Reply tin nhắn bất kỳ rồi gõ !say\n⚡ Tốn năng lượng mỗi lần dùng\n📌 Hỗ trợ tiếng Việt, tối đa 20,000 ký tự",
+  usage: "\n!say (reply tin nhắn) → Chuyển nội dung được reply thành giọng nói\n━━━━━━━━━━━━━\n🎙️ Reply tin nhắn bất kỳ rồi gõ !say\n⚡ Tốn năng lượng mỗi lần dùng\n📌 Hỗ trợ tiếng Việt, tối đa 20,000 ký tự",
   execute: async ({ api, event, config }) => {
     const { messageID, messageReply, senderID } = event;
     const threadID = String(event.threadID); // Ép kiểu chuỗi

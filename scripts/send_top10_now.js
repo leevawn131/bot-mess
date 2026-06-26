@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { login } = require('ws3-fca');
+const login = require('../includes/f');
 
 const DAILY_TOP_STATE_PATH = path.join(__dirname, '..', 'cache', 'checktt_daily_top_state.json');
 const MONTHLY_TOP_STATE_PATH = path.join(__dirname, '..', 'cache', 'checktt_monthly_top_state.json');
@@ -102,7 +102,7 @@ const writeState = (filePath, state) => {
   } catch (e) {}
 };
 
-const sendDailyTop10ToAllGroups = async (api) => {
+const sendDailyTop10ToAllGroups = async (api, force = false) => {
   try {
     const stats = {};
     if (fs.existsSync(STATS_PATH)) Object.assign(stats, JSON.parse(fs.readFileSync(STATS_PATH, 'utf8')));
@@ -111,7 +111,7 @@ const sendDailyTop10ToAllGroups = async (api) => {
     const state = readState(DAILY_TOP_STATE_PATH);
 
     for (const threadID of Object.keys(stats)) {
-      if (state[threadID] === yesterdayKey) continue;
+      if (!force && state[threadID] === yesterdayKey) continue;
 
       const threadStats = stats[threadID];
       const ranked = Object.entries(threadStats)
@@ -136,7 +136,7 @@ const sendDailyTop10ToAllGroups = async (api) => {
         const userMap = new Map((threadInfo.userInfo || []).map((u) => [String(u.id), u.name]));
         const lines = [
           `📊 TOP 10 TƯƠNG TÁC NGÀY ${formatDayLabel(yesterdayKey)}`,
-          '━{13}',
+          '━'.repeat(13),
           ...ranked.slice(0, 10).map((item, idx) => {
             const name = userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
             return `${idx + 1}. ${name} — ${item.count}`;
@@ -158,7 +158,7 @@ const sendDailyTop10ToAllGroups = async (api) => {
   }
 };
 
-const sendMonthlyTop10ToAllGroups = async (api) => {
+const sendMonthlyTop10ToAllGroups = async (api, force = false) => {
   try {
     const stats = {};
     if (fs.existsSync(STATS_PATH)) Object.assign(stats, JSON.parse(fs.readFileSync(STATS_PATH, 'utf8')));
@@ -167,7 +167,7 @@ const sendMonthlyTop10ToAllGroups = async (api) => {
     const state = readState(MONTHLY_TOP_STATE_PATH);
 
     for (const threadID of Object.keys(stats)) {
-      if (state[threadID] === previousMonthKey) continue;
+      if (!force && state[threadID] === previousMonthKey) continue;
 
       const threadStats = stats[threadID];
       const ranked = Object.entries(threadStats)
@@ -192,7 +192,7 @@ const sendMonthlyTop10ToAllGroups = async (api) => {
         const userMap = new Map((threadInfo.userInfo || []).map((u) => [String(u.id), u.name]));
         const lines = [
           `📊 TOP 10 TƯƠNG TÁC THÁNG ${formatMonthLabel(previousMonthKey)}`,
-          '━{13}',
+          '━'.repeat(13),
           ...ranked.slice(0, 10).map((item, idx) => {
             const name = userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
             return `${idx + 1}. ${name} — ${item.count}`;
@@ -226,7 +226,10 @@ const loadAppState = () => {
 };
 
 const main = async () => {
-  const mode = (process.argv[2] || 'daily').toLowerCase();
+  const args = process.argv.slice(2);
+  const mode = (args.find(a => !a.startsWith('-')) || 'daily').toLowerCase();
+  const force = args.some(a => a === '--force' || a === '-f');
+
   const creds = loadAppState();
   if (!creds) {
     console.error('❌ Không tìm thấy appstate.json.');
@@ -235,17 +238,30 @@ const main = async () => {
 
   login(creds, async (err, api) => {
     if (err) {
-      console.error('❌ Login error:', err);
+      console.error('❌ Đăng nhập thất bại. Có thể do cookie/appstate đã hết hạn hoặc bị lỗi.');
+      console.error('👉 Hãy cập nhật appstate.json hoặc chạy lệnh sau để làm mới:');
+      console.error('   node refresh-appstate.js <email> <password>');
+      console.error('Chi tiết lỗi đăng nhập:', err.message || err);
       process.exit(1);
     }
 
+    // Save fresh appstate to file
+    try {
+      const appState = JSON.stringify(api.getAppState(), null, 2);
+      const runtimePath = path.join(__dirname, '..', 'runtime', 'appstate.json');
+      const legacyPath = path.join(__dirname, '..', 'appstate.json');
+      fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
+      fs.writeFileSync(runtimePath, appState);
+      fs.writeFileSync(legacyPath, appState);
+    } catch (e) {}
+
     try {
       if (mode === 'monthly') {
-        console.log('🕗 Gửi TOP 10 tương tác tháng (bằng tay)...');
-        await sendMonthlyTop10ToAllGroups(api);
+        console.log(`🕗 Gửi TOP 10 tương tác tháng (bằng tay)${force ? ' [FORCE]' : ''}...`);
+        await sendMonthlyTop10ToAllGroups(api, force);
       } else {
-        console.log('🕗 Gửi TOP 10 tương tác ngày (bằng tay)...');
-        await sendDailyTop10ToAllGroups(api);
+        console.log(`🕗 Gửi TOP 10 tương tác ngày (bằng tay)${force ? ' [FORCE]' : ''}...`);
+        await sendDailyTop10ToAllGroups(api, force);
       }
     } catch (e) {
       console.error('❌ Lỗi khi gửi TOP:', e);

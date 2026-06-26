@@ -1,9 +1,11 @@
 const { checkCooldown } = require("../../utils/cooldown");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
 const {
     buildProfileLink,
     formatTimestamp,
     getLeaveHistoryByPeriod
 } = require("../../utils/leaveHistory");
+const prefix = process.env.BOT_PREFIX;
 
 function normalizePeriod(raw = "") {
     const value = String(raw || "").trim().toLowerCase();
@@ -50,10 +52,11 @@ async function sendChunks(api, threadID, replyToMessageID, lines) {
 module.exports = {
     name: "checkout",
     description: "Xem lịch sử thành viên rời nhóm theo ngày, tuần, tháng",
-    usage: "\n!checkout → Xem lịch sử rời nhóm hôm nay\n!checkout tuan → Xem trong tuần này\n!checkout thang → Xem trong tháng này\n━{13}\n📝 Hiển thị ai rời, thời gian, lý do\n↩️ Tuần: Reply STT để lấy link Facebook",
+    usage: `\n${prefix}checkout → Xem lịch sử rời nhóm hôm nay\n${prefix}checkout tuan → Xem trong tuần này\n${prefix}checkout thang → Xem trong tháng này\n━━━━━━━━━━━━━\n📝 Hiển thị ai rời, thời gian, lý do\n↩️ Tuần: Reply STT để lấy link Facebook`,
 
-    execute: async ({ api, event, args }) => {
+    execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
+        const prefix = config?.prefix || "!";
 
         const cooldown = checkCooldown({ command: "lsroi", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
@@ -61,7 +64,7 @@ module.exports = {
         }
 
         try {
-            const threadInfo = await api.getThreadInfo(threadID);
+            const threadInfo = await getThreadInfoCached(api, threadID);
             if (!threadInfo || typeof threadInfo !== 'object' || !threadInfo.isGroup) {
                 return api.sendMessage("⚠️ Lệnh này chỉ dùng trong nhóm chat.", threadID, messageID);
             }
@@ -70,7 +73,7 @@ module.exports = {
 
             const period = normalizePeriod(args[0]);
             if (!period) {
-                return api.sendMessage("⚠️ Cách dùng: !lsroi [ngay | tuan | thang]", threadID, messageID);
+                return api.sendMessage(`⚠️ Cách dùng: ${prefix}checkout [ngay | tuan | thang]`, threadID, messageID);
             }
 
             const entries = getLeaveHistoryByPeriod(threadID, period)

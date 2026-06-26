@@ -3,6 +3,7 @@ const { checkCooldown } = require("../../utils/cooldown");
 const { syncBankPool } = require("../../utils/bankPool");
 const { consumeEnergy } = require("../../utils/energySystem");
 const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
+const prefix = process.env.BOT_PREFIX;
 
 const ROB_TAX_RATE = 0.08;
 
@@ -12,8 +13,7 @@ const BOSS_ID = "100037351338722";
 module.exports = {
   name: "cuop",
   description: "Cướp tiền người khác hoặc ngân hàng",
-  usage:
-    "\n!cuop @tag → Cướp tiền người được tag\n!cuop (reply) → Cướp tiền người được reply\n!cuop nganhang → Cướp ngân hàng (rủi ro cao)\n━━━━━━━━━━━━━━━━━━\n⚠️ Thất bại sẽ bị phạt tiền + có thể vào tù\n💰 Thuế cướp: 8%\n⚡ Tốn 20 thể lực mỗi lần dùng",
+  usage: `\n${prefix}cuop @tag → Cướp tiền người được tag\n${prefix}cuop (reply) → Cướp tiền người được reply\n${prefix}cuop nganhang → Cướp ngân hàng (rủi ro cao)\n━━━━━━━━━━━━━━━━━━\n⚠️ Thất bại sẽ bị phạt tiền + có thể vào tù\n💰 Thuế cướp: 8%\n⚡ Tốn 20 thể lực mỗi lần dùng`,
 
   execute: async ({ api, event, config, args }) => {
     await ensureMentionsFromHistory(api, event);
@@ -127,7 +127,7 @@ module.exports = {
           );
         }
 
-        await syncBankPool(null);
+        await syncBankPool(connection);
 
         const poolRows = await execute(
           "SELECT total_balance FROM bank_pool WHERE id = 1",

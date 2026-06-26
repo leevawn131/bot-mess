@@ -1,12 +1,14 @@
 const { checkCooldown } = require("../../utils/cooldown");
-const { getAdminBotUIDs } = require("../../utils/checkPermission");
+const { getAdminBotUIDs, toAdminIdList } = require("../../utils/checkPermission");
 const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
   name: "kick",
   description: "Kick thành viên (Có check quyền QTV)",
   usage:
-    "\n!kick @tag → Kick người được tag\n!kick (reply) → Kick người được reply\n!kick [uid] → Kick bằng User ID\n━{13}\n🛡️ Tự động bỏ qua QTV và Bot\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
+    `\n${prefix}kick @tag → Kick người được tag\n${prefix}kick (reply) → Kick người được reply\n${prefix}kick [uid] → Kick bằng User ID\n━━━━━━━━━━━━━\n🛡️ Tự động bỏ qua QTV và Bot\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được`,
   execute: async ({ api, event, args }) => {
     await ensureMentionsFromHistory(api, event);
     const { threadID, messageID, senderID, mentions } = event;
@@ -27,7 +29,7 @@ module.exports = {
 
     try {
       // 2. Lấy thông tin nhóm và danh sách Admin
-      const threadInfo = await api.getThreadInfo(threadID);
+      const threadInfo = await getThreadInfoCached(api, threadID);
       
       if (!threadInfo || typeof threadInfo !== 'object') {
         return api.sendMessage("❌ Không thể lấy thông tin nhóm.", threadID, messageID);
@@ -69,7 +71,7 @@ module.exports = {
           messageID,
         );
       
-      const adminIDs = (threadInfo.adminIDs || []).map((i) => String(i.id));
+      const adminIDs = toAdminIdList(threadInfo);
       const botID = String(api.getCurrentUserID());
       const isSenderAdmin = adminIDs.includes(String(senderID));
       const adminBotUIDs = getAdminBotUIDs();
@@ -133,6 +135,11 @@ module.exports = {
         }
 
         if (String(targetID) === botID) {
+          skipCount++;
+          continue;
+        }
+
+        if (Array.isArray(adminBotUIDs) && adminBotUIDs.includes(String(targetID))) {
           skipCount++;
           continue;
         }

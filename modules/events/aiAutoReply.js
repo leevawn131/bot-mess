@@ -1,5 +1,5 @@
 const fs = require("fs");
-const { getMediaBuffer } = require("../utils/autorepSettings");
+const { getMediaBuffer, getPreuploadedAttachment, refillPreuploadedPool } = require("../utils/autorepSettings");
 const stream = require("stream");
 const { findMatchingRule } = require("../utils/autorepSettings");
 
@@ -11,21 +11,28 @@ function buildAutorepPayload(rule, threadID) {
     }
 
     if (rule?.media?.path && fs.existsSync(rule.media.path)) {
-        // prefer in-memory buffer for small media to avoid disk I/O
-        const buf = getMediaBuffer(threadID, rule.normalizedKeyword);
-        if (buf) {
-            try {
-                const rs = stream.Readable.from(buf);
-                // preserve path/filename so downstream API can infer mime/type
+        // First try to get a pre-uploaded token from the pool
+        const token = getPreuploadedAttachment(rule.media.path);
+        if (token) {
+            payload.attachment = [token];
+            payload.isPreuploaded = true;
+        } else {
+            // Fallback: prefer in-memory buffer for small media to avoid disk I/O
+            const buf = getMediaBuffer(threadID, rule.normalizedKeyword);
+            if (buf) {
                 try {
-                    rs.path = rule.media.path;
-                } catch {}
-                payload.attachment = rs;
-            } catch (e) {
+                    const rs = stream.Readable.from(buf);
+                    // preserve path/filename so downstream API can infer mime/type
+                    try {
+                        rs.path = rule.media.path;
+                    } catch {}
+                    payload.attachment = rs;
+                } catch (e) {
+                    payload.attachment = fs.createReadStream(rule.media.path);
+                }
+            } else {
                 payload.attachment = fs.createReadStream(rule.media.path);
             }
-        } else {
-            payload.attachment = fs.createReadStream(rule.media.path);
         }
     }
 
@@ -50,11 +57,24 @@ module.exports = {
         const rule = findMatchingRule(threadID, body);
         if (!rule) return;
 
+        // Cooldown check to prevent users from spamming keywords and bot from spamming media
+        const { checkCooldown } = require("../utils/cooldown");
+        const cooldownKey = `${threadID}:${rule.normalizedKeyword}`;
+        const durationMs = rule.media?.path ? 15000 : 5000;
+        const cooldown = checkCooldown({
+            command: "autorep_trigger",
+            key: cooldownKey,
+            durationMs
+        });
+        if (!cooldown.allowed) return;
+
         let attachmentStream = null;
         try {
             const payload = buildAutorepPayload(rule, threadID);
+            const isPreuploaded = payload.isPreuploaded;
+            delete payload.isPreuploaded;
 
-            if (payload.attachment) {
+            if (payload.attachment && !isPreuploaded) {
                 attachmentStream = payload.attachment;
             }
 
@@ -70,9 +90,12 @@ module.exports = {
             const t0 = Date.now();
             await api.sendMessage(payload, threadID, event.messageID);
             const dt = Date.now() - t0;
-            try {
-                console.log(`[autorep] sent="${rule.keyword}" thread=${threadID} cacheHit=${cacheHit} size=${cacheSize}B time=${dt}ms`);
-            } catch {}
+            console.log(`[autorep] sent="${rule.keyword}" thread=${threadID} preuploaded=${!!isPreuploaded} cacheHit=${cacheHit} size=${cacheSize}B time=${dt}ms`);
+
+            // Refill the pool in the background
+            if (rule.media?.path) {
+                refillPreuploadedPool(rule.media.path);
+            }
         } catch (error) {
             console.error(`❌ Lỗi autorep [${rule.keyword}]:`, error);
             if (attachmentStream) {
@@ -81,14 +104,23 @@ module.exports = {
                 } catch {}
             }
 
+            // Fallback: retry by sending the raw file stream directly (avoiding preuploaded token error)
             try {
+                const fallbackPayload = {};
                 if (String(rule.responseText || "").trim()) {
-                    await api.sendMessage({ body: rule.responseText }, threadID, event.messageID);
-                } else if (rule.media?.path && fs.existsSync(rule.media.path)) {
-                    await api.sendMessage({ attachment: fs.createReadStream(rule.media.path) }, threadID, event.messageID);
+                    fallbackPayload.body = rule.responseText;
                 }
+                if (rule.media?.path && fs.existsSync(rule.media.path)) {
+                    fallbackPayload.attachment = fs.createReadStream(rule.media.path);
+                }
+                await api.sendMessage(fallbackPayload, threadID, event.messageID);
             } catch (fallbackError) {
                 console.error(`❌ Lỗi autorep fallback [${rule.keyword}]:`, fallbackError);
+            }
+
+            // Trigger pool refill since the popped token might have expired/been invalid
+            if (rule.media?.path) {
+                refillPreuploadedPool(rule.media.path);
             }
         } finally {
             if (attachmentStream) {
@@ -98,4 +130,4 @@ module.exports = {
             }
         }
     },
-};
+};

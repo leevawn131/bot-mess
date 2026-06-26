@@ -1,5 +1,6 @@
 const { checkCooldown } = require("../../utils/cooldown");
 const { getAdminBotUIDs } = require("../../utils/checkPermission");
+const prefix = process.env.BOT_PREFIX;
 
 async function resolveUserName(api, uid) {
   const id = String(uid || "").trim();
@@ -37,7 +38,7 @@ async function resolveUserName(api, uid) {
 module.exports = {
   name: "adminbot",
   description: "Hiển thị danh sách admin bot",
-  usage: "\n!adminbot → Xem danh sách admin của bot\n━{13}\n👑 Hiển thị tên và link Facebook của từng admin",
+  usage: `\n${prefix}adminbot → Xem danh sách admin của bot\n━━━━━━━━━━━━━\n👑 Hiển thị tên và link Facebook của từng admin`,
 
   execute: async ({ api, event }) => {
     const { threadID, messageID, senderID } = event;
@@ -76,7 +77,7 @@ module.exports = {
         adminIds.map((id) => resolveUserName(api, id)),
       );
 
-      let msg = `👑 DANH SÁCH ADMIN BOT (${adminIds.length})\n━{13}\n`;
+      let msg = `👑 DANH SÁCH ADMIN BOT (${adminIds.length})\n━━━━━━━━━━━━━\n`;
 
       adminIds.forEach((id, index) => {
         const name = names[index] || "Không lấy được tên";

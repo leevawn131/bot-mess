@@ -8,6 +8,7 @@ const {
   recordMinigameSuccess,
 } = require("../../utils/minigameLimiter");
 const { recordAction } = require("../../utils/questSystem");
+const prefix = process.env.BOT_PREFIX;
 
 const TAX_RATE = 0.05;
 const AUTO_CLOSE_MS = 3 * 60 * 1000;
@@ -99,7 +100,7 @@ async function finalizeBaucuaSession({
   const resultNames = res.map((i) => listBaucua[i].name);
 
   const autoCloseText = autoClose ? "⏰ Hết 3 phút, bot tự xóc.\n" : "";
-  let msg = `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcons}\n━{13}\n`;
+  let msg = `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcons}\n━━━━━━━━━━━━━\n`;
   let totalBet = 0;
   let totalPay = 0;
 
@@ -190,9 +191,10 @@ function scheduleBaucuaAutoClose({ api, threadID, config }) {
 module.exports = {
   name: "baucua",
   description: "Bầu Cua",
-  usage: "\n!baucua → Mở sòng Bầu Cua mới\n!baucua lac → Lắc đĩa kết thúc phiên (chủ sòng)\n━{13}\n🎲 Cược: Reply tin nhắn sòng + [bầu/cua/tôm/cá/gà/nai] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → cua 30000",
+  usage: `\n${prefix}baucua → Mở sòng Bầu Cua mới\n${prefix}baucua lac → Lắc đĩa kết thúc phiên (chủ sòng)\n━━━━━━━━━━━━━\n🎲 Cược: Reply tin nhắn sòng + [bầu/cua/tôm/cá/gà/nai] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → cua 30000`,
 
   execute: async ({ api, event, args, config }) => {
+    const prefix = config?.prefix || "!";
     const threadID = String(event.threadID);
     const senderID = String(event.senderID);
     const command = args[0]?.toLowerCase();
@@ -232,7 +234,7 @@ module.exports = {
     else {
       if (global.baucuaSessions[threadID])
         return api.sendMessage(
-          "⚠️ Đang có phiên rồi! Gõ !baucua xoc để chốt.",
+          `⚠️ Đang có phiên rồi! Gõ ${prefix}baucua xoc để chốt.`,
           threadID,
         );
 
@@ -315,8 +317,19 @@ module.exports = {
       const userName = rows[0].name;
 
       let betAmount = 0;
-      if (amountStr === "all" || amountStr === "tat") betAmount = userBalance;
-      else betAmount = parseInt(amountStr);
+      if (amountStr === "all" || amountStr === "tat") {
+        betAmount = userBalance;
+      } else if (amountStr && typeof amountStr === "string" && amountStr.endsWith("%")) {
+        const percentStr = amountStr.slice(0, -1);
+        const percent = parseFloat(percentStr);
+        if (!isNaN(percent) && percent > 0 && percent <= 100) {
+          betAmount = Math.floor((userBalance * percent) / 100);
+        } else {
+          return api.sendMessage("⚠️ Phần trăm cược không hợp lệ (phải từ 1% đến 100%).", threadID, messageID);
+        }
+      } else {
+        betAmount = parseInt(amountStr);
+      }
 
       if (isNaN(betAmount) || betAmount <= 0)
         return api.sendMessage(
@@ -366,7 +379,7 @@ module.exports = {
             (now - dueDate) / (1000 * 60 * 60 * 24),
           );
           return api.sendMessage(
-            `⚠️ BẠN ĐANG NỢ TIỀN!\n━{13}\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━{13}\n💡 Trả nợ để cược bình thường!`,
+            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
             threadID,
             messageID,
           );

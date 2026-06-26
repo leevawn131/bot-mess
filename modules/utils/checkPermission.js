@@ -22,8 +22,11 @@ function toAdminIdList(threadInfo) {
   const list = Array.isArray(threadInfo?.adminIDs) ? threadInfo.adminIDs : [];
   return list
     .map((item) => {
-      if (!item || typeof item !== "object") return "";
-      return String(item.id || item.userID || item.adminID || "").trim();
+      if (!item) return "";
+      if (typeof item === "object") {
+        return String(item.id || item.userID || item.adminID || "").trim();
+      }
+      return String(item).trim();
     })
     .filter(Boolean);
 }
@@ -71,9 +74,10 @@ async function readSettings() {
  * @param {string} threadID - ID của nhóm
  * @param {string} senderID - ID của người gửi tin
  * @param {object} api - API object để lấy thông tin nhóm
+ * @param {string} [commandName] - Tên lệnh đang thực thi
  * @returns {Promise<{allowed: boolean, reason: string}>}
  */
-async function checkPermission(threadID, senderID, api) {
+async function checkPermission(threadID, senderID, api, commandName = "") {
   threadID = String(threadID); // Convert sang string để match settings
   const settings = await readSettings();
   const mode = normalizeMode(settings[threadID] || "qtv");
@@ -88,6 +92,25 @@ async function checkPermission(threadID, senderID, api) {
   const botUID = String(api.getCurrentUserID());
   if (String(senderID) === botUID) {
     return { allowed: true, reason: "Bot self-command" };
+  }
+
+  // Nếu là lệnh mode, nhóm thuê gói admin và người gửi là QTV nhóm -> Cho phép
+  if (commandName === "mode") {
+    try {
+      const { checkIsAdminRental } = require("./rental");
+      const isAdminRental = await checkIsAdminRental(threadID);
+      if (isAdminRental) {
+        const threadInfo = await getThreadInfoSafe(api, threadID);
+        if (threadInfo) {
+          const adminIDs = toAdminIdList(threadInfo);
+          if (adminIDs.includes(String(senderID))) {
+            return { allowed: true, reason: "Group admin in Admin-rented group (mode command unlocked)" };
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[checkPermission] Error checking admin rental mode command:", e);
+    }
   }
 
   // Mode USER: Ai cũng được
@@ -140,5 +163,6 @@ module.exports = {
   checkPermission,
   getGroupMode,
   getAdminBotUIDs,
-  readSettings
+  readSettings,
+  toAdminIdList
 };

@@ -1,6 +1,8 @@
 const { checkCooldown } = require("../../utils/cooldown");
+const config = require("../../../config.json");
 
-const AUTO_UNSEND_MS = 30000;
+const AUTO_UNSEND_MS = 60000;
+const prefix = config?.prefix || "!";
 
 function scheduleAutoUnsend(api, messageResult) {
   const messageID = messageResult?.messageID;
@@ -40,10 +42,9 @@ function resolveCommand(commandName) {
 module.exports = {
   name: "help",
   description: "Xem danh sách lệnh theo nhóm",
-  usage: "\n!help → Xem danh sách tất cả lệnh theo nhóm\n!help [tên_lệnh] → Xem hướng dẫn chi tiết của 1 lệnh\n━{13}\n💡 Ví dụ: !help taixiu",
+  usage: `\n${prefix}help → Xem danh sách tất cả lệnh theo nhóm\n${prefix}help [tên_lệnh] → Xem hướng dẫn chi tiết của 1 lệnh\n━━━━━━━━━━━━━\n💡 Ví dụ: ${prefix}help taixiu`,
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
-    const prefix = config?.prefix || "!";
 
     // Cooldown 5s
     const cooldown = checkCooldown({
@@ -60,56 +61,58 @@ module.exports = {
     }
 
     try {
-      const commandList = Array.from(global.commands.keys()).sort();
-      const commandSet = new Set(commandList);
+      const path = require("path");
+      const commandsDir = path.resolve(__dirname, "..");
 
-      const sections = [
-        {
-          title: "👑 ADMIN-BOT (Quản lý Bot)",
-          commands: ["reset", "go", "ping", "mode", "setthue", "cmd"],
-        },
-        {
-          title: "🛡️ QTV NHÓM (Quản lý Box)",
-          commands: [
-            "go", "kick", "anti", "setwelcome", "luatnhom", "checkbd", "setbd",
-            "checkout"
-          ],
-        },
-        {
-          title: "👤 THƯỜNG DÂN",
-          commands: [
-            "thuebot", "help", "ai", "gỡ",
-            "tien", "chuyentien", "bank", "lamviec", "diemdanh", "vay", "shop", "buy", "inv", "use", "openbox", "cuop", "daigia", "quest", // Kinh tế
-            "taixiu", "baucua", "lode", "duoihinhbatchu", "tu", // Game
-            "add", "grinfo", "checktt", "ghepdoi", "qtv", "adminbot", // Tiện ích nhóm
-            "huongdan", "changelog", "dich", "say", "voice2text", "music", "vidgai", "đấm", "kiss", "uid" // Công cụ
-          ],
+      const categoryNames = {
+        "economy": "💰 KINH TẾ",
+        "group": "🛡️ NHÓM",
+        "minigame": "🎮 TRÒ CHƠI",
+        "system": "👑 HỆ THỐNG",
+        "tools": "🛠️ CÔNG CỤ",
+        ".": "📦 KHÁC",
+      };
+
+      const categories = {};
+
+      for (const [name, command] of global.commands.entries()) {
+        let folder = ".";
+        if (command.__filePath) {
+          const relativePath = path.relative(commandsDir, command.__filePath);
+          folder = path.dirname(relativePath);
         }
-      ];
+        const categoryKey = folder === "." ? "." : folder.toLowerCase();
+        if (!categories[categoryKey]) {
+          categories[categoryKey] = [];
+        }
+        categories[categoryKey].push(name);
+      }
 
-      const grouped = sections
-        .map((section) => {
-          const available = section.commands.filter((name) =>
-            commandSet.has(name),
-          );
-          return { title: section.title, commands: available };
-        })
-        .filter((section) => section.commands.length > 0);
+      const categoryOrder = ["system", "group", "economy", "minigame", "tools", "."];
+      const sortedKeys = Object.keys(categories).sort((a, b) => {
+        const indexA = categoryOrder.indexOf(a);
+        const indexB = categoryOrder.indexOf(b);
+        if (indexA !== -1 && indexB !== -1) {
+          return indexA - indexB;
+        }
+        if (indexA !== -1) return -1;
+        if (indexB !== -1) return 1;
+        return a.localeCompare(b);
+      });
 
-      const groupedNames = new Set(
-        grouped.flatMap((section) => section.commands),
-      );
-      const others = commandList.filter((name) => !groupedNames.has(name));
+      for (const key of sortedKeys) {
+        categories[key].sort();
+      }
 
       if (!args[0]) {
-        let msg = `📜 DANH SÁCH LỆNH (${commandList.length})\n━━━━━━━━━━━━━\n\n`;
+        let msg = `📜 DANH SÁCH LỆNH (${global.commands.size})\n━━━━━━━━━━━━━\n\n`;
 
-        grouped.forEach((section) => {
-          msg += `[ ${section.title} ]\n👉 ${section.commands.join(", ")}\n\n`;
-        });
-
-        if (others.length > 0) {
-          msg += `[ 📦 KHÁC ]\n👉 ${others.join(", ")}\n\n`;
+        for (const key of sortedKeys) {
+          const displayName = categoryNames[key] || `📂 ${key.toUpperCase()}`;
+          const commandList = categories[key];
+          if (commandList.length > 0) {
+            msg += `[ ${displayName} ]\n👉 ${commandList.join(", ")}\n\n`;
+          }
         }
 
         msg += "━━━━━━━━━━━━━\n";
@@ -132,10 +135,13 @@ module.exports = {
       }
 
       const resolvedName = command.name || command.config?.name || commandName;
+      const formattedUsage = command.usage
+        ? command.usage.replace(/!([a-zA-Z0-9_\u00C0-\u1EF9]+)/g, `${prefix}$1`)
+        : "";
       const detailMsg =
         `ℹ️ LỆNH: ${resolvedName.toUpperCase()}\n` +
         `📝 Mô tả: ${command.description || "Chưa có"}\n` +
-        `🛠️ Cách dùng: ${prefix}${resolvedName}${command.usage ? ` ${command.usage}` : ""}`;
+        `🛠️ Cách dùng: ${prefix}${resolvedName}${formattedUsage ? ` ${formattedUsage}` : ""}`;
 
       const sentMessage = await api.sendMessage(detailMsg, threadID);
       scheduleAutoUnsend(api, sentMessage);

@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { getThreadInfoCached } = require("../utils/threadInfo");
 
 const ANTITHUHOI_DIR = path.join(__dirname, "../../cache/antithuhoi");
 const SETTINGS_PATH = path.join(ANTITHUHOI_DIR, "settings.json");
@@ -68,8 +69,8 @@ async function resolveSenderName(
   if (!senderID) return fallbackName;
 
   try {
-    if (typeof api.getThreadInfo === "function") {
-      const threadInfo = await api.getThreadInfo(String(threadID || ""));
+    if (typeof getThreadInfoCached === "function") {
+      const threadInfo = await getThreadInfoCached(api, String(threadID || ""));
       const memberInfo = Array.isArray(threadInfo?.userInfo)
         ? threadInfo.userInfo
         : [];

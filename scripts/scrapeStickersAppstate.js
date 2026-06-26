@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { login } = require('ws3-fca');
+const login = require('../includes/f');
 
 const appState = JSON.parse(fs.readFileSync('appstate.json', 'utf8'));
 

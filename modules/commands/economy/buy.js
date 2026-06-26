@@ -1,19 +1,21 @@
 const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
   name: "buy",
   description: "Mua vật phẩm từ shop",
-  usage: "\n!buy [item-key] <số_lượng> → Mua vật phẩm từ shop\n━{13}\n📌 [item-key]: Mã vật phẩm (xem bằng !shop)\n📌 <số_lượng>: Số lượng muốn mua (mặc định: 1)\n💡 Ví dụ: !buy shield 2",
+  usage: `\n${prefix}buy [item-key] <số_lượng> → Mua vật phẩm từ shop\n━━━━━━━━━━━━━\n📌 [item-key]: Mã vật phẩm (xem bằng ${prefix}shop)\n📌 <số_lượng>: Số lượng muốn mua (mặc định: 1)\n💡 Ví dụ: ${prefix}buy shield 2`,
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
+    const prefix = config?.prefix || "!";
     const itemKey = args[0]?.toLowerCase();
     const quantityStr = args[1];
 
     if (!itemKey) {
       return api.sendMessage(
-        "⚠️ Hãy nhập item key và số lượng.\nVí dụ: !buy shield 2",
+        `⚠️ Hãy nhập item key và số lượng.\nVí dụ: ${prefix}buy shield 2`,
         threadID,
         messageID,
       );
@@ -57,7 +59,7 @@ module.exports = {
 
       if (items.length === 0) {
         return api.sendMessage(
-          "❌ Item không tồn tại trong shop. Gọi !shop để xem danh sách.",
+          `❌ Item không tồn tại trong shop. Gọi ${prefix}shop để xem danh sách.`,
           threadID,
           messageID,
         );
@@ -74,7 +76,7 @@ module.exports = {
 
       if (users.length === 0) {
         return api.sendMessage(
-          "❌ Bạn chưa có tài khoản. Gọi !diemdanh để tạo tài khoản.",
+          `❌ Bạn chưa có tài khoản. Gọi ${prefix}diemdanh để tạo tài khoản.`,
           threadID,
           messageID,
         );

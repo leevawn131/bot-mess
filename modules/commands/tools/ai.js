@@ -3,7 +3,7 @@ const path = require('path');
 const { runAiConversation } = require('../../utils/aiAssistant');
 
 const CONFIG_PATH = path.resolve(__dirname, '../../../config.json');
-const DEFAULT_OLLAMA_MODEL = 'llama3:latest';
+const DEFAULT_OLLAMA_MODEL = 'qwen2.5:3b';
 
 function loadAiConfig() {
     try {
@@ -21,13 +21,13 @@ function loadAiConfig() {
 
 module.exports = {
     name: "ai",
-    description: "AI thuần (chạy trên Ollama Llama3)",
-    usage : "\n!ai [câu hỏi] → Hỏi AI thuần (llama3:latest)\n!ai -m [model] [câu hỏi] → Hỏi với model cụ thể\n━{13}\n🤖 AI thuần chạy bằng Ollama (llama3)\n💡 Ví dụ: !ai Thủ đô Việt Nam là gì?",
-    execute: async ({ api, event, args }) => {
+    description: "AI thuần (chạy trên Ollama qwen2.5:3b)",
+    usage : "\n!ai [câu hỏi] → Hỏi AI thuần (qwen2.5:3b)\n!ai -m [model] [câu hỏi] → Hỏi với model cụ thể\n━━━━━━━━━━━━━\n🤖 AI thuần chạy bằng Ollama (qwen2.5:3b)\n💡 Ví dụ: !ai Thủ đô Việt Nam là gì?",
+    execute: async ({ api, event, args, config }) => {
         const threadID = String(event.threadID); // Ép kiểu chuỗi để tránh lỗi
-        const displayLabel = 'AI thuần (llama3)';
+        const displayLabel = 'AI thuần (qwen2.5:3b)';
         const aiConfig = loadAiConfig();
-        const defaultModel = process.env.OLLAMA_MODEL || aiConfig.model || DEFAULT_OLLAMA_MODEL;
+        const defaultModel = aiConfig.model || DEFAULT_OLLAMA_MODEL;
 
         let model = defaultModel;
         let queryArgs = args;
@@ -42,7 +42,8 @@ module.exports = {
 
         let query = queryArgs.join(" ").trim();
 
-        if (!query) return api.sendMessage("🤖 Nhập câu hỏi đi bạn.\nVD: !ai Kể chuyện ma", threadID);
+        const prefix = config?.prefix || "!";
+        if (!query) return api.sendMessage(`🤖 Nhập câu hỏi đi bạn.\nVD: ${prefix}ai Kể chuyện ma`, threadID);
 
         api.sendMessage(`🔍 ${displayLabel} đang suy nghĩ...`, threadID);
 
@@ -56,7 +57,7 @@ module.exports = {
         });
 
         if (result.ok && result.answer) {
-            return api.sendMessage(`🤖 [${displayLabel}]:\n━{13}\n${result.answer}`, threadID);
+            return api.sendMessage(`🤖 [${displayLabel}]:\n━━━━━━━━━━━━━\n${result.answer}`, threadID);
         }
 
         if (result.reason === 'cooldown' && result.errorMessage) {

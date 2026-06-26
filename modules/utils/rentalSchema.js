@@ -46,6 +46,13 @@ async function ensureRentedGroupsSchema() {
       `);
     }
 
+    if (!(await columnExists("is_admin_rental"))) {
+      await execute(`
+        ALTER TABLE rented_groups
+        ADD COLUMN is_admin_rental TINYINT DEFAULT 0
+      `);
+    }
+
     schemaReady = true;
   })();
 

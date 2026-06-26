@@ -2,11 +2,13 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const { checkCooldown } = require('../../utils/cooldown');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
     name: "grinfo",
     description: "Xem thông tin nhóm",
-    usage: "\n!grinfo → Xem thông tin chi tiết nhóm hiện tại\n━{13}\n📌 Hiển thị: Tên nhóm, số thành viên, QTV, ảnh nhóm",
+    usage: `\n${prefix}grinfo → Xem thông tin chi tiết nhóm hiện tại\n━━━━━━━━━━━━━\n📌 Hiển thị: Tên nhóm, số thành viên, QTV, ảnh nhóm`,
     execute: async ({ api, event }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -18,7 +20,7 @@ module.exports = {
 
         try {
             // 1. Lấy dữ liệu nhóm
-            const threadInfo = await api.getThreadInfo(threadID);
+            const threadInfo = await getThreadInfoCached(api, threadID);
             
             // Check if threadInfo is null or invalid
             if (!threadInfo || typeof threadInfo !== 'object') {
@@ -39,7 +41,7 @@ module.exports = {
 
             // 3. Soạn nội dung
             let msg = `📂 === HỒ SƠ NHÓM === 📂\n`;
-            msg += `━{13}\n`;
+            msg += `━━━━━━━━━━━━━\n`;
             msg += `📛 Tên: ${name}\n`;
             msg += `🆔 ID Nhóm: ${threadID}\n`;
             msg += `🛡️ Phê duyệt: ${approvalMode}\n`;
@@ -47,7 +49,7 @@ module.exports = {
             msg += `👥 Tổng thành viên: ${totalMembers}\n`;
             msg += `   ♂️ Nam: ${boy} | ♀️ Nữ: ${girl} | 🌈 Khác: ${other}\n`;
             msg += `🎨 Emoji: ${emoji}\n`;
-            msg += `━{13}`;
+            msg += `━━━━━━━━━━━━━`;
 
             // Ép kiểu messageID về chuỗi thuần túy để tránh lỗi "not String"
             const replyID = String(messageID);

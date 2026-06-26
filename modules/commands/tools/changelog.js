@@ -45,7 +45,7 @@ function normalizeEntry(raw) {
 module.exports = {
   name: "changelog",
   description: "Xem lịch sử cập nhật: all hoặc newest",
-  usage: "\n!changelog → Xem bản cập nhật mới nhất\n!changelog all → Xem toàn bộ lịch sử cập nhật\n━{13}\n📝 Hiển thị phiên bản, ngày, và nội dung thay đổi",
+  usage: "\n!changelog → Xem bản cập nhật mới nhất\n!changelog all → Xem toàn bộ lịch sử cập nhật\n━━━━━━━━━━━━━\n📝 Hiển thị phiên bản, ngày, và nội dung thay đổi",
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
 
@@ -77,7 +77,7 @@ module.exports = {
       const latest = entries[0];
       const lines = [
         "📌 CHANGELOG MỚI NHẤT",
-        "━{13}",
+        "━━━━━━━━━━━━━",
         `• Version: ${latest.version}`,
         `• Date: ${latest.date}`,
         `• Title: ${latest.title}`,
@@ -99,7 +99,7 @@ module.exports = {
       );
     }
 
-    const lines = ["📚 CHANGELOG TẤT CẢ", "━{13}"];
+    const lines = ["📚 CHANGELOG TẤT CẢ", "━━━━━━━━━━━━━"];
 
     entries.forEach((entry, idx) => {
       lines.push(`${idx + 1}. ${entry.version} | ${entry.date}`);
@@ -107,7 +107,7 @@ module.exports = {
       if (entry.changes.length > 0) {
         entry.changes.forEach((item) => lines.push(`   - ${item}`));
       }
-      lines.push("━{13}");
+      lines.push("━━━━━━━━━━━━━");
     });
 
     const chunks = chunkText(lines);

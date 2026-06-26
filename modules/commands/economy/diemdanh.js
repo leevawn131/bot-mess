@@ -1,5 +1,6 @@
 const { execute } = require('../../utils/database');
 const { recordAction } = require('../../utils/questSystem');
+const prefix = process.env.BOT_PREFIX;
 
 // Bộ nhớ đệm để chống spam race condition (ngăn gửi nhiều lệnh trong 1 giây)
 global.diemdanhLock = global.diemdanhLock || new Set();
@@ -7,7 +8,7 @@ global.diemdanhLock = global.diemdanhLock || new Set();
 module.exports = {
     name: "diemdanh",
     description: "Điểm danh nhận quà hàng ngày",
-    usage: "\n!diemdanh → Điểm danh nhận xu miễn phí mỗi ngày\n━{13}\n🎁 Nhận xu ngẫu nhiên mỗi lần điểm danh\n👑 VIP nhận thưởng gấp đôi\n⏰ Reset lúc 00:00 hàng ngày",
+    usage: `\n${prefix}diemdanh → Điểm danh nhận xu miễn phí mỗi ngày\n━━━━━━━━━━━━━\n🎁 Nhận xu ngẫu nhiên mỗi lần điểm danh\n👑 VIP nhận thưởng gấp đôi\n⏰ Reset lúc 00:00 hàng ngày`,
     execute: async ({ api, event, config }) => {
         const { threadID, messageID, senderID } = event;
 
@@ -21,7 +22,8 @@ module.exports = {
 
             if (rows.length === 0) {
                 global.diemdanhLock.delete(senderID);
-                return api.sendMessage("❌ Bạn chưa có tài khoản. Gõ !tien để đăng ký.", threadID, messageID);
+                const prefix = config?.prefix || "!";
+                return api.sendMessage(`❌ Bạn chưa có tài khoản.\nGõ ${prefix}tien để đăng ký.`, threadID, messageID);
             }
 
             const user = rows[0];
@@ -66,7 +68,7 @@ module.exports = {
                 recordAction(senderID, 'checkin', 1);
             } catch (_) {}
 
-            let msg = `📅 ĐIỂM DANH THÀNH CÔNG!\n━{13}\n` +
+            let msg = `📅 ĐIỂM DANH THÀNH CÔNG!\n━━━━━━━━━━━━━\n` +
                 `🎁 Quà tặng: +${reward.toLocaleString()} xu\n`;
             
             if (hasVIP) msg += `👑 VIP Bonus: x2 thuong!\n`;

@@ -10,9 +10,10 @@ module.exports = {
     description: "Quản lý nhà tù",
     usage: "!tu check | !tu check all | !tu cuu @tag|reply",
 
-    execute: async ({ api, event, args }) => {
+    execute: async ({ api, event, args, config }) => {
         await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;
+        const prefix = config?.prefix || "!";
 
         // Cooldown 5s
         const cooldown = checkCooldown({ command: "tu", key: senderID, durationMs: 10000 });
@@ -97,7 +98,7 @@ module.exports = {
             ⏰ Còn lại: ${timeStr}
             ⚠️ Lý do: ${jail.reason}
             ━━━━━━━━━━━━━━━━━━
-            💡 Dùng !tu cuu để xin tại ngoại`,
+             💡 Dùng ${prefix}tu cuu để xin tại ngoại`,
                     threadID,
                     messageID
                 );
@@ -175,7 +176,7 @@ module.exports = {
             }
 
             return api.sendMessage(
-                `🏛️ NHÀ TÙ - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n🔍 !tu check - Kiểm tra thời gian tù\n👥 !tu check all - Xem danh sách tù nhân\n🔓 !tu cuu @tag|reply - Bảo lãnh ra tù\n━━━━━━━━━━━━━━━━━━\n💰 Phí cứu tù: 200k - 500k`,
+                `🏛️ NHÀ TÙ - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n🔍 ${prefix}tu check - Kiểm tra thời gian tù\n👥 ${prefix}tu check all - Xem danh sách tù nhân\n🔓 ${prefix}tu cuu @tag|reply - Bảo lãnh ra tù\n━━━━━━━━━━━━━━━━━━\n💰 Phí cứu tù: 200k - 500k`,
                 threadID,
                 messageID
             );

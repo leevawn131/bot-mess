@@ -2,11 +2,12 @@ const { execute, executeTransaction, getConnection } = require("../../utils/data
 const { checkCooldown } = require("../../utils/cooldown");
 const { recordAction } = require("../../utils/questSystem");
 const { consumeEnergy } = require("../../utils/energySystem");
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
   name: "lamviec",
   description: "Làm việc kiếm tiền",
-  usage: "\n!lamviec → Làm việc kiếm xu (nghề ngẫu nhiên)\n━{13}\n💼 Mỗi lần làm nhận xu ngẫu nhiên theo nghề\n⚡ Tốn năng lượng mỗi lần làm\n🎰 Có cơ hội thưởng tăng ca x2\n⏳ Cooldown: 60 giây",
+  usage: `\n${prefix}lamviec → Làm việc kiếm xu (nghề ngẫu nhiên)\n━━━━━━━━━━━━━\n💼 Mỗi lần làm nhận xu ngẫu nhiên theo nghề\n⚡ Tốn năng lượng mỗi lần làm\n🎰 Có cơ hội thưởng tăng ca x2\n⏳ Cooldown: 60 giây`,
   execute: async ({ api, event, config }) => {
     const { threadID, messageID, senderID } = event;
 
@@ -30,12 +31,14 @@ module.exports = {
         "SELECT credits, vip_until FROM messenger_users WHERE psid = ?",
         [senderID],
       );
-      if (rows.length === 0)
+      if (rows.length === 0) {
+        const prefix = config?.prefix || "!";
         return api.sendMessage(
-          "❌ Bạn chưa có tài khoản.\nGõ !tien tạo trước đã.",
+          `❌ Bạn chưa có tài khoản.\nGõ ${prefix}tien tạo trước đã.`,
           threadID,
           messageID,
         );
+      }
 
       let connection;
       let energyUse;

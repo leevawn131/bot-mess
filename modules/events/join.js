@@ -99,7 +99,17 @@ module.exports = {
         
         // 1. Nếu người được thêm là chính con BOT
         if (event.logMessageData.addedParticipants.some(i => i.userFbId == api.getCurrentUserID())) {
-            return api.sendMessage("Kết nối thành công! Chào cả nhà nhé 🤖\nDùng !help để biết danh sách lệnh", threadID);
+            let prefix = "!";
+            try {
+                const config = require("../../config.json");
+                if (config && config.prefix) prefix = config.prefix;
+            } catch (e) {}
+            
+            api.changeNickname(`『 ${prefix} 』• Bot láo loz`, threadID, api.getCurrentUserID(), (err) => {
+                if (err) console.error("Lỗi tự động đặt biệt danh bot:", err);
+            });
+
+            return api.sendMessage(`Kết nối thành công! Chào cả nhà nhé 🤖\nDùng ${prefix}help để biết danh sách lệnh`, threadID);
         }
 
         try {

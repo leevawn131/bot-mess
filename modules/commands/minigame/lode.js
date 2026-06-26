@@ -4,6 +4,7 @@ const {
   checkMinigameLimit,
   recordMinigameSuccess,
 } = require("../../utils/minigameLimiter");
+const prefix = process.env.BOT_PREFIX;
 
 // ID CỦA BOSS (Nhà cái ôm lô)
 const BOSS_ID = "100037351338722";
@@ -12,10 +13,11 @@ const RATE = 70; // Tỉ lệ 1 ăn 70
 module.exports = {
   name: "lode",
   description: "Ghi lô đề (1 ăn 70) - Xổ ngay lập tức",
-  usage: "\n!lode [số 00-99] [tiền_cược] → Ghi lô đề\n━{13}\n🎰 Tỉ lệ: 1 ăn 70 | Tối đa 5 con/lần\n🎲 Xổ ngay lập tức sau khi ghi\n💡 Ví dụ: !lode 69 10000\n💡 Nhiều con: !lode 12 5000 45 3000",
+  usage: `\n${prefix}lode [số 00-99] [tiền_cược] → Ghi lô đề\n━━━━━━━━━━━━━\n🎰 Tỉ lệ: 1 ăn 70 | Tối đa 5 con/lần\n🎲 Xổ ngay lập tức sau khi ghi\n💡 Ví dụ: ${prefix}lode 69 10000\n💡 Nhiều con: ${prefix}lode 12 5000 45 3000`,
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID, messageID } = event;
+    const prefix = config?.prefix || "!";
 
     // Cooldown 10s
     const cooldown = checkCooldown({
@@ -50,7 +52,7 @@ module.exports = {
 
     if (!pick || isNaN(pick) || pick < 0 || pick > 99 || pick.length !== 2) {
       return api.sendMessage(
-        "⚠️ Vui lòng nhập số từ 00-99.\nVí dụ: !lode 88 10000",
+        `⚠️ Cách chơi:\n${prefix}lode [số 00-99] [tiền_cược]\nVí dụ: ${prefix}lode 88 10000\nCược tối đa 5 con/lần`,
         threadID,
         messageID,
       );
@@ -76,7 +78,7 @@ module.exports = {
       );
       if (rows.length === 0)
         return api.sendMessage(
-          "❌ Bạn chưa có tài khoản (!diemdanh để nhận tiền).",
+          `❌ Bạn chưa có tài khoản (${prefix}diemdanh để nhận tiền).`,
           threadID,
           messageID,
         );
@@ -84,7 +86,20 @@ module.exports = {
       const balance = parseInt(rows[0].credits);
       const hasVIP =
         rows[0].vip_until && new Date(rows[0].vip_until) > new Date();
-      let amount = amountStr === "all" ? balance : parseInt(amountStr);
+      let amount = 0;
+      if (amountStr === "all" || amountStr === "tat") {
+        amount = balance;
+      } else if (amountStr && typeof amountStr === "string" && amountStr.endsWith("%")) {
+        const percentStr = amountStr.slice(0, -1);
+        const percent = parseFloat(percentStr);
+        if (!isNaN(percent) && percent > 0 && percent <= 100) {
+          amount = Math.floor((balance * percent) / 100);
+        } else {
+          return api.sendMessage("⚠️ Phần trăm cược không hợp lệ (phải từ 1% đến 100%).", threadID, messageID);
+        }
+      } else {
+        amount = parseInt(amountStr);
+      }
 
       if (isNaN(amount) || amount <= 0)
         return api.sendMessage(
@@ -136,7 +151,7 @@ module.exports = {
             (now - dueDate) / (1000 * 60 * 60 * 24),
           );
           return api.sendMessage(
-            `⚠️ BẠN ĐANG NỢ TIỀN!\n━{13}\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━{13}\n💡 Trả nợ để cược bình thường!`,
+            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
             threadID,
             messageID,
           );

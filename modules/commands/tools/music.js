@@ -7,6 +7,7 @@ const { checkCooldown } = require("../../utils/cooldown");
 const {
   consumeEnergy,
   getDBConfigFromRuntime,
+  readAndSyncEnergy,
 } = require("../../utils/energySystem");
 
 function hasCommand(command) {
@@ -190,19 +191,46 @@ function getYtDlpExtraArgs() {
   return args.join(" ");
 }
 
+function execYtDlpCommand(command, options = {}) {
+  try {
+    return execSync(command, {
+      stdio: "pipe",
+      timeout: 120000,
+      maxBuffer: 10 * 1024 * 1024,
+      encoding: "utf8",
+      ...options
+    });
+  } catch (error) {
+    const errorDetails = getExecErrorDetails(error);
+    if ((errorDetails.includes("403") || errorDetails.includes("Forbidden") || errorDetails.includes("Sign in to confirm you're not a bot")) && command.includes("--cookies")) {
+      console.log("⚠️ Phát hiện lỗi 403 Forbidden hoặc yêu cầu đăng nhập khi dùng cookies. Thử lại không dùng cookies...");
+      const commandNoCookies = command.replace(/--cookies\s+"[^"]+"/g, "").replace(/--cookies\s+\S+/g, "");
+      return execSync(commandNoCookies, {
+        stdio: "pipe",
+        timeout: 120000,
+        maxBuffer: 10 * 1024 * 1024,
+        encoding: "utf8",
+        ...options
+      });
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   name: "music",
   description: "Tải nhạc từ YouTube hoặc SoundCloud",
   usage:
-    "\n!music [tên bài hát] → Tìm và tải nhạc\n!music [link YouTube/SoundCloud] → Tải từ link\n━{13}\n🎧 Hỗ trợ: YouTube, SoundCloud\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: !music See You Again",
+    "\n!music [tên bài hát] → Tìm và tải nhạc\n!music [link YouTube/SoundCloud] → Tải từ link\n━━━━━━━━━━━━━\n🎧 Hỗ trợ: YouTube, SoundCloud\n⚡ Tốn năng lượng mỗi lần dùng\n💡 Ví dụ: !music See You Again",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
+    const prefix = config?.prefix || "!";
 
-    // Cooldown 20s
+    // Cooldown 25s
     const cooldown = checkCooldown({
       command: "music",
       key: senderID,
-      durationMs: 20000,
+      durationMs: 25000,
     });
     if (!cooldown.allowed) {
       return api.sendMessage(
@@ -224,7 +252,7 @@ module.exports = {
 
     const dbConfig = getDBConfigFromRuntime(config);
     if (!dbConfig) {
-      return api.sendMessage("❌ Lỗi cấu hình Database.", threadID, messageID);
+      return api.sendMessage("❌ Lỗi cấu hình Database.", threadID, undefined, messageID);
     }
 
     const cacheDir = path.resolve(__dirname, "../../../cache/music");
@@ -235,7 +263,7 @@ module.exports = {
     }
 
     try {
-      api.sendMessage("⏳ Đang xử lý...", threadID, messageID);
+      api.sendMessage("⏳ Đang xử lý...", threadID, undefined, messageID);
 
       let videoUrl = input;
       let songTitle = "";
@@ -246,10 +274,55 @@ module.exports = {
         !input.includes("youtu.be") &&
         !input.includes("soundcloud.com")
       ) {
+        // Kiểm tra thể lực trước khi tìm kiếm
+        let energyState;
+        let energyConnectionLocal;
+        try {
+          energyConnectionLocal = await getConnection();
+          energyState = await readAndSyncEnergy(energyConnectionLocal, senderID);
+          if (!energyState.ok) {
+            return api.sendMessage(
+              `❌ Không thể kiểm tra thể lực lúc này.\nGõ ${prefix}tien để tạo thể lực`,
+              threadID,
+              undefined,
+              messageID,
+            );
+          }
+          if (energyState.energy < 25) {
+            const deficit = 25 - energyState.energy;
+            const regen = energyState.regenPerSec || (1 / 60);
+            const waitSeconds = deficit / regen;
+            
+            const formatWait = (totalSeconds) => {
+              const sec = Math.max(1, Math.ceil(totalSeconds));
+              const minutes = Math.floor(sec / 60);
+              const seconds = sec % 60;
+              if (minutes <= 0) return `${seconds} giây`;
+              if (seconds === 0) return `${minutes} phút`;
+              return `${minutes} phút ${seconds} giây`;
+            };
+
+            return api.sendMessage(
+              `😵 Không đủ thể lực, nghỉ ngơi đi!\n` +
+                `⚡ Hiện tại: ${energyState.energy}/${energyState.maxEnergy}\n` +
+                `🔋 Cần: 25 thể lực\n` +
+                `⏳ Ước tính hồi đủ: ${formatWait(waitSeconds)}`,
+              threadID,
+              undefined,
+              messageID,
+            );
+          }
+        } catch (e) {
+          console.error("Energy check error (music search):", e);
+          return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, undefined, messageID);
+        } finally {
+          if (energyConnectionLocal) energyConnectionLocal.release();
+        }
+
         console.log("🔍 Tìm kiếm top 5:", input);
         const results = await searchYouTubeList(input, 5);
         if (!results || !results.length) {
-          return api.sendMessage("❌ Không tìm thấy bài hát!", threadID, messageID);
+          return api.sendMessage("❌ Không tìm thấy bài hát!", threadID, undefined, messageID);
         }
 
         // Enrich missing metadata before sending list (try to get title/duration)
@@ -284,7 +357,7 @@ module.exports = {
           lines.push(`${idx}. ${title} - ${dur}`);
         });
 
-        const info = await api.sendMessage(lines.join("\n"), threadID, messageID);
+        const info = await api.sendMessage(lines.join("\n"), threadID, undefined, messageID);
 
         // Lưu session để handleReply xử lý
         global.musicSearchSessions = global.musicSearchSessions || {};
@@ -307,20 +380,21 @@ module.exports = {
         let energyConnectionLocal;
         try {
           energyConnectionLocal = await getConnection();
-          energyUseLocal = await consumeEnergy(energyConnectionLocal, senderID, 20);
+          energyUseLocal = await consumeEnergy(energyConnectionLocal, senderID, 25);
           if (!energyUseLocal.ok) {
             if (energyUseLocal.reason === "not_enough") {
-              return api.sendMessage(energyUseLocal.message, threadID, messageID);
+              return api.sendMessage(energyUseLocal.message, threadID, undefined, messageID);
             }
             return api.sendMessage(
-              "❌ Không thể kiểm tra thể lực lúc này.\nGõ !tien để tạo thể lực",
+              `❌ Không thể kiểm tra thể lực lúc này.\nGõ ${prefix}tien để tạo thể lực`,
               threadID,
+              undefined,
               messageID,
             );
           }
         } catch (e) {
           console.error("Energy check error (music direct link):", e);
-          return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, messageID);
+          return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, undefined, messageID);
         } finally {
           if (energyConnectionLocal) energyConnectionLocal.release();
         }
@@ -331,6 +405,7 @@ module.exports = {
           return api.sendMessage(
             "❌ Lỗi tải video từ YouTube",
             threadID,
+            undefined,
             messageID,
           );
         }
@@ -344,7 +419,7 @@ module.exports = {
           try {
             fs.unlinkSync(result.audioPath);
           } catch (e) {}
-          return api.sendMessage("❌ File audio rỗng", threadID, messageID);
+          return api.sendMessage("❌ File audio rỗng", threadID, undefined, messageID);
         }
 
         // Facebook Messenger có giới hạn 25MB cho file đính kèm
@@ -361,6 +436,7 @@ module.exports = {
               `💡 Đề xuất:\n` +
               `• Tìm video ngắn hơn\n`,
             threadID,
+            undefined,
             messageID,
           );
         }
@@ -369,10 +445,11 @@ module.exports = {
         const title = result.title ? result.title.substring(0, 100) : "Unknown";
         await api.sendMessage(
           {
-            body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUseLocal.energy}/${energyUseLocal.maxEnergy})`,
+            body: `🎵 ${title}\n⚡ Thể lực: -25 (${energyUseLocal.energy}/${energyUseLocal.maxEnergy})`,
             attachment: fs.createReadStream(result.audioPath),
           },
           threadID,
+          undefined,
           messageID,
         );
 
@@ -397,20 +474,21 @@ module.exports = {
         let energyConnectionLocal;
         try {
           energyConnectionLocal = await getConnection();
-          energyUseLocal = await consumeEnergy(energyConnectionLocal, senderID, 20);
+          energyUseLocal = await consumeEnergy(energyConnectionLocal, senderID, 25);
           if (!energyUseLocal.ok) {
             if (energyUseLocal.reason === "not_enough") {
-              return api.sendMessage(energyUseLocal.message, threadID, messageID);
+              return api.sendMessage(energyUseLocal.message, threadID, undefined, messageID);
             }
             return api.sendMessage(
-              "❌ Không thể kiểm tra thể lực lúc này.\nGõ !tien để tạo thể lực",
+              `❌ Không thể kiểm tra thể lực lúc này.\nGõ ${prefix}tien để tạo thể lực`,
               threadID,
+              undefined,
               messageID,
             );
           }
         } catch (e) {
           console.error("Energy check error (music direct link):", e);
-          return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, messageID);
+          return api.sendMessage("❌ Lỗi hệ thống thể lực.", threadID, undefined, messageID);
         } finally {
           if (energyConnectionLocal) energyConnectionLocal.release();
         }
@@ -421,6 +499,7 @@ module.exports = {
           return api.sendMessage(
             "❌ Lỗi tải audio từ SoundCloud",
             threadID,
+            undefined,
             messageID,
           );
         }
@@ -433,7 +512,7 @@ module.exports = {
           try {
             fs.unlinkSync(result.audioPath);
           } catch (e) {}
-          return api.sendMessage("❌ File audio rỗng", threadID, messageID);
+          return api.sendMessage("❌ File audio rỗng", threadID, undefined, messageID);
         }
 
         if (fileStats.size > 25 * 1024 * 1024) {
@@ -446,6 +525,7 @@ module.exports = {
               `📊 Kích thước: ${fileSizeMB} MB\n` +
               `⚠️ Giới hạn Facebook: 25 MB`,
             threadID,
+            undefined,
             messageID,
           );
         }
@@ -453,10 +533,11 @@ module.exports = {
         const title = result.title ? result.title.substring(0, 100) : "Unknown";
         await api.sendMessage(
           {
-            body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUseLocal.energy}/${energyUseLocal.maxEnergy})`,
+            body: `🎵 ${title}\n⚡ Thể lực: -25 (${energyUseLocal.energy}/${energyUseLocal.maxEnergy})`,
             attachment: fs.createReadStream(result.audioPath),
           },
           threadID,
+          undefined,
           messageID,
         );
 
@@ -473,7 +554,7 @@ module.exports = {
       }
     } catch (error) {
       console.error("❌ Lỗi music:", error);
-      api.sendMessage(`❌ Lỗi: ${error.message}`, threadID, messageID);
+      api.sendMessage(`❌ Lỗi: ${error.message}`, threadID, undefined, messageID);
     }
   },
 };
@@ -510,7 +591,7 @@ async function searchYouTube(query) {
     // Fallback: Thử yt-dlp để search
     if (canUseYtDlpCli()) {
       try {
-        const result = execSync(
+        const result = execYtDlpCommand(
           `${buildYtDlpCommand(`"ytsearch:${query}" --dump-json -j`)} | head -1`,
           {
             stdio: "pipe",
@@ -558,7 +639,7 @@ async function getYouTubeTitle(url) {
 
     if (canUseYtDlpCli()) {
       try {
-        const result = execSync(buildYtDlpCommand(`-j "${url}"`), {
+        const result = execYtDlpCommand(buildYtDlpCommand(`-j "${url}"`), {
           stdio: "pipe",
           timeout: 10000,
           encoding: "utf8",
@@ -643,13 +724,13 @@ async function downloadYouTubeTomusic(url, cacheDir) {
         return reject(new Error("URL YouTube không hợp lệ"));
       }
 
-      const audioPath = path.join(cacheDir, `${videoId}.music`);
+      const audioPath = path.join(cacheDir, `${videoId}.mp3`);
       const m4aPath = path.join(cacheDir, `${videoId}.m4a`);
       const outputBase = path.join(cacheDir, videoId);
 
-      // Nếu file đã tồn tại (music hoặc M4A), trả về luôn
+      // Nếu file đã tồn tại (mp3 hoặc M4A), trả về luôn
       if (fs.existsSync(audioPath)) {
-        console.log("✅ Sử dụng music cache:", audioPath);
+        console.log("✅ Sử dụng mp3 cache:", audioPath);
         return getYouTubeTitle(url)
           .then((title) => {
             resolve({ audioPath, title });
@@ -683,12 +764,18 @@ async function downloadYouTubeTomusic(url, cacheDir) {
         if (canUseYtDlpCli()) {
           // Tải trực tiếp dạng M4A thay vì convert từ music
           command = buildYtDlpCommand(
-            `-f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${m4aPath}" "${url}"`,
-          );
+            `--downloader curl \
+            -x \
+            --audio-format mp3 \
+            --audio-quality 128K \
+            --print "title:%(title)s" \
+            --print "after_move:filepath:%(filepath)s" \
+            -o "${audioPath.replace(".mp3", "")}.%(ext)s" \
+            "${url}"`,);
           console.log("📦 Sử dụng yt-dlp (M4A format)");
 
           try {
-            const m4aOutput = execSync(command, {
+            const m4aOutput = execYtDlpCommand(command, {
               stdio: "pipe",
               timeout: 120000,
               maxBuffer: 10 * 1024 * 1024,
@@ -725,11 +812,11 @@ async function downloadYouTubeTomusic(url, cacheDir) {
             );
           }
 
-          // Nếu M4A thất bại, thử music
+          // Nếu M4A thất bại, thử mp3
           command = buildYtDlpCommand(
-            `-x --audio-format music --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".music", "")}.%(ext)s" "${url}"`,
+            `-x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`,
           );
-          console.log("📦 Sử dụng yt-dlp (music format)");
+          console.log("📦 Sử dụng yt-dlp (mp3 format)");
         } else {
           const ytDlpExec = getYtDlpExec();
           if (!ytDlpExec) {
@@ -742,7 +829,7 @@ async function downloadYouTubeTomusic(url, cacheDir) {
             command = `${bundledBinary} ${getYtDlpExtraArgs()} -f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${m4aPath}" "${url}"`;
 
             try {
-              const m4aOutput = execSync(command, {
+              const m4aOutput = execYtDlpCommand(command, {
                 stdio: "pipe",
                 timeout: 120000,
                 maxBuffer: 10 * 1024 * 1024,
@@ -774,16 +861,16 @@ async function downloadYouTubeTomusic(url, cacheDir) {
               }
             } catch (e) {
               console.log(
-                "⚠️ yt-dlp-exec binary M4A thất bại, thử music...",
+                "⚠️ yt-dlp-exec binary M4A thất bại, thử mp3...",
                 getExecErrorDetails(e),
               );
             }
 
-            command = `${bundledBinary} ${getYtDlpExtraArgs()} -x --audio-format music --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".music", "")}.%(ext)s" "${url}"`;
-            console.log("📦 Sử dụng yt-dlp-exec binary (music format)");
+            command = `${bundledBinary} ${getYtDlpExtraArgs()} -x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" --print "after_move:filepath:%(filepath)s" -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`;
+            console.log("📦 Sử dụng yt-dlp-exec binary (mp3 format)");
 
             try {
-              const dlOutput = execSync(command, {
+              const dlOutput = execYtDlpCommand(command, {
                 stdio: "pipe",
                 timeout: 120000,
                 maxBuffer: 10 * 1024 * 1024,
@@ -877,7 +964,7 @@ async function downloadYouTubeTomusic(url, cacheDir) {
           if (!hasCommand("youtube-dl")) {
             throw new Error("youtube-dl not found");
           }
-          command = `youtube-dl -x -f bestaudio --audio-format music --audio-quality 128K -o "${audioPath.replace(".music", "")}.%(ext)s" "${url}"`;
+          command = `youtube-dl -x -f bestaudio --audio-format mp3 --audio-quality 128K -o "${audioPath.replace(".mp3", "")}.%(ext)s" "${url}"`;
           console.log("📦 Sử dụng youtube-dl");
         } catch (e2) {
           return reject(
@@ -889,7 +976,7 @@ async function downloadYouTubeTomusic(url, cacheDir) {
       }
 
       try {
-        const dlOutput = execSync(command, {
+        const dlOutput = execYtDlpCommand(command, {
           stdio: "pipe",
           timeout: 120000,
           maxBuffer: 10 * 1024 * 1024,
@@ -997,9 +1084,9 @@ async function downloadWithYtDlpExec(ytDlpExec, url, audioPath, m4aPath) {
     url,
     {
       extractAudio: true,
-      audioFormat: "music",
+      audioFormat: "mp3",
       audioQuality: 5,
-      output: `${audioPath.replace(".music", "")}.%(ext)s`,
+      output: `${audioPath.replace(".mp3", "")}.%(ext)s`,
       noWarnings: true,
       noCheckCertificate: true,
       noProgress: true,
@@ -1041,7 +1128,7 @@ async function getSoundCloudTitle(url) {
 
     if (canUseYtDlpCli()) {
       try {
-        const result = execSync(buildYtDlpCommand(`-j "${url}"`), {
+        const result = execYtDlpCommand(buildYtDlpCommand(`-j "${url}"`), {
           stdio: "pipe",
           timeout: 10000,
           encoding: "utf8",
@@ -1084,8 +1171,8 @@ async function downloadSoundCloudTomusic(url, cacheDir) {
       await ytDlpExec(
         url,
         {
-          // Ưu tiên lấy stream music trực tiếp để không cần ffmpeg
-          format: "http_music/hls_music/bestaudio[ext=music]/bestaudio",
+          // Ưu tiên lấy stream mp3 trực tiếp để không cần ffmpeg
+          format: "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio",
           output: `${outputBase}.%(ext)s`,
           noWarnings: true,
           noCheckCertificate: true,
@@ -1108,7 +1195,7 @@ async function downloadSoundCloudTomusic(url, cacheDir) {
     // Fallback to command line yt-dlp
     if (canUseYtDlpCli()) {
       const command = buildYtDlpCommand(
-        `-f "http_music/hls_music/bestaudio[ext=music]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`,
+        `-f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -o "${outputBase}.%(ext)s" "${url}"`,
       );
       console.log("📦 Sử dụng yt-dlp command");
 
@@ -1136,7 +1223,7 @@ async function downloadSoundCloudTomusic(url, cacheDir) {
 }
 
 function findFirstExistingAudio(outputBase) {
-  const extensions = ["music", "m4a", "opus", "webm", "ogg"];
+  const extensions = ["mp3", "m4a", "opus", "webm", "ogg"];
   for (const ext of extensions) {
     const filePath = `${outputBase}.${ext}`;
     if (fs.existsSync(filePath)) {
@@ -1474,7 +1561,7 @@ async function getYouTubeInfo(url) {
 
     if (canUseYtDlpCli()) {
       try {
-        const out = execSync(buildYtDlpCommand(`-j "${url}"`), { stdio: "pipe", timeout: 8000, encoding: "utf8" });
+        const out = execYtDlpCommand(buildYtDlpCommand(`-j "${url}"`), { stdio: "pipe", timeout: 8000, encoding: "utf8" });
         const info = JSON.parse(out);
         title = title || info.title || null;
         duration =
@@ -1549,7 +1636,7 @@ async function searchYouTubeList(query, limit = 5) {
         // Nếu scrape search page chưa đủ, thử yt-dlp CLI / bundled
         if (results.length < limit && canUseYtDlpCli()) {
           try {
-            const raw = execSync(
+            const raw = execYtDlpCommand(
               buildYtDlpCommand(`"ytsearch${limit}:${query}" --dump-json -j`),
               { stdio: "pipe", timeout: 10000, encoding: "utf8" },
             );
@@ -1708,12 +1795,16 @@ const SEARCH_CACHE_VERSION = 3;
 module.exports.handleReply = async ({ api, event, config }) => {
   try {
     const { threadID, body, messageReply, senderID } = event;
+    const prefix = config?.prefix || "!";
+    console.log("DBG music.handleReply entry. threadID:", threadID, "body:", body, "hasMessageReply:", !!messageReply);
     if (!messageReply) return;
     global.musicSearchSessions = global.musicSearchSessions || {};
     const session = global.musicSearchSessions[threadID];
+    console.log("DBG music.handleReply session:", !!session, "session info:", session ? { messageID: session.messageID, requester: session.requester } : null);
     if (!session) return;
-    // Chỉ xử lý khi reply vào tin nhắn của bot
+    console.log("DBG music.handleReply check senderID:", String(messageReply.senderID), "vs", String(api.getCurrentUserID()));
     if (String(messageReply.senderID) !== String(api.getCurrentUserID())) return;
+    console.log("DBG music.handleReply check messageID:", String(messageReply.messageID), "vs", String(session.messageID));
     if (String(messageReply.messageID) !== String(session.messageID)) return;
 
     const pick = parseInt((body || "").trim(), 10);
@@ -1741,12 +1832,12 @@ module.exports.handleReply = async ({ api, event, config }) => {
     let energyConnection;
     try {
       energyConnection = await getConnection();
-      energyUse = await consumeEnergy(energyConnection, senderID, 20);
+      energyUse = await consumeEnergy(energyConnection, senderID, 25);
       if (!energyUse.ok) {
         if (energyUse.reason === "not_enough") {
           return api.sendMessage(energyUse.message, threadID);
         }
-        return api.sendMessage("❌ Không thể kiểm tra thể lực lúc này.\nGõ !tien để tạo thể lực", threadID);
+        return api.sendMessage(`❌ Không thể kiểm tra thể lực lúc này.\nGõ ${prefix}tien để tạo thể lực`, threadID);
       }
     } catch (e) {
       console.error("Energy check error (music handleReply):", e);
@@ -1779,7 +1870,7 @@ module.exports.handleReply = async ({ api, event, config }) => {
         // Prefer the cached title from session if available
         const cachedTitle = session && session.results && session.results[pick - 1] && session.results[pick - 1].title;
         const title = (cachedTitle || result.title || "Unknown").substring(0, 100);
-        await api.sendMessage({ body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`, attachment: fs.createReadStream(result.audioPath) }, threadID);
+        await api.sendMessage({ body: `🎵 ${title}\n⚡ Thể lực: -25 (${energyUse.energy}/${energyUse.maxEnergy})`, attachment: fs.createReadStream(result.audioPath) }, threadID);
 
         setTimeout(() => { try { if (fs.existsSync(result.audioPath)) fs.unlinkSync(result.audioPath); } catch (_) {} }, 10000);
       } else if (chosen.url.includes("soundcloud.com")) {
@@ -1800,7 +1891,7 @@ module.exports.handleReply = async ({ api, event, config }) => {
         }
 
         const title = result.title ? result.title.substring(0, 100) : "Unknown";
-        await api.sendMessage({ body: `🎵 ${title}\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`, attachment: fs.createReadStream(result.audioPath) }, threadID);
+        await api.sendMessage({ body: `🎵 ${title}\n⚡ Thể lực: -25 (${energyUse.energy}/${energyUse.maxEnergy})`, attachment: fs.createReadStream(result.audioPath) }, threadID);
 
         setTimeout(() => { try { if (fs.existsSync(result.audioPath)) fs.unlinkSync(result.audioPath); } catch (_) {} }, 10000);
       } else {

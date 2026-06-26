@@ -1,501 +1,322 @@
-const fs = require("fs");
-const path = require("path");
-const { checkCooldown } = require("../../utils/cooldown");
-const { getAdminBotUIDs } = require("../../utils/checkPermission");
-const { getAntioutSetting, setAntioutEnabled } = require("../../utils/antioutSettings");
-const { getAntitagallSetting, setAntitagallEnabled } = require("../../utils/antitagallSettings");
-
-const AUTO_UNSEND_MS = 60000;
-const ANTI_MENU_MARKER = "ANTI_CONTROL_MENU_V1";
-const ANTITHUHOI_DIR = path.join(__dirname, "../../../cache/antithuhoi");
-const ANTITHUHOI_SETTINGS_PATH = path.join(ANTITHUHOI_DIR, "settings.json");
-
-function scheduleAutoUnsend(api, messageResult) {
-  const messageID = messageResult?.messageID;
-  if (!messageID) return;
-
-  setTimeout(() => {
-    try {
-      api.unsendMessage(messageID);
-    } catch (error) {
-      console.error("Lỗi tự gỡ menu anti:", error);
-    }
-  }, AUTO_UNSEND_MS);
-}
-
-function ensureAntiThuHoiDir() {
-  if (!fs.existsSync(ANTITHUHOI_DIR)) {
-    fs.mkdirSync(ANTITHUHOI_DIR, { recursive: true });
-  }
-}
-
-function readAntiThuHoiSettings() {
-  ensureAntiThuHoiDir();
-  try {
-    if (!fs.existsSync(ANTITHUHOI_SETTINGS_PATH)) return {};
-    const raw = JSON.parse(fs.readFileSync(ANTITHUHOI_SETTINGS_PATH, "utf8"));
-    return raw && typeof raw === "object" ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeAntiThuHoiSettings(settings) {
-  ensureAntiThuHoiDir();
-  fs.writeFileSync(ANTITHUHOI_SETTINGS_PATH, JSON.stringify(settings, null, 2));
-}
-
-function getAntiThuHoiThreadMessageFile(threadID) {
-  ensureAntiThuHoiDir();
-  return path.join(ANTITHUHOI_DIR, `messages_${threadID}.json`);
-}
-
-function getAntiThuHoiSavedMessages(threadID) {
-  const file = getAntiThuHoiThreadMessageFile(threadID);
-  try {
-    if (fs.existsSync(file)) {
-      return JSON.parse(fs.readFileSync(file, "utf8"));
-    }
-  } catch {}
-  return [];
-}
-
-function saveAntiThuHoiMessages(threadID, messages) {
-  const file = getAntiThuHoiThreadMessageFile(threadID);
-  fs.writeFileSync(file, JSON.stringify(messages, null, 2));
-}
-
-function getAntiThuHoiState(threadID) {
-  const settings = readAntiThuHoiSettings();
-  return Boolean(settings[String(threadID)]);
-}
-
-function setAntiThuHoiState(threadID, enabled) {
-  const settings = readAntiThuHoiSettings();
-  settings[String(threadID)] = Boolean(enabled);
-  writeAntiThuHoiSettings(settings);
-}
-
-async function saveLatestAntiThuHoiMessages(api, threadID) {
-  try {
-    const botID = String(api.getCurrentUserID());
-    const threadInfo = await api.getThreadInfo(threadID);
-    const memberInfo = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
-    const nameById = new Map(memberInfo.map((user) => [String(user.id), user.name || ""]));
-
-    const history = await api.getThreadHistory(threadID, 15);
-
-    const messages = history
-      .filter((msg) => msg.body && String(msg.senderID) !== botID)
-      .map((msg) => ({
-        messageID: msg.messageID,
-        senderID: msg.senderID,
-        senderName: nameById.get(String(msg.senderID)) || msg.senderName || "Unknown",
-        body: msg.body,
-        timestamp: msg.timestamp,
-        attachments: msg.attachments ? msg.attachments.length : 0,
-      }))
-      .reverse();
-
-    saveAntiThuHoiMessages(threadID, messages);
-    return messages.length;
-  } catch (error) {
-    console.error("Lỗi lưu tin nhắn anti-thu-hoi:", error);
-    return 0;
-  }
-}
-
-function toAdminIdList(threadInfo) {
-  const list = Array.isArray(threadInfo?.adminIDs) ? threadInfo.adminIDs : [];
-  return list
-    .map((item) => {
-      if (!item || typeof item !== "object") return String(item || "").trim();
-      return String(item.id || item.userID || item.adminID || "").trim();
-    })
-    .filter(Boolean);
-}
-
-function getBotAdminState(threadInfo, botID) {
-  const adminIDs = toAdminIdList(threadInfo);
-  return {
-    adminIDs,
-    isBotAdmin: adminIDs.includes(String(botID)),
-  };
-}
-
-function getSenderPermission(threadInfo, senderID) {
-  const adminIDs = toAdminIdList(threadInfo);
-  const adminBotUIDs = getAdminBotUIDs();
-  const isSenderAdmin = adminIDs.includes(String(senderID));
-  const isSenderBotAdmin = Array.isArray(adminBotUIDs)
-    ? adminBotUIDs.includes(String(senderID))
-    : false;
-
-  return { isSenderAdmin, isSenderBotAdmin };
-}
-
-function resolveTargetKey(rawValue) {
-  const value = String(rawValue || "").trim().toLowerCase();
-  if (!value) return null;
-
-  const map = {
-    "1": "antiout",
-    antiout: "antiout",
-    out: "antiout",
-    "2": "antitagall",
-    antitagall: "antitagall",
-    tagall: "antitagall",
-    "3": "antithuhoi",
-    antithuhoi: "antithuhoi",
-    thuhoi: "antithuhoi",
-  };
-
-  return map[value] || null;
-}
-
-function normalizeAction(rawValue) {
-  const value = String(rawValue || "").trim().toLowerCase();
-  if (["on", "off", "status", "st", "s", "toggle"].includes(value)) {
-    return value;
-  }
-  return "toggle";
-}
-
-function parseReplySelection(replyText) {
-  const tokens = String(replyText || "")
-    .trim()
-    .toLowerCase()
-    .split(/[\s,]+/)
-    .filter(Boolean);
-
-  const targets = [];
-  let action = "toggle";
-
-  for (const token of tokens) {
-    const targetKey = resolveTargetKey(token);
-    if (targetKey) {
-      targets.push(targetKey);
-      continue;
-    }
-
-    const normalizedAction = normalizeAction(token);
-    if (normalizedAction !== "toggle") {
-      action = normalizedAction;
-    }
-  }
-
-  return {
-    targets: Array.from(new Set(targets)),
-    action,
-  };
-}
-
-function isGroupThread(threadInfo) {
-  return Boolean(threadInfo && typeof threadInfo === "object" && threadInfo.isGroup);
-}
-
-function formatState(enabled) {
-  return enabled ? "BẬT ✅" : "TẮT ❌";
-}
-
-function formatYesNo(value) {
-  return value ? "✅ Có" : "❌ Không";
-}
-
-function buildMenuMessage({ threadID, antioutState, antitagallState, antithuhoiState, botAdminState }) {
-  const savedMessages = getAntiThuHoiSavedMessages(threadID);
-
-  return [
-    `${ANTI_MENU_MARKER}`,
-    "🛡️ BẢNG ĐIỀU KHIỂN ANTI",
-    "━━━━━━━━━━━━━",
-    `1️⃣ Antiout: ${formatState(antioutState.enabled)} | Bot QTV: ${formatYesNo(botAdminState.isBotAdmin)}`,
-    "   ↳ Tự kéo lại người tự rời nhóm",
-    `2️⃣ Antitagall: ${formatState(antitagallState.enabled)} | Bot QTV: ${formatYesNo(botAdminState.isBotAdmin)}`,
-    "   ↳ Chống tag @everyone/@mọi người",
-    `3️⃣ Antithuhoi: ${formatState(antithuhoiState.enabled)} | Đã lưu: ${savedMessages.length}/15`,
-    "   ↳ Nhắc lại tin nhắn bị gỡ",
-    "━━━━━━━━━━━━━",
-    "Reply 1 / 2 / 3 hoặc 1 2 3 để bật/tắt nhiều mục cùng lúc.",
-    "⏳ Menu sẽ tự thu hồi sau 60 giây.",
-  ].join("\n");
-}
-
-async function sendMenu(api, threadID, payload) {
-  const message = buildMenuMessage(payload);
-  const sentMessage = await api.sendMessage(message, threadID);
-  scheduleAutoUnsend(api, sentMessage);
-  return sentMessage;
-}
-
-async function handleAntiout({ api, threadID, messageID, senderID, action, threadInfo }) {
-  const botID = String(api.getCurrentUserID());
-  const { isBotAdmin } = getBotAdminState(threadInfo, botID);
-  const current = getAntioutSetting(threadID);
-
-  if (action === "status") {
-    return api.sendMessage(
-      `🛡️ ANTIOUT: ${formatState(current.enabled)}\n👮 Bot có quyền QTV: ${formatYesNo(isBotAdmin)}\n💡 Reply 1 để bật/tắt antiout`,
-      threadID,
-      messageID,
-    );
-  }
-
-  const desiredState = action === "off" ? false : action === "on" ? true : !current.enabled;
-  if (current.enabled === desiredState) {
-    return api.sendMessage(
-      `ℹ️ Antiout ${desiredState ? "đã bật" : "đã tắt"} rồi.`,
-      threadID,
-      messageID,
-    );
-  }
-
-  setAntioutEnabled(threadID, desiredState, String(senderID));
-
-  if (desiredState && !isBotAdmin) {
-    return api.sendMessage(
-      "✅ Đã bật antiout, nhưng bot chưa có quyền QTV nên chưa thể kéo lại thành viên.\n💡 Hãy cấp quyền QTV cho bot để antiout hoạt động.",
-      threadID,
-      messageID,
-    );
-  }
-
-  return api.sendMessage(
-    desiredState ? "✅ Đã bật antiout." : "✅ Đã tắt antiout.",
-    threadID,
-    messageID,
-  );
-}
-
-async function handleAntitagall({ api, threadID, messageID, senderID, action, threadInfo }) {
-  const botID = String(api.getCurrentUserID());
-  const { isBotAdmin } = getBotAdminState(threadInfo, botID);
-  const current = getAntitagallSetting(threadID);
-
-  if (action === "status") {
-    return api.sendMessage(
-      `🛡️ ANTITAGALL: ${formatState(current.enabled)}\n👮 Bot có quyền QTV: ${formatYesNo(isBotAdmin)}\n💡 Reply 2 để bật/tắt antitagall`,
-      threadID,
-      messageID,
-    );
-  }
-
-  if (!isBotAdmin) {
-    return api.sendMessage(
-      "❌ Bot cần quyền Quản Trị Viên để bật/tắt antitagall!",
-      threadID,
-      messageID,
-    );
-  }
-
-  const desiredState = action === "off" ? false : action === "on" ? true : !current.enabled;
-  if (current.enabled === desiredState) {
-    return api.sendMessage(
-      `ℹ️ Antitagall ${desiredState ? "đã bật" : "đã tắt"} rồi.`,
-      threadID,
-      messageID,
-    );
-  }
-
-  setAntitagallEnabled(threadID, desiredState, String(senderID));
-
-  return api.sendMessage(
-    desiredState
-      ? "✅ Bật antitagall thành công!\n🛡️ Bot sẽ tự động kick người tag spam @everyone/@mọi người."
-      : "❌ Tắt antitagall thành công.",
-    threadID,
-    messageID,
-  );
-}
-
-async function handleAntiThuHoi({ api, threadID, messageID, senderID, action, threadInfo }) {
-  const currentEnabled = getAntiThuHoiState(threadID);
-  const savedMsgs = getAntiThuHoiSavedMessages(threadID);
-  const botID = String(api.getCurrentUserID());
-  const botAdminState = getBotAdminState(threadInfo, botID);
-
-  if (action === "status") {
-    return api.sendMessage(
-      `🔍 ANTITHUHOI: ${formatState(currentEnabled)}\n📨 Tin nhắn đã lưu: ${savedMsgs.length}/15\n⚡ Cập nhật tức thời\n💡 Reply 3 để bật/tắt antithuhoi`,
-      threadID,
-      messageID,
-    );
-  }
-
-  const desiredState = action === "off" ? false : action === "on" ? true : !currentEnabled;
-  if (currentEnabled === desiredState) {
-    return api.sendMessage(
-      `ℹ️ Antithuhoi ${desiredState ? "đã bật" : "đã tắt"} rồi.`,
-      threadID,
-      messageID,
-    );
-  }
-
-  setAntiThuHoiState(threadID, desiredState);
-
-  if (!desiredState) {
-    return api.sendMessage(
-      "❌ Đã tắt ANTITHUHOI. Bot không còn nhắc lại tin nhắn bị gỡ.",
-      threadID,
-      messageID,
-    );
-  }
-
-  const count = await saveLatestAntiThuHoiMessages(api, threadID);
-  if (count > 0) {
-    return api.sendMessage(
-      `✅ Đã bật ANTITHUHOI!\n📨 Lưu ${count} tin nhắn gần nhất.\n⚡ Cập nhật tức thời khi có tin nhắn mới.\n🔔 Khi có tin nhắn bị gỡ, bot sẽ nhắc lại ngay!`,
-      threadID,
-      messageID,
-    );
-  }
-
-  return api.sendMessage(
-    "✅ Đã bật ANTITHUHOI!\nℹ️ Không nạp được lịch sử gần nhất, nhưng bot vẫn sẽ lưu tin nhắn mới để nhắc lại khi bị gỡ.",
-    threadID,
-    messageID,
-  );
-}
-
-async function handleTargetAction({ api, threadID, messageID, senderID, targetKey, action, threadInfo }) {
-  if (targetKey === "antiout") {
-    return handleAntiout({ api, threadID, messageID, senderID, action, threadInfo });
-  }
-
-  if (targetKey === "antitagall") {
-    return handleAntitagall({ api, threadID, messageID, senderID, action, threadInfo });
-  }
-
-  if (targetKey === "antithuhoi") {
-    return handleAntiThuHoi({ api, threadID, messageID, senderID, action, threadInfo });
-  }
-
-  return null;
-}
-
-function isAntiMenuReply(event) {
-  const repliedBody = String(event?.messageReply?.body || "");
-  return repliedBody.includes(ANTI_MENU_MARKER);
-}
+const fs = require('fs-extra');
+const path = require('path');
+const { toAdminIdList } = require('../../utils/checkPermission');
+const { getThreadInfoCached } = require('../../utils/threadInfo');
 
 module.exports = {
-  name: "anti",
-  aliases: ["antiout", "antitagall", "antithuhoi"],
-  description: "Quản lý antiout, antitagall và antithuhoi trong một lệnh",
-  usage:
-    "\n!anti → Hiện menu anti\n!anti 1|2|3 → Bật/tắt mục tương ứng\n!anti antiout on|off|status → Điều khiển riêng từng mục\n━{13}\n🛡️ Gộp 3 cơ chế anti vào một menu duy nhất\n⏳ Menu tự thu hồi sau 60 giây\n💬 Reply 1/2/3 để bật/tắt cấu hình",
+  name: 'anti',
+  version: '5.1.0',
+  hasPermssion: 1,
+  credits: 'Niio-team (Vtuan) & Fixes',
+  description: 'Quản lý và bảo vệ các cài đặt của nhóm',
+  usage: '[tên anti] hoặc reply số thứ tự',
 
-  execute: async ({ api, event, args }) => {
-    const { threadID, messageID, senderID } = event;
+  execute: async ({ api, event, args, Threads, Users }) => {
+    const a_ = './modules/data/anti';
+    const fileAnti = path.join(a_, 'antiFile.json');
+    if (!fs.existsSync(a_)) fs.mkdirSync(a_, { recursive: true });
+    if (!fs.existsSync(fileAnti)) fs.writeFileSync(fileAnti, JSON.stringify({}));
 
-    const cooldown = checkCooldown({ command: "anti", key: senderID, durationMs: 10000 });
-    if (!cooldown.allowed) {
-      return api.sendMessage(
-        `⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi dùng lại lệnh này.`,
-        threadID,
-        messageID,
-      );
+    let D_ = JSON.parse(fs.readFileSync(fileAnti, 'utf-8') || '{}');
+    const { threadID, senderID, messageID } = event;
+    if (!D_[threadID]) D_[threadID] = {};
+
+    const settingsList = ['namebox','avtbox','out','join','antitheme','spam','resend','bban','spamb','antitagall'];
+    const settingsMap = {
+      namebox: 'Chống đổi tên nhóm', avtbox: 'Chống đổi ảnh nhóm',
+      out: 'Chống thành viên thoát chùa', join: 'Cấm thành viên mới vào nhóm',
+      antitheme: 'Chống đổi giao diện (theme/icon)', spam: 'Chống tin nhắn spam thành viên',
+      resend: 'Chống gỡ tin nhắn (resend)', bban: 'Cấm thành viên sử dụng bot', spamb: 'Chống thành viên spam bot',
+      antitagall: 'Chống tag all (mọi người/everyone)'
+    };
+
+    const x_ = (args[0] || '').toLowerCase();
+    if (x_ && settingsList.includes(x_)) {
+      const res = await processToggle(x_, threadID, Threads, api, fileAnti);
+      return api.sendMessage(`${settingsMap[x_] || x_}: ${res}`, threadID, String(messageID));
     }
 
+    // build menu
+    let msg = '🛡️ [ CONFIG ANTI GROUP ] 🛡️\n\n';
+    const { isAntithemeEnabled } = require('../../utils/antithemeSettings');
+    const { isAntitagallEnabled } = require('../../utils/antitagallSettings');
+    settingsList.forEach((key, idx) => {
+      let isTurnedOn = false;
+      if (key === 'antitheme') {
+        isTurnedOn = isAntithemeEnabled(threadID);
+      } else if (key === 'antitagall') {
+        isTurnedOn = isAntitagallEnabled(threadID);
+      } else {
+        isTurnedOn = Boolean(D_[threadID][key]);
+      }
+      const statusIcon = isTurnedOn ? '🟢 BẬT' : '🔴 TẮT';
+      msg += `${idx+1}. ${settingsMap[key]} ➔ ${statusIcon}\n`;
+    });
+    msg += '\n💬 Reply tin nhắn này kèm các số thứ tự (ví dụ: 1 2 5) để thay đổi cấu hình.';
+
     try {
-      const threadInfo = await api.getThreadInfo(threadID);
-      if (!isGroupThread(threadInfo)) {
-        return api.sendMessage(
-          "⚠️ Lệnh này chỉ dùng trong nhóm chat.",
-          threadID,
-          messageID,
-        );
-      }
-
-      const { isSenderAdmin, isSenderBotAdmin } = getSenderPermission(threadInfo, senderID);
-      if (!isSenderAdmin && !isSenderBotAdmin) {
-        return api.sendMessage(
-          "⚠️ Chỉ QTV nhóm hoặc chủ bot mới được dùng lệnh anti.",
-          threadID,
-          messageID,
-        );
-      }
-
-      const botID = String(api.getCurrentUserID());
-      const botAdminState = getBotAdminState(threadInfo, botID);
-      const antioutState = getAntioutSetting(threadID);
-      const antitagallState = getAntitagallSetting(threadID);
-      const antithuhoiState = { enabled: getAntiThuHoiState(threadID) };
-
-      const primaryToken = String(args[0] || "").trim().toLowerCase();
-      const targetKey = resolveTargetKey(primaryToken);
-      const action = normalizeAction(args[1]);
-
-      if (!primaryToken || ["menu", "list", "help", "status"].includes(primaryToken)) {
-        return sendMenu(api, threadID, {
-          threadID,
-          antioutState,
-          antitagallState,
-          antithuhoiState,
-          botAdminState,
-        });
-      }
-
-      if (!targetKey) {
-        return api.sendMessage(
-          "⚠️ Cách dùng: !anti [1|2|3|antiout|antitagall|antithuhoi] [on|off|status]",
-          threadID,
-          messageID,
-        );
-      }
-
-      return handleTargetAction({
-        api,
-        threadID,
-        messageID,
-        senderID,
-        targetKey,
-        action,
-        threadInfo,
+      const info = await api.sendMessage(msg, threadID);
+      if (!global.client) global.client = {};
+      if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
+      global.client.handleReply.push({
+        name: module.exports.name,
+        author: senderID,
+        messageID: info.messageID,
+        threadID: threadID
       });
-    } catch (error) {
-      console.error("❌ Lỗi anti:", error);
-      return api.sendMessage(
-        `❌ Không thể cập nhật anti lúc này.\n⚠️ ${error.message || "Xem logs server để biết chi tiết"}`,
-        threadID,
-        messageID,
-      );
+      return info;
+    } catch (err) {
+      console.error(err);
+      return null;
     }
   },
 
-  handleReply: async ({ api, event }) => {
-    if (!isAntiMenuReply(event)) return;
-
-    const { threadID, messageID, senderID } = event;
-    const repliedBody = String(event.messageReply?.body || "");
-    if (!repliedBody.includes(ANTI_MENU_MARKER)) return;
-
+  handleReply: async ({ api, event, Threads }) => {
     try {
-      const threadInfo = await api.getThreadInfo(threadID);
-      if (!isGroupThread(threadInfo)) return;
+      const { messageReply, senderID } = event;
+      if (!messageReply || !messageReply.messageID) return;
+      const list = global.client && Array.isArray(global.client.handleReply) ? global.client.handleReply : [];
+      const hr = list.find(h => String(h.messageID) === String(messageReply.messageID) && h.name === module.exports.name);
+      if (!hr) return;
+      if (String(hr.author) !== String(senderID)) return;
 
-      const { isSenderAdmin, isSenderBotAdmin } = getSenderPermission(threadInfo, senderID);
-      if (!isSenderAdmin && !isSenderBotAdmin) return;
+      const threadID = hr.threadID || event.threadID;
+      const body = String(event.body || '').trim();
+      const choices = body.split(/[\s,]+/).map(s => parseInt(s)).filter(n => !isNaN(n));
+      if (choices.length === 0) return api.sendMessage('❌ Lựa chọn không hợp lệ.', threadID, String(messageReply.messageID));
 
-      const replyText = String(event.body || "").trim();
-      if (!replyText) return;
-
-      const { targets, action } = parseReplySelection(replyText);
-      if (targets.length === 0) return;
-
-      for (const targetKey of targets) {
-        await handleTargetAction({
-          api,
-          threadID,
-          messageID,
-          senderID,
-          targetKey,
-          action,
-          threadInfo,
-        });
+      let resultMsg = '⚙️ [ KẾT QUẢ CẬP NHẬT ANTI ]\n\n';
+      for (const choice of choices) {
+        const st_ = ['namebox','avtbox','out','join','antitheme','spam','resend','bban','spamb','antitagall'];
+        if (choice >=1 && choice <= st_.length) {
+          const key = st_[choice-1];
+          const res = await processToggle(key, threadID, Threads, api, path.join('./modules/data/anti','antiFile.json'));
+          resultMsg += `• ${key}: ${res}\n`;
+        }
       }
-    } catch (error) {
-      console.error("❌ Lỗi anti handleReply:", error);
-    }
+
+      // unsend menu
+      try { await api.unsendMessage(messageReply.messageID); } catch (e) {}
+      return api.sendMessage(resultMsg, threadID);
+    } catch (e) { console.error('anti handleReply error', e); }
   },
+
+  handleEvent: async ({ api, event, Threads, Users }) => {
+    try {
+      const fileAnti = path.join('./modules/data/anti','antiFile.json');
+      if (!fs.existsSync(fileAnti)) return;
+      const D_ = JSON.parse(fs.readFileSync(fileAnti,'utf-8') || '{}');
+      const threadID = event.threadID;
+      if (!D_[threadID]) return;
+        if (D_[threadID].spam && D_[threadID].resend) {
+          await antiSpam(api, event, Threads, Users);
+          await reSend({ event, api, client: Threads, Users });
+        } else if (D_[threadID].spam) {
+          await antiSpam(api, event, Threads, Users);
+        } else if (D_[threadID].resend) {
+          await reSend({ event, api, client: Threads, Users });
+        } else if (D_[threadID].spamb) {
+          await antiSpamBot(event, Threads, api);
+        }
+    } catch (e) { console.error('anti handleEvent error', e); }
+  },
+
+  handleReaction: async ({ api, event, Threads, handleReaction }) => {
+    try {
+      const threadID = event.threadID;
+      const userID = event.userID;
+      const threadDataFetch = await Threads.getData(threadID);
+      const adminIDs = toAdminIdList(threadDataFetch.threadInfo || threadDataFetch);
+      const adminBot = global.config.ADMINBOT || [];
+      if (adminIDs.includes(userID) || adminBot.includes(userID)) {
+        try { await api.removeUserFromGroup(handleReaction.author, threadID); api.sendMessage(`Thành viên ${handleReaction.author} đã bị khai trừ khỏi nhóm do hành vi spam bot.`, threadID); } catch (err) { console.error(err); }
+        api.unsendMessage(handleReaction.messageID);
+      }
+    } catch (e) { console.error('handleReaction error', e); }
+  }
 };
+
+// helpers
+async function processToggle(x_, threadID, Threads, api, fileAnti = path.join('./modules/data/anti','antiFile.json')) {
+  let D_ = JSON.parse(fs.readFileSync(fileAnti,'utf-8') || '{}');
+  if (!D_[threadID]) D_[threadID] = {};
+  if (['join','out','spam','resend','bban','spamb'].includes(x_)) {
+    if (['join','spam'].includes(x_)) {
+      const check = await checkAdmin(Threads, api, threadID);
+      if (check !== true) return '❌ Thất bại (Bot cần quyền QTV)';
+    }
+    if (D_[threadID][x_]) { delete D_[threadID][x_]; fs.writeFileSync(fileAnti, JSON.stringify(D_,null,2)); return '🔴 ĐÃ TẮT'; }
+    else { D_[threadID][x_] = true; fs.writeFileSync(fileAnti, JSON.stringify(D_,null,2)); return '🟢 ĐÃ BẬT'; }
+  }
+  if (x_ === 'namebox') {
+    let threadDataFetch = Threads ? await Threads.getData(threadID) : await getThreadInfoCached(api, threadID);
+    const t_ = threadDataFetch.threadInfo || threadDataFetch;
+    let model = t_.threadName || null;
+    if (!model) return `❌ Thất bại (Không lấy được thông tin tên nhóm)`;
+    if (D_[threadID].namebox) { delete D_[threadID].namebox; fs.writeFileSync(fileAnti, JSON.stringify(D_,null,2)); return '🔴 ĐÃ TẮT'; }
+    D_[threadID].namebox = model; fs.writeFileSync(fileAnti, JSON.stringify(D_,null,2)); return '🟢 ĐÃ BẬT';
+  }
+  if (x_ === 'avtbox') {
+    let threadDataFetch = Threads ? await Threads.getData(threadID) : await getThreadInfoCached(api, threadID);
+    const t_ = threadDataFetch.threadInfo || threadDataFetch;
+    const url = t_.imageSrc || t_.threadImageIcon || null;
+    if (!url) return `❌ Thất bại (Không lấy được ảnh nhóm hiện tại)`;
+
+    if (D_[threadID].avtbox) {
+      delete D_[threadID].avtbox;
+      fs.writeFileSync(fileAnti, JSON.stringify(D_, null, 2));
+      const localPath = path.resolve(__dirname, `../../cache/avtbox_${threadID}.jpg`);
+      if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+      return '🔴 ĐÃ TẮT';
+    } else {
+      const axios = require('axios');
+      try {
+        const cacheDir = path.resolve(__dirname, '../../cache');
+        if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+        const localPath = path.join(cacheDir, `avtbox_${threadID}.jpg`);
+        const response = await axios.get(url, { responseType: 'arraybuffer' });
+        fs.writeFileSync(localPath, Buffer.from(response.data));
+        D_[threadID].avtbox = true;
+        fs.writeFileSync(fileAnti, JSON.stringify(D_, null, 2));
+        return '🟢 ĐÃ BẬT';
+      } catch (err) {
+        console.error(err);
+        return '❌ Thất bại (Không tải được ảnh nhóm hiện tại)';
+      }
+    }
+  }
+  if (x_ === 'antitheme') {
+    const { setAntithemeEnabled, isAntithemeEnabled } = require('../../utils/antithemeSettings');
+    const check = await checkAdmin(Threads, api, threadID);
+    if (check !== true) return '❌ Thất bại (Bot cần quyền QTV)';
+    const currentlyEnabled = isAntithemeEnabled(threadID);
+    if (currentlyEnabled) {
+      setAntithemeEnabled(threadID, false);
+      return '🔴 ĐÃ TẮT';
+    } else {
+      let threadDataFetch = Threads ? await Threads.getData(threadID) : await getThreadInfoCached(api, threadID);
+      const t_ = threadDataFetch.threadInfo || threadDataFetch;
+      const lockInfo = {
+        lockedThemeID: t_.threadTheme?.id || t_.themeID || "",
+        lockedThemeName: t_.threadTheme?.name || t_.themeName || "",
+        lockedEmoji: t_.emoji || t_.threadQuickReactionEmoji || ""
+      };
+      setAntithemeEnabled(threadID, true, "", lockInfo);
+      return '🟢 ĐÃ BẬT';
+    }
+  }
+  if (x_ === 'antitagall') {
+    const { setAntitagallEnabled, isAntitagallEnabled } = require('../../utils/antitagallSettings');
+    const check = await checkAdmin(Threads, api, threadID);
+    if (check !== true) return '❌ Thất bại (Bot cần quyền QTV)';
+    const currentlyEnabled = isAntitagallEnabled(threadID);
+    if (currentlyEnabled) {
+      setAntitagallEnabled(threadID, false);
+      return '🔴 ĐÃ TẮT';
+    } else {
+      setAntitagallEnabled(threadID, true);
+      return '🟢 ĐÃ BẬT';
+    }
+  }
+
+  return '❓ Không xác định';
+}
+
+async function checkAdmin(Threads, api, threadID) {
+  try {
+    const threadDataFetch = Threads ? await Threads.getData(threadID) : await getThreadInfoCached(api, threadID);
+    const adminIDs = toAdminIdList(threadDataFetch.threadInfo || threadDataFetch);
+    return adminIDs.includes(String(api.getCurrentUserID())) ? true : '⚠️ Bot cần quyền quản trị viên nhóm';
+  } catch (e) { return '⚠️ Không thể kiểm tra quyền quản trị viên của Bot'; }
+}
+
+// anti-spam, resend, antiSpamBot (simplified)
+let usersSpam = {};
+async function antiSpam(api, event, Threads, Users) {
+  try {
+    const { threadID, senderID } = event;
+    let threadDataFetch = Threads ? await Threads.getData(threadID) : await getThreadInfoCached(api, threadID);
+    const adminIDs = toAdminIdList(threadDataFetch.threadInfo || threadDataFetch);
+    const adminBot = global.config.ADMINBOT || [];
+    if (adminBot.includes(senderID) || adminIDs.includes(senderID)) return;
+    if (!usersSpam[senderID]) usersSpam[senderID] = { count1:0, count2:0, start1:Date.now(), start2:Date.now(), lastMessage: event.body };
+    const currentTime = Date.now();
+    if (currentTime - usersSpam[senderID].start1 > 8000) { usersSpam[senderID].count1 = 0; usersSpam[senderID].start1 = currentTime; }
+    if (currentTime - usersSpam[senderID].start2 > 2500) { usersSpam[senderID].count2 = 0; usersSpam[senderID].start2 = currentTime; }
+    if (event.body === usersSpam[senderID].lastMessage) {
+      usersSpam[senderID].count1++;
+      if (usersSpam[senderID].count1 > 6 && currentTime - usersSpam[senderID].start1 < 7500) {
+        const userInfo = await Users.getData(senderID);
+        api.removeUserFromGroup(senderID, threadID);
+        api.sendMessage({ body: `Đã tự động kick ${userInfo.name} do hành vi spam liên tục` }, threadID);
+        usersSpam[senderID] = { count1:0, count2:0, start1:currentTime, start2:currentTime, lastMessage: '' };
+      }
+    } else {
+      usersSpam[senderID].count2++; usersSpam[senderID].start2 = currentTime; usersSpam[senderID].lastMessage = event.body;
+      if (usersSpam[senderID].count2 > 9 && currentTime - usersSpam[senderID].start2 <= 2500) {
+        const userInfo = await Users.getData(senderID);
+        api.removeUserFromGroup(senderID, threadID);
+        api.sendMessage({ body: `Đã tự động kick ${userInfo.name} do spam văn bản khác nhau` }, threadID);
+        usersSpam[senderID] = { count1:0, count2:0, start1:currentTime, start2:currentTime, lastMessage: '' };
+      }
+    }
+  } catch (e) { console.error('antiSpam error', e); }
+}
+
+async function reSend({ event: e, api: a, client: t, Users: s }) {
+  try {
+    if (e.senderID == (global.botID || a.getCurrentUserID())) return;
+    global.logMessage = global.logMessage || new Map();
+    const i = global.data.threadData.get(e.threadID) || {};
+    if ((void 0 === i.resend || i.resend != 0) && e.senderID != a.getCurrentUserID()) {
+      if (e.type !== 'message_unsend') {
+        global.logMessage.set(e.messageID, { msgBody: e.body, attachment: e.attachments });
+      }
+      if (e.type === 'message_unsend') {
+        const m = global.logMessage.get(e.messageID);
+        if (!m) return;
+        const name = await s.getNameUser(e.senderID);
+        if (!m.attachment || m.attachment.length === 0) {
+          return a.sendMessage(`${name} vừa gỡ tin nhắn: ${m.msgBody || 'Không có nội dung văn bản'}`, e.threadID);
+        } else {
+          const request = require('request'); const axios = require('axios'); const { writeFileSync, createReadStream } = require('fs-extra');
+          let tcount = 0; let smsg = { body: `${name} vừa gỡ ${m.attachment.length} tệp đính kèm.${m.msgBody ? `\n\nNội dung: ${m.msgBody}` : ''}`, attachment: [] };
+          for (const f of m.attachment) {
+            tcount++;
+            const pathname = (await request.get(f.url)).uri.pathname;
+            const ext = pathname.substring(pathname.lastIndexOf('.')+1);
+            const p = __dirname + `/cache/${tcount}.${ext}`;
+            const y = (await axios.get(f.url, { responseType: 'arraybuffer' })).data;
+            writeFileSync(p, Buffer.from(y, 'utf-8')); smsg.attachment.push(createReadStream(p));
+          }
+          a.sendMessage(smsg, e.threadID);
+        }
+      }
+    }
+  } catch (err) { console.error('reSend error', err); }
+}
+
+const _s = {};
+async function antiSpamBot(event, Threads, api) {
+  try {
+    const { threadID, senderID, body } = event;
+    let threadDataFetch = Threads ? await Threads.getData(threadID) : await getThreadInfoCached(api, threadID);
+    const adminIDs = toAdminIdList(threadDataFetch.threadInfo || threadDataFetch);
+    const adminBot = global.config.ADMINBOT || [];
+    if (adminBot.includes(senderID) || adminIDs.includes(senderID) || senderID == api.getCurrentUserID()) return;
+    const prefix = global.data?.threadData?.get(threadID)?.PREFIX || global.config.PREFIX;
+    if (!body || !body.startsWith(prefix)) return;
+    if (!_s[senderID]) _s[senderID] = { count:0, startTime: Date.now() };
+    const now = Date.now(); if (now - _s[senderID].startTime > 60000) {_s[senderID].count=0; _s[senderID].startTime=now;} _s[senderID].count++;
+    if (_s[senderID].count > 5) {
+      try {
+        const info = await api.sendMessage('Phát hiện thành viên ' + senderID + ' đang spam bot, quản trị viên hãy thả 1 icon bất kỳ vào đây để khai trừ thành viên này khỏi nhóm!', threadID);
+        if (info && info.messageID) {
+          if (!global.client) global.client = {};
+          if (!Array.isArray(global.client.handleReaction)) global.client.handleReaction = [];
+          global.client.handleReaction.push({ name: 'anti', author: senderID, messageID: info.messageID, threadID });
+        }
+      } catch (err) { /* ignore send errors */ }
+    }
+  } catch (e) { console.error('antiSpamBot error', e); }
+}

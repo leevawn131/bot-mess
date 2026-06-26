@@ -29,7 +29,7 @@ function getDBConfig() {
 module.exports = {
     name: "vidgai",
     description: "Mua video gái TikTok (1,000,000 credits)",
-    usage: "\n!vidgai → Mua và nhận video ngẫu nhiên\n━{13}\n💰 Giá: 1,000,000 xu/lần\n⚡ Tốn năng lượng mỗi lần dùng\n🎬 Gửi video TikTok ngẫu nhiên",
+    usage: "\n!vidgai → Mua và nhận video ngẫu nhiên\n━━━━━━━━━━━━━\n💰 Giá: 1,000,000 xu/lần\n⚡ Tốn năng lượng mỗi lần dùng\n🎬 Gửi video TikTok ngẫu nhiên",
 
     execute: async ({ api, event, config }) => {
         const { threadID, senderID, messageID } = event;
@@ -69,8 +69,9 @@ module.exports = {
                 [senderID]
             );
 
+            const prefix = config?.prefix || "!";
             if (userRows.length === 0) {
-                api.sendMessage("❌ Bạn chưa có tài khoản (!tien).", threadID);
+                api.sendMessage(`❌ Bạn chưa có tài khoản (${prefix}tien).`, threadID);
                 return;
             }
 

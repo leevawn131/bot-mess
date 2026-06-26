@@ -1,19 +1,17 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
+const { getThreadInfoCached } = require("./threadInfo");
 
 const CONFIG_PATH = path.resolve(__dirname, "../../config.json");
 const STATE_DIR = path.resolve(__dirname, "../../cache/ai_assistant");
 const STATE_PATH = path.join(STATE_DIR, "state.json");
-const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
-const DEFAULT_OLLAMA_MODEL = "llama3:latest";
+const DEFAULT_OLLAMA_HOST = "http://172.27.192.1:11434";
+const DEFAULT_OLLAMA_MODEL = "qwen2.5:3b";
 const DEFAULT_REPLY_LIMIT = 10;
 const DEFAULT_COOLDOWN_MS = 60 * 1000;
 const DEFAULT_HISTORY_TURNS = 8;
 const DEFAULT_MAX_MEMBER_HINTS = 5;
-const THREAD_INFO_CACHE_TTL_MS = 2 * 60 * 1000;
-
-const threadInfoCache = new Map();
 
 function ensureStateDir() {
     fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -46,8 +44,8 @@ function getAiSettings() {
         enabled: ai.enabled !== false,
         autoReplyEnabled: ai.autoReplyEnabled !== false,
         autoReplyOnlyGroups: ai.autoReplyOnlyGroups !== false,
-        ollamaHost: process.env.OLLAMA_HOST || ai.ollamaHost || DEFAULT_OLLAMA_HOST,
-        model: process.env.OLLAMA_MODEL || ai.model || DEFAULT_OLLAMA_MODEL,
+        ollamaHost: ai.ollamaHost || DEFAULT_OLLAMA_HOST,
+        model: ai.model || DEFAULT_OLLAMA_MODEL,
         replyLimit: Math.max(1, Number(ai.replyLimit) || DEFAULT_REPLY_LIMIT),
         cooldownMs: Math.max(1000, Number(ai.cooldownMs) || DEFAULT_COOLDOWN_MS),
         historyTurns: Math.max(1, Number(ai.historyTurns) || DEFAULT_HISTORY_TURNS),
@@ -92,8 +90,11 @@ function getCommandRegistry() {
 }
 
 function normalizeCommandText(text) {
+    const config = loadRuntimeConfig();
+    const prefix = config.prefix || "!";
+    const escapedPrefix = escapeRegExp(prefix);
     return normalizeText(text)
-        .replace(/^!+/, "")
+        .replace(new RegExp(`^${escapedPrefix}+`), "")
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -142,6 +143,9 @@ function hasKnownCommandMention(query) {
     const normalized = normalizeCommandText(query);
     const compactQuery = normalized.replace(/\s+/g, "");
     const commands = getCommandRegistry();
+    const config = loadRuntimeConfig();
+    const prefix = config.prefix || "!";
+    const escapedPrefix = escapeRegExp(prefix);
 
     return commands.some((command) => {
         const name = normalizeCommandText(command.name);
@@ -150,7 +154,7 @@ function hasKnownCommandMention(query) {
         const compactName = name.replace(/\s+/g, "");
         if (compactQuery.includes(compactName)) return true;
 
-        const pattern = new RegExp(`(^|\\s)!?${escapeRegExp(name)}(\\s|$)`);
+        const pattern = new RegExp(`(^|\\s)(?:${escapedPrefix})?${escapeRegExp(name)}(\\s|$)`);
         return pattern.test(normalized);
     });
 }
@@ -180,7 +184,9 @@ function shouldUseSystemHelp(query) {
     const normalized = normalizeCommandText(raw);
     if (!normalized) return false;
 
-    if (raw.startsWith("!")) return true;
+    const config = loadRuntimeConfig();
+    const prefix = config.prefix || "!";
+    if (raw.startsWith(prefix)) return true;
     if (looksLikeBotHelpRequest(normalized)) return true;
 
     const directCommand = findDirectCommandMention(normalized);
@@ -555,22 +561,7 @@ function appendHistoryEntry(history, role, content) {
     return [...history, entry];
 }
 
-function getThreadInfoCached(api, threadID) {
-    const threadKey = String(threadID);
-    const cached = threadInfoCache.get(threadKey);
-    const now = Date.now();
 
-    if (cached && (now - cached.ts) < THREAD_INFO_CACHE_TTL_MS) {
-        return Promise.resolve(cached.data);
-    }
-
-    return api.getThreadInfo(threadKey)
-        .then((data) => {
-            threadInfoCache.set(threadKey, { ts: now, data });
-            return data;
-        })
-        .catch(() => cached?.data || null);
-}
 
 async function ensureMentionsFromHistory(api, event) {
     if (!event?.body || !event.body.includes("@")) return event;
@@ -653,7 +644,7 @@ function buildSystemPrompt({ settings, senderProfile, senderName, referencedMemb
             "HỖ TRỢ HỆ THỐNG:",
             "- Người dùng đang hỏi về lệnh/tính năng bot, hãy ưu tiên hướng dẫn đúng lệnh.",
             "- Hãy dùng đúng tên lệnh và cách dùng nếu hệ thống cung cấp.",
-            "- Khi không chắc, nói ngắn gọn rằng họ có thể dùng !help để xem toàn bộ lệnh.",
+            `- Khi không chắc, nói ngắn gọn rằng họ có thể dùng ${settings.prefix}help để xem toàn bộ lệnh.`,
             "DANH SÁCH LỆNH NỘI BỘ:",
             commandOverview,
         );
@@ -790,7 +781,10 @@ function sanitizeAiAnswer(answer, query) {
 
 function isContaminatedAssistantReply(text) {
     const normalized = normalizeText(text);
-    const commandLikeCount = (String(text || "").match(/![a-z0-9_]+/gi) || []).length;
+    const config = loadRuntimeConfig();
+    const prefix = config.prefix || "!";
+    const escapedPrefix = escapeRegExp(prefix);
+    const commandLikeCount = (String(text || "").match(new RegExp(`${escapedPrefix}[a-z0-9_]+`, 'gi')) || []).length;
     const looksLikeCommandDump =
         commandLikeCount >= 2 && (
             normalized.includes("cach dung") ||

@@ -1,6 +1,7 @@
 const { execute, getConnection } = require("../../utils/database");
 const { checkCooldown } = require("../../utils/cooldown");
 const { restoreEnergy } = require("../../utils/energySystem");
+const prefix = process.env.BOT_PREFIX;
 
 const LEGACY_ENERGY_TYPES = new Set([
   "energy_restore",
@@ -43,10 +44,11 @@ function isEnergyRestoreItem(item) {
 module.exports = {
   name: "use",
   description: "Sử dụng vật phẩm trong túi đồ",
-  usage: "\n!use [item-key] → Sử dụng vật phẩm trong túi đồ\n━{13}\n📌 [item-key]: Mã vật phẩm (xem bằng !inv)\n⚡ Vật phẩm năng lượng sẽ hồi phục stamina\n💡 Ví dụ: !use shield",
+  usage: `\n${prefix}use [item-key] → Sử dụng vật phẩm trong túi đồ\n━━━━━━━━━━━━━\n📌 [item-key]: Mã vật phẩm (xem bằng ${prefix}inv)\n⚡ Vật phẩm năng lượng sẽ hồi phục stamina\n💡 Ví dụ: ${prefix}use shield`,
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
+
     // Cooldown 5s
     const cooldown = checkCooldown({
       command: "use",
@@ -64,7 +66,7 @@ module.exports = {
 
     if (!itemKey) {
       return api.sendMessage(
-        "⚠️ Hãy nhập item key.\nVí dụ: !use shield",
+        `⚠️ Hãy nhập item key.\nVí dụ: ${prefix}use shield`,
         threadID,
         messageID,
       );
@@ -82,7 +84,7 @@ module.exports = {
 
       if (invItems.length === 0) {
         return api.sendMessage(
-          "❌ Bạn không có item này trong túi.\nGọi !inv để xem túi đồ.",
+          `❌ Bạn không có item này trong túi.\nGọi ${prefix}inv để xem túi đồ.`,
           threadID,
           messageID,
         );
@@ -93,7 +95,7 @@ module.exports = {
       // Kiểm tra item type (chỉ dùng được một số loại)
       if (invItem.type === "lootbox") {
         return api.sendMessage(
-          "❌ Hộp bí ẩn cần dùng lệnh !openbox",
+          `❌ Hộp bí ẩn cần dùng lệnh ${prefix}openbox`,
           threadID,
           messageID,
         );

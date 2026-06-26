@@ -1,7 +1,8 @@
+process.env.TZ = "Asia/Ho_Chi_Minh";
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { login } = require("ws3-fca");
+const login = require("./includes/f");
 const {
   checkPermission,
   getGroupMode,
@@ -14,21 +15,10 @@ const {
 const {
   ensureMentionsFromHistory: ensureMentionsResolved,
 } = require("./modules/utils/mentionResolver");
-
-// --- THREAD INFO CACHE (giảm gọi API liên tục, tránh bị Facebook throttle) ---
-const _threadInfoCache = new Map();
-const THREAD_INFO_TTL = 5 * 60 * 1000; // 5 phút
-
-// Tạm tắt console.error khi gọi getThreadInfo để ws3-fca không spam log
-async function _quietGetThreadInfo(api, key) {
-  const _origErr = console.error;
-  console.error = () => {};
-  try {
-    return await api.getThreadInfo(key);
-  } finally {
-    console.error = _origErr;
-  }
-}
+const {
+  getThreadInfoCached,
+  clearThreadInfoCache,
+} = require("./modules/utils/threadInfo");
 
 // Tạm tắt console.error khi gọi getThreadHistory để ws3-fca không spam log
 async function _quietGetThreadHistory(api, threadID, limit) {
@@ -41,24 +31,7 @@ async function _quietGetThreadHistory(api, threadID, limit) {
   }
 }
 
-async function getThreadInfoCached(api, threadID) {
-  const key = String(threadID);
-  const cached = _threadInfoCache.get(key);
-  if (cached && Date.now() - cached.ts < THREAD_INFO_TTL) {
-    return cached.data;
-  }
-  try {
-    const info = await _quietGetThreadInfo(api, key);
-    if (info) {
-      _threadInfoCache.set(key, { data: info, ts: Date.now() });
-    }
-    return info;
-  } catch (err) {
-    // Trả về cache cũ nếu có, dù đã hết hạn
-    if (cached) return cached.data;
-    return null;
-  }
-}
+global._quietGetThreadHistory = _quietGetThreadHistory;
 
 const DAILY_TOP_STATE_PATH = path.join(
   __dirname,
@@ -268,49 +241,28 @@ app.post("/webhook/sepay", async (req, res) => {
         // Cập nhật hoặc Insert vào bảng rented_groups
         await execute(
           `
-          INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at)
-          VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP)
+          INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at, is_admin_rental)
+          VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP, ?)
           ON DUPLICATE KEY UPDATE
             expire_date = DATE_ADD(GREATEST(COALESCE(expire_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP), INTERVAL ? DAY),
             renter_id = ?,
-            rented_at = CURRENT_TIMESTAMP
+            rented_at = CURRENT_TIMESTAMP,
+            is_admin_rental = ?
         `,
-          [tx.thread_id, daysToAdd, tx.user_id, daysToAdd, tx.user_id],
+          [tx.thread_id, daysToAdd, tx.user_id, isAdminPlan ? 1 : 0, daysToAdd, tx.user_id, isAdminPlan ? 1 : 0],
         );
 
         console.log(`✅ Đã cộng ${daysToAdd} ngày cho nhóm ${tx.thread_id}`);
 
-        // 3. Nếu là gói ADMIN-BOT, cấp quyền Admin
-        let adminGrantedMsg = "";
-        if (isAdminPlan) {
-          try {
-            const fs = require("fs");
-            const path = require("path");
-            const configPath = path.join(__dirname, "config.json");
-            const configData = JSON.parse(fs.readFileSync(configPath, "utf8"));
-
-            if (!configData.adminIDs) configData.adminIDs = [];
-            if (!configData.adminIDs.includes(tx.user_id)) {
-              configData.adminIDs.push(tx.user_id);
-              fs.writeFileSync(configPath, JSON.stringify(configData, null, 2));
-
-              // Cập nhật ngay vào biến config đang chạy để có tác dụng luôn
-              if (config && config.adminIDs) config.adminIDs.push(tx.user_id);
-              if (global.config && global.config.adminIDs)
-                global.config.adminIDs.push(tx.user_id);
-
-              // Try to prime user info cache so commands like !adminbot can display name immediately
-              try {
-                if (global.api_instance && typeof global.api_instance.getUserInfo === 'function') {
-                  global.api_instance.getUserInfo(tx.user_id).catch(() => {});
-                }
-              } catch (e) {}
-              adminGrantedMsg = `\n👑 BẠN ĐÃ ĐƯỢC CẤP QUYỀN ADMIN-BOT!`;
-            }
-          } catch (e) {
-            console.error("Lỗi cấp quyền admin:", e);
-          }
+        try {
+          const { clearRentalCache } = require("./modules/utils/rental");
+          clearRentalCache(tx.thread_id);
+        } catch (rentalCacheErr) {
+          console.error("Lỗi xóa cache thuê bot:", rentalCacheErr);
         }
+
+        // 3. Quyền đổi mode được mở khóa nếu là gói Admin
+        const adminGrantedMsg = isAdminPlan ? "\n👑 Quyền đổi mode đã được mở khóa cho tất cả QTV nhóm!" : "";
 
         // 4. Gửi tin nhắn thông báo (Sẽ thực hiện nếu api đã login)
         if (global.api_instance) {
@@ -362,10 +314,32 @@ const attemptLogin = () => {
           return;
         }
 
-        console.error(
-          "ℹ️ Bot chỉ dùng appstate/cookie để đăng nhập. Nếu Facebook chặn phiên này, hãy xác minh tài khoản trong browser rồi cập nhật lại runtime/appstate.json.",
-        );
-        scheduleLoginRetry("lỗi đăng nhập appstate", RETRY_BASE_DELAY_MS);
+        console.log("🔄 Tự động gọi script AdsPower trên Windows để lấy appstate mới...");
+        try {
+          const { execFile } = require("child_process");
+          const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
+          const wslPath = process.cwd();
+          // Chuyển đổi path Linux sang định dạng network path của Windows WSL
+          const winScriptPath = `\\\\wsl$\\${distro}${wslPath.replace(/\//g, '\\')}\\export-appstate.js`;
+          
+          const psScript = `$nodePath = 'node'; ` +
+            `$paths = @('C:\\Program Files\\nodejs\\node.exe', "$env:ProgramFiles\\nodejs\\node.exe", "$env:APPDATA\\nvm\\node.exe", "$env:USERPROFILE\\AppData\\Local\\fnm\\node.exe", "$env:USERPROFILE\\AppData\\Roaming\\nvm\\node.exe"); ` +
+            `foreach ($p in $paths) { if (Test-Path $p) { $nodePath = $p; break; } }; ` +
+            `& $nodePath "${winScriptPath}" --no-restart`;
+
+          execFile("powershell.exe", ["-Command", psScript], (scriptErr, stdout, stderr) => {
+            if (scriptErr) {
+              console.error(`❌ Lỗi chạy script AdsPower trên Windows: ${scriptErr.message}`);
+            } else {
+              console.log(`✅ AdsPower Auto-Refresh thành công:\n${stdout}`);
+            }
+          });
+        } catch (execErr) {
+          console.error(`❌ Không thể chạy lệnh Powershell: ${execErr.message}`);
+        }
+
+        // Chờ 25 giây sau đó tự động load lại appstate mới và thử kết nối lại
+        scheduleLoginRetry("đang chờ cập nhật appstate mới từ AdsPower", 25000);
         return;
       }
 
@@ -491,7 +465,10 @@ const attemptLogin = () => {
         if (cmd && !cmd.execute && typeof cmd.run === 'function') {
           cmd.execute = cmd.run;
         }
-        if (cmd && cmd.name) global.commands.set(cmd.name, cmd);
+        if (cmd && cmd.name) {
+          cmd.__filePath = file;
+          global.commands.set(cmd.name, cmd);
+        }
       } catch (e) {
         console.error(`❌ Lỗi nạp module ${path.basename(file)}: ${e.message}`);
       }
@@ -799,6 +776,15 @@ const attemptLogin = () => {
         for (const threadID of Object.keys(stats)) {
           if (state[threadID] === previousMonthKey) continue;
 
+          // Skip sending monthly stats if the group's rental has expired
+          try {
+            const { checkRentalStatus } = require("./modules/utils/rental");
+            const isRented = await checkRentalStatus(threadID);
+            if (!isRented) continue;
+          } catch (e) {
+            console.error(`❌ Lỗi check rental cho top tháng nhóm ${threadID}:`, e.message);
+          }
+
           const threadStats = stats[threadID];
           const ranked = Object.entries(threadStats)
             .filter(([uid]) => /^\d+$/.test(String(uid)))
@@ -928,21 +914,62 @@ const attemptLogin = () => {
     // --- LISTENER CHÍNH ---
       api.listenMqtt(async (err, event) => {
       if (err) {
-        console.error("Listen Error:", err);
-        if (err.type === "stop_listen" || err.error === "Connection refused") {
-          console.error(
-            "⚠️ MQTT bị từ chối. Kiểm tra lại appstate.json còn hợp lệ, hoặc tạo appstate mới bằng refresh-appstate.js.",
-          );
-        }
+        console.error("❌ Listen Error:", err);
+        console.error("⚠️ Phát hiện lỗi kết nối MQTT hoặc lỗi nghiêm trọng. Tiến hành khởi động lại bot để làm mới kết nối...");
+        setTimeout(() => {
+          process.exit(1);
+        }, 1000);
         return;
       }
+
+      if (event && event.threadID) {
+        if (event.logMessageType || event.type === "change_thread_image") {
+          clearThreadInfoCache(event.threadID);
+          if (
+            ["log:thread-admins", "log:thread-name", "log:thread-image", "log:user-nickname"].includes(event.logMessageType) ||
+            event.type === "change_thread_image"
+          ) {
+            setTimeout(() => clearThreadInfoCache(event.threadID), 2000);
+            setTimeout(() => clearThreadInfoCache(event.threadID), 5000);
+            setTimeout(() => clearThreadInfoCache(event.threadID), 10000);
+          }
+        }
+      }
+
+      const shouldAllowEvent = async (ev, threadID) => {
+        if (!threadID) return true;
+
+        const isAdmin = config.adminIDs.includes(event.senderID) || String(event.senderID) === String(botID);
+        if (isAdmin) return true;
+
+        if (ev.name === "greetingSticker") return true;
+
+        if (
+          ev.name === "welcome" &&
+          event.logMessageType === "log:subscribe" &&
+          Array.isArray(event.logMessageData?.addedParticipants) &&
+          event.logMessageData.addedParticipants.some(i => String(i.userFbId) === String(botID))
+        ) {
+          return true;
+        }
+
+        try {
+          const { checkRentalStatus } = require("./modules/utils/rental");
+          return await checkRentalStatus(threadID);
+        } catch (err) {
+          console.error("Lỗi kiểm tra trạng thái thuê bot cho event:", err);
+          return true;
+        }
+      };
 
       // 1. Xử lý Event hệ thống (Log message)
       if (event.logMessageType) {
         global.events.forEach(async (ev) => {
           if (ev.eventType && ev.eventType.includes(event.logMessageType)) {
             try {
-              await ev.execute({ api, event, config });
+              if (await shouldAllowEvent(ev, event.threadID)) {
+                await ev.execute({ api, event, config });
+              }
             } catch (e) {}
           }
         });
@@ -953,7 +980,9 @@ const attemptLogin = () => {
         global.events.forEach(async (ev) => {
           if (ev.eventType && ev.eventType.includes(event.type)) {
             try {
-              await ev.execute({ api, event, config });
+              if (await shouldAllowEvent(ev, event.threadID)) {
+                await ev.execute({ api, event, config });
+              }
             } catch (e) {}
           }
         });
@@ -1047,13 +1076,23 @@ const attemptLogin = () => {
 
       const sendHelpHint = () =>
         api.sendMessage(
-          "Bố mày đây, gõ !help mà xem danh sách lệnh",
+          `Bố mày đây, gõ ${prefix}help mà xem danh sách lệnh`,
           event.threadID,
           event.messageID,
         );
 
       if (normalizedBody === "bot dau") {
         return sendHelpHint();
+      }
+      const sendPrefix = () =>
+        api.sendMessage(
+          `Prefix của Bot là: ${prefix}`,
+          event.threadID,
+          event.messageID,
+        );
+
+      if (normalizedBody === "prefix") {
+        return sendPrefix();
       }
 
       // Lệnh không cần check quyền (tự trong lệnh xử lý)
@@ -1076,7 +1115,7 @@ const attemptLogin = () => {
 
         if (!command) {
           return api.sendMessage(
-            `❌ Lệnh không tồn tại: ${commandName}\n💡 Dùng !help để xem danh sách lệnh.`,
+            `❌ Lệnh không tồn tại: ${commandName}\n💡 Dùng ${prefix}help để xem danh sách lệnh.`,
             event.threadID,
             event.messageID,
           );
@@ -1087,20 +1126,17 @@ const attemptLogin = () => {
             // =================================================================
             // 🛡️ KIỂM TRA HẠN THUÊ BOT (RENTAL CHECK)
             // =================================================================
-            const { execute } = require("./modules/utils/database");
+            const { checkRentalStatus } = require("./modules/utils/rental");
             const isAdmin = config.adminIDs.includes(event.senderID) || String(event.senderID) === String(botID);
-            const isFreeCommand = ["thuebot", "adminbot"].includes(commandName);
+            const isFreeCommand = ["thuebot", "adminbot", "gopy"].includes(commandName);
 
             if (!isAdmin && !isFreeCommand) {
-              const rentedGroup = await execute(
-                "SELECT * FROM rented_groups WHERE thread_id = ? AND expire_date > CURRENT_TIMESTAMP",
-                [event.threadID],
-              );
+              const isRented = await checkRentalStatus(event.threadID);
 
-              if (!rentedGroup || rentedGroup.length === 0) {
+              if (!isRented) {
                 return api.sendMessage(
                   "⚠️ Nhóm này chưa thuê bot hoặc đã hết hạn thuê.\n" +
-                    "Vui lòng dùng !adminbot để liên hệ admin hoặc dùng lệnh !thuebot để tự động gia hạn!",
+                    `Vui lòng dùng ${prefix}adminbot để liên hệ admin hoặc dùng lệnh ${prefix}thuebot để tự động gia hạn!`,
                   event.threadID,
                   event.messageID,
                 );
@@ -1113,6 +1149,7 @@ const attemptLogin = () => {
               event.threadID,
               event.senderID,
               api,
+              commandName,
             );
             if (!permCheck.allowed && !isFreeCommand) {
               // Fetch threadInfo for debugging (do not expose to chat, only server log)
@@ -1176,14 +1213,33 @@ const attemptLogin = () => {
       // XỬ LÝ REPLY (Tài Xỉu, Bầu Cua...)
       // =================================================================
       if (event.type === "message_reply") {
-        const permCheck = await checkPermission(event.threadID, event.senderID, api);
-
+        console.log("DBG message_reply event:", JSON.stringify({
+          type: event.type,
+          senderID: event.senderID,
+          threadID: event.threadID,
+          messageID: event.messageID,
+          messageReply: event.messageReply ? {
+            messageID: event.messageReply.messageID,
+            senderID: event.messageReply.senderID,
+            body: event.messageReply.body
+          } : null
+        }, null, 2));
+        const { checkRentalStatus } = require("./modules/utils/rental");
+        const isRented = await checkRentalStatus(event.threadID);
+        const isAdmin = config.adminIDs.includes(event.senderID) || String(event.senderID) === String(botID);
         const repliedText = String(event.messageReply?.body || "");
         const isThuebotMenuReply = repliedText.includes("BẢNG GIÁ THUÊ BOT");
+
+        const permCheck = await checkPermission(event.threadID, event.senderID, api);
 
         global.commands.forEach(async (cmd) => {
           if (cmd.handleReply) {
             try {
+              // Nếu hết hạn thuê và không phải admin, chỉ cho phép reply menu thuebot
+              if (!isRented && !isAdmin && !(isThuebotMenuReply && cmd.name === "thuebot")) {
+                return;
+              }
+
               // Cho phép reply menu thuê bot kể cả khi mode không cho dùng lệnh chung.
               if (!permCheck.allowed && !(isThuebotMenuReply && cmd.name === "thuebot")) {
                 return;

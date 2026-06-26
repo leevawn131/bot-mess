@@ -1,4 +1,5 @@
 const { isAntitagallEnabled } = require("../utils/antitagallSettings");
+const { getThreadInfoCached } = require("../utils/threadInfo");
 
 function suppressLeaveEvents(threadID, durationMs = 15000) {
     global.leaveEventSuppressByThread = global.leaveEventSuppressByThread || {};
@@ -28,7 +29,7 @@ function hasTagAllMessage(event) {
 
 module.exports = {
     name: "antitagall",
-    eventType: ["message"],
+    eventType: ["message", "message_reply"],
 
     execute: async ({ api, event }) => {
         if (!event.threadID || !event.senderID || !event.body) return;
@@ -43,7 +44,7 @@ module.exports = {
 
             if (!hasTagAll) return;
 
-            const threadInfo = await api.getThreadInfo(event.threadID);
+            const threadInfo = await getThreadInfoCached(api, event.threadID);
             if (!threadInfo || typeof threadInfo !== "object") {
                 return api.sendMessage(
                     "⚠️ Phát hiện tag @everyone/@mọi người nhưng không lấy được thông tin nhóm để xử lý kick.",
@@ -51,6 +52,8 @@ module.exports = {
                     event.messageID,
                 );
             }
+
+            const senderName = getSenderName(threadInfo, event.senderID);
 
             // Kiểm tra quyền của bot
             const adminIDs = toAdminIdList(threadInfo);
@@ -60,7 +63,7 @@ module.exports = {
             if (!isBotAdmin) {
                 // Nếu bot không có quyền admin, chỉ gửi cảnh báo
                 return api.sendMessage(
-                    `⚠️ Phát hiện spam tag @everyone/@mọi người từ ${event.senderID}\n❌ Bot cần quyền Quản Trị Viên để tự động kick.`,
+                    `⚠️ Phát hiện spam tag @everyone/@mọi người từ ${senderName}\n❌ Bot cần quyền Quản Trị Viên để tự động kick.`,
                     event.threadID,
                     event.messageID,
                 );
@@ -76,8 +79,6 @@ module.exports = {
             if (String(event.senderID) === botID) {
                 return; // Bỏ qua chính bot
             }
-
-            const senderName = getSenderName(threadInfo, event.senderID);
 
             // Chặn leave event gửi thêm dòng thông báo bên dưới sau khi kick
             suppressLeaveEvents(event.threadID, 15000);

@@ -1,5 +1,6 @@
 const { addLeaveHistoryEntry } = require("../utils/leaveHistory");
 const { isAntioutEnabled } = require("../utils/antioutSettings");
+const { getThreadInfoCached, clearThreadInfoCache } = require("../utils/threadInfo");
 
 async function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -20,7 +21,8 @@ async function tryReAddUser({ api, threadID, leftID, retries = 2 }) {
             }
 
             await wait(1200);
-            const threadInfo = await api.getThreadInfo(threadID);
+            clearThreadInfoCache(threadID);
+            const threadInfo = await getThreadInfoCached(api, threadID);
             const participantSet = new Set((threadInfo?.participantIDs || []).map(id => String(id)));
             if (participantSet.has(String(leftID))) {
                 return { ok: true, error: "" };
@@ -126,7 +128,7 @@ module.exports = {
                 let addBackError = "";
 
                 try {
-                    const threadInfo = await api.getThreadInfo(threadID);
+                    const threadInfo = await getThreadInfoCached(api, threadID);
                     const adminIDs = (threadInfo?.adminIDs || []).map((item) => String(item.id));
                     const isBotAdmin = adminIDs.includes(String(botID));
 

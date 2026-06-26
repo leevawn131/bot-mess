@@ -7,6 +7,7 @@ const {
   recordMinigameSuccess,
 } = require("../../utils/minigameLimiter");
 const { recordAction } = require("../../utils/questSystem");
+const prefix = process.env.BOT_PREFIX;
 
 const TAX_RATE = 0.05;
 const AUTO_CLOSE_MS = 3 * 60 * 1000;
@@ -197,7 +198,7 @@ async function finalizeTaixiuSession({
   let totalBet = 0;
   let totalPay = 0;
   const autoCloseText = autoClose ? "⏰ Hết 3 phút, bot tự xóc.\n" : "";
-  let msg = `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcon}\nTổng: ${total} - ${resultText.toUpperCase()}\n━{13}\n`;
+  let msg = `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcon}\nTổng: ${total} - ${resultText.toUpperCase()}\n━━━━━━━━━━━━━\n`;
 
   let connection;
   try {
@@ -347,11 +348,12 @@ function scheduleTaixiuAutoClose({ api, threadID, config }) {
 module.exports = {
   name: "taixiu",
   description: "Tài Xỉu (Anti-Spam Edition)",
-  usage: "\n!taixiu → Mở sòng Tài Xỉu mới\n!taixiu xoc → Xóc đĩa kết thúc phiên (chủ sòng)\n!taixiu soicau → Xem lịch sử kết quả gần nhất\n━{13}\n🎲 Cược: Reply tin nhắn sòng + [tài/xỉu] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → tai 50000",
+  usage: `\n${prefix}taixiu → Mở sòng Tài Xỉu mới\n${prefix}taixiu xoc → Xóc đĩa kết thúc phiên (chủ sòng)\n${prefix}taixiu soicau → Xem lịch sử kết quả gần nhất\n━━━━━━━━━━━━━\n🎲 Cược: Reply tin nhắn sòng + [tài/xỉu] [số_tiền]\n💰 Thuế thắng: 5% | Tự đóng sau 3 phút\n💡 Ví dụ: reply → tai 50000`,
 
   execute: async ({ api, event, args, config }) => {
     const { threadID, senderID } = event;
     const command = args[0]?.toLowerCase();
+    const prefix = config?.prefix || "!";
 
     // --- LỆNH: !taixiu soicau (XEM LỊCH SỬ BÀN) ---
     if (command === "soicau") {
@@ -369,8 +371,19 @@ module.exports = {
 
       const recent = history.slice(-15);
       const lines = recent.map((item, idx) => formatSoiCauLine(idx + 1, item));
-      const msg = `📊 SOI CẦU TÀI XỈU (15 phiên gần nhất)\nBàn: ${threadID}\n━{13}\n${lines.join("\n")}`;
-      return api.sendMessage(msg, threadID);
+      const msg = `📊 SOI CẦU TÀI XỈU (15 phiên gần nhất)\nBàn: ${threadID}\n━━━━━━━━━━━━━\n${lines.join("\n")}\n\n⏰ Tin nhắn này sẽ tự động gỡ sau 45s.`;
+      
+      try {
+        const info = await api.sendMessage(msg, threadID);
+        setTimeout(async () => {
+          try {
+            await api.unsendMessage(info.messageID);
+          } catch (_) {}
+        }, 45000);
+      } catch (e) {
+        console.error("[taixiu] Lỗi gửi tin soi cầu:", e);
+      }
+      return;
     }
 
     // Cooldown 10s - CHỈ cho lệnh mở phiên hoặc chốt phiên
@@ -408,13 +421,13 @@ module.exports = {
     else {
       if (global.taixiuSessions[threadID])
         return api.sendMessage(
-          "⚠️ Đang có phiên rồi! Gõ !taixiu xoc để chốt.",
+          `⚠️ Đang có phiên rồi! Gõ ${prefix}taixiu xoc để chốt.`,
           threadID,
         );
 
       // ANTI-SPAM: Tạo ID phiên ngẫu nhiên
       const sessionID = Math.floor(Math.random() * 9999);
-      const openMsg = `🎲 SÒNG BẠC ONLINE! (Phiên #${sessionID})\n👑 Nhà cái: LeVan\n\nCách chơi: Reply (Trả lời) tin nhắn này:\n[Tai/Xiu] [Số tiền]\n!taixiu xoc để xóc\n⏰ Tự xóc sau 3 phút nếu chưa ai chốt.`;
+      const openMsg = `🎲 SÒNG BẠC ONLINE! (Phiên #${sessionID})\n👑 Nhà cái: LeVan\n\nCách chơi: Reply (Trả lời) tin nhắn này:\n[Tai/Xiu] [Số tiền]\n${prefix}taixiu xoc để xóc\n⏰ Tự xóc sau 3 phút nếu chưa ai chốt.`;
 
       try {
         const info = await api.sendMessage(openMsg, threadID);
@@ -440,7 +453,8 @@ module.exports = {
   },
 
   // 2. XỬ LÝ REPLY
-  handleReply: async ({ api, event }) => {
+  handleReply: async ({ api, event, config }) => {
+    const prefix = config?.prefix || "!";
     const { threadID, senderID, body, messageReply, messageID } = event;
 
     if (!global.taixiuSessions[threadID]) return;
@@ -479,7 +493,7 @@ module.exports = {
       );
       if (rows.length === 0)
         return api.sendMessage(
-          "❌ Bạn chưa có tài khoản (!diemdanh).",
+          `❌ Bạn chưa có tài khoản\n(dùng ${prefix}tien để tạo TK).`,
           threadID,
           messageID,
         );
@@ -499,8 +513,19 @@ module.exports = {
       const hasLucky = luckyCheck.length > 0;
 
       let betAmount = 0;
-      if (amountStr === "all" || amountStr === "tat") betAmount = userBalance;
-      else betAmount = parseInt(amountStr);
+      if (amountStr === "all" || amountStr === "tat") {
+        betAmount = userBalance;
+      } else if (amountStr && typeof amountStr === "string" && amountStr.endsWith("%")) {
+        const percentStr = amountStr.slice(0, -1);
+        const percent = parseFloat(percentStr);
+        if (!isNaN(percent) && percent > 0 && percent <= 100) {
+          betAmount = Math.floor((userBalance * percent) / 100);
+        } else {
+          return api.sendMessage("⚠️ Phần trăm cược không hợp lệ (phải từ 1% đến 100%).", threadID, messageID);
+        }
+      } else {
+        betAmount = parseInt(amountStr);
+      }
 
       if (isNaN(betAmount) || betAmount <= 0)
         return api.sendMessage("⚠️ Tiền cược sai.", threadID, messageID);
@@ -546,7 +571,7 @@ module.exports = {
             (now - dueDate) / (1000 * 60 * 60 * 24),
           );
           return api.sendMessage(
-            `⚠️ BẠN ĐANG NỢ TIỀN!\n━{13}\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━{13}\n💡 Trả nợ để cược bình thường!`,
+            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
             threadID,
             messageID,
           );

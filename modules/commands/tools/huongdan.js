@@ -4,7 +4,7 @@ module.exports = {
   name: "huongdan",
   description: "Hướng dẫn người chơi mới bắt đầu chơi",
   usage:
-    "\n!huongdan → Hướng dẫn tổng quan cho người mới\n!huongdan chitiet → Hướng dẫn chi tiết từng hệ thống\n━{13}\n📚 Giải thích cách chơi, kiếm tiền, minigame",
+    "\n!huongdan → Hướng dẫn tổng quan cho người mới\n!huongdan chitiet → Hướng dẫn chi tiết từng hệ thống\n━━━━━━━━━━━━━\n📚 Giải thích cách chơi, kiếm tiền, minigame",
   execute: async ({ api, event, args, config }) => {
     const { threadID, messageID, senderID } = event;
     const prefix = config?.prefix || "!";
@@ -70,7 +70,7 @@ Dùng ${prefix}help để xem tất cả lệnh!`;
       // 2. HƯỚNG DẪN CƠ BẢN
       if (mode === "cơ_bản" || mode === "co_ban") {
         const basicMsg = `📚 THUẬT NGỮ CƠ BẢN
-━{13}
+━━━━━━━━━━━━━
 💳 Credits: Tiền trong trò chơi, dùng để mua hàng & cược
 🔋 Energy (Thể lực): Mỗi lệnh tiêu tốn energy, khôi phục tự động
 👑 VIP: Hạng cao cấp, nhận bonus khi làm việc (50% lương)
@@ -78,20 +78,20 @@ Dùng ${prefix}help để xem tất cả lệnh!`;
 ⚙️ Active Effects: Những trạng thái đặc biệt đang kích hoạt
 
 💰 HỆ THỐNG TIỀN TỆ
-━{13}
+━━━━━━━━━━━━━
 • 1 Credits = 1 đơn vị tiền cơ bản
 • Lương làm việc: 10k ~ 100k (có bonus từ VIP & Items)
 • Có thể âm tiền (nợ), nhưng sẽ bị trừ khi kiếm tiền
 
 🎯 HẠNG VIP
-━{13}
+━━━━━━━━━━━━━
 Khi có VIP (kích hoạt từ Shop):
 • Giảm 50% xui khi làm việc (20% -> 10%)
 • Tăng 50% lương khi làm việc
 • Các bonus khác tùy theo vật phẩm
 
 ⚡ HỆ THỐNG ENERGY
-━{13}
+━━━━━━━━━━━━━
 • Mỗi action tiêu 15 energy (làm việc, quest, etc.)
 • Max energy phụ thuộc vào tầng chơi
 • Tự khôi phục theo thời gian`;
@@ -102,7 +102,7 @@ Khi có VIP (kích hoạt từ Shop):
       // 3. HƯỚNG DẪN KIẾM TIỀN
       if (mode === "kiếm_tiền" || mode === "kiem_tien") {
         const earnMsg = `💰 CÁCH KIẾM TIỀN
-━{13}
+━━━━━━━━━━━━━
 🛠️ LÀMHỢP LỰC (CHÍNH)
 ${prefix}lamviec
 • Nhân: 10k ~ 100k (có thể cao hơn nếu VIP + bonus)
@@ -141,7 +141,7 @@ ${prefix}daigia [tên vật phẩm]
       // 4. HƯỚNG DẪN MINIGAME
       if (mode === "minigame") {
         const gameMsg = `🎮 HƯỚNG DẪN CHƠI MINIGAME
-━{13}
+━━━━━━━━━━━━━
 🎲 TÀI XIU
 ${prefix}taixiu [tài|xỉu] [số tiền]
 • Dự đoán kết quả dúc xúc: Tài (tổng >= 11) hay Xỉu (< 11)
@@ -165,7 +165,7 @@ ${prefix}lode [số 0-99] [số tiền]
 • Nguy hiểm nhất nhưng thưởng lớn nhất!
 
 🔁 CHI TIẾT RULES
-━{13}
+━━━━━━━━━━━━━
 • Không có giới hạn số lần chơi (nhưng có cooldown)
 • Nên cược nhỏ để tránh mất hết tiền
 • Chơi vui, không nên cá cược cả số dư`;
@@ -176,7 +176,7 @@ ${prefix}lode [số 0-99] [số tiền]
       // 5. MẸO CHƠI
       if (mode === "mẹo" || mode === "meo") {
         const tipsMsg = `💡 MẸO CHƠI HAY HO
-━{13}
+━━━━━━━━━━━━━
 ✅ KIẾM TIỀN HIỆU QUẢ
 1. Làm việc thường xuyên (${prefix}lamviec) - ổn định & an toàn
 2. Điểm danh hàng ngày (${prefix}diemdanh) - free tiền

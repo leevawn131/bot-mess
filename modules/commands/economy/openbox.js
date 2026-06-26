@@ -1,13 +1,15 @@
 const { execute, getConnection } = require('../../utils/database');
 const { checkCooldown } = require('../../utils/cooldown');
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
     name: "openbox",
     description: "Mở hộp bí ẩn",
-    usage: "\n!openbox → Mở 1 hộp bí ẩn\n!openbox [số_lượng] → Mở nhiều hộp cùng lúc\n!openbox all → Mở toàn bộ hộp đang có\n━{13}\n🎲 Phần thưởng ngẫu nhiên: xu, vật phẩm\n💡 Ví dụ: !openbox 5",
+    usage: `\n${prefix}openbox → Mở 1 hộp bí ẩn\n${prefix}openbox [số_lượng] → Mở nhiều hộp cùng lúc\n${prefix}openbox all → Mở toàn bộ hộp đang có\n━━━━━━━━━━━━━\n🎲 Phần thưởng ngẫu nhiên: xu, vật phẩm\n💡 Ví dụ: ${prefix}openbox 5`,
     
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
+        const prefix = config?.prefix || "!";
         
         // Xác định số lượng hộp cần mở
         let quantityToOpen = 1;
@@ -20,7 +22,7 @@ module.exports = {
             } else {
                 const num = parseInt(arg);
                 if (isNaN(num) || num <= 0) {
-                    return api.sendMessage("⚠️ Số lượng không hợp lệ!\nCách dùng: !openbox [số] hoặc !openbox all", threadID, messageID);
+                    return api.sendMessage(`⚠️ Số lượng không hợp lệ!\nCách dùng: ${prefix}openbox [số] hoặc ${prefix}openbox all`, threadID, messageID);
                 }
                 quantityToOpen = num;
             }
@@ -44,7 +46,7 @@ module.exports = {
             );
             
             if (boxes.length === 0) {
-                return api.sendMessage("❌ Bạn không có hộp bí ẩn nào.\n👉 Mua tại !shop với giá 20,000 xu", threadID, messageID);
+                return api.sendMessage(`❌ Bạn không có hộp bí ẩn nào.\n👉 Mua tại ${prefix}shop với giá 20,000 xu`, threadID, messageID);
             }
 
             // Helper function để random phần thưởng
@@ -133,7 +135,7 @@ module.exports = {
                 const remainingCount = rewards.length > 10 ? `\n... và ${rewards.length - 10} phần thưởng khác` : '';
 
                 return api.sendMessage(
-                    `📦 MỞ ${totalBoxes} HỘP BÍ ẨN\n━{13}\n\n✨ Phần thưởng:\n${rewardList}${remainingCount}\n\n💰 Tổng cộng: ${totalCredits.toLocaleString()} xu\n\n🎊 Chúc mừng!`,
+                    `📦 MỞ ${totalBoxes} HỘP BÍ ẨN\n━━━━━━━━━━━━━\n\n✨ Phần thưởng:\n${rewardList}${remainingCount}\n\n💰 Tổng cộng: ${totalCredits.toLocaleString()} xu\n\n🎊 Chúc mừng!`,
                     threadID, messageID
                 );
             } else {
@@ -188,7 +190,7 @@ module.exports = {
                 }
 
                 return api.sendMessage(
-                    `📦 MỞ HỘP BÍ ẨN\n━{13}\n\n✨ Bạn nhận được:\n${reward.msg}\n\n🎊 Chúc mừng!`,
+                    `📦 MỞ HỘP BÍ ẨN\n━━━━━━━━━━━━━\n\n✨ Bạn nhận được:\n${reward.msg}\n\n🎊 Chúc mừng!`,
                     threadID, messageID
                 );
             }

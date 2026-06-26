@@ -2,6 +2,9 @@ const fs = require("fs");
 const path = require("path");
 const { checkCooldown } = require("../../utils/cooldown");
 const { getBotConfig } = require("../../utils/envConfig");
+const { toAdminIdList } = require("../../utils/checkPermission");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
+const prefix = process.env.BOT_PREFIX;
 
 const STATS_PATH = path.join(__dirname, "../../../message_stats.json");
 
@@ -192,7 +195,7 @@ module.exports = {
   name: "checktt",
   description: "Kiểm tra tương tác, lọc/kick/reset dữ liệu tin nhắn",
   usage:
-    "\n!checktt all → Xem top tương tác tất cả thành viên\n!checktt → Xem top tương tác của 1 người\n!checktt ngày → Top tương tác hôm nay\n!checktt tuần → Top tuần này\n!checktt tháng → Top tháng này\n!checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n!checktt kickdead → Kick thành viên bị bay acc\n!checktt clear → Làm sạch dữ liệu tương tác\n!checktt reset → Reset dữ liệu nhóm (Admin)\n━{13}\n📊 Thống kê tự động theo ngày/tuần/tháng",
+    `\n${prefix}checktt all → Xem top tương tác tất cả thành viên\n${prefix}checktt → Xem top tương tác của 1 người\n${prefix}checktt ngày → Top tương tác hôm nay\n${prefix}checktt tuần → Top tuần này\n${prefix}checktt tháng → Top tháng này\n${prefix}checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n${prefix}checktt kickdead → Kick thành viên bị bay acc\n${prefix}checktt clear → Làm sạch dữ liệu tương tác\n${prefix}checktt reset → Reset dữ liệu nhóm (Admin)\n━━━━━━━━━━━━━\n📊 Thống kê tự động theo ngày/tuần/tháng`,
 
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
@@ -213,7 +216,7 @@ module.exports = {
     try {
       let threadInfo;
       try {
-        threadInfo = await api.getThreadInfo(threadID);
+        threadInfo = await getThreadInfoCached(api, threadID);
       } catch (err) {
         console.error("Error getting thread info:", err);
         return api.sendMessage(
@@ -231,9 +234,7 @@ module.exports = {
         );
       }
 
-      const adminIDs = Array.isArray(threadInfo.adminIDs)
-        ? threadInfo.adminIDs.map((a) => String(a.id))
-        : [];
+      const adminIDs = toAdminIdList(threadInfo);
       const botID = String(api.getCurrentUserID());
       const isSenderAdmin = adminIDs.includes(String(senderID));
 
@@ -584,7 +585,7 @@ module.exports = {
           : `📊 TOP ${config.label}`;
         const lines = [
           `${title}`,
-          "━{13}",
+          "━━━━━━━━━━━━━",
           ...ranked.map((item, idx) => {
             const status = item.inGroup ? "" : " (❌)";
             return `${idx + 1}. ${item.name}${status} — ${Number(item[config.metricKey] || 0)}`;
@@ -784,10 +785,8 @@ module.exports = {
             );
           }
 
-          const threadInfo = await api.getThreadInfo(threadID);
-          const adminIDs = Array.isArray(threadInfo.adminIDs)
-            ? threadInfo.adminIDs.map((a) => String(a.id))
-            : [];
+          const threadInfo = await getThreadInfoCached(api, threadID);
+          const adminIDs = toAdminIdList(threadInfo);
           const botID = String(api.getCurrentUserID());
           const isSenderAdmin = adminIDs.includes(String(senderID));
 
@@ -940,7 +939,7 @@ module.exports = {
         );
       }
 
-      const threadInfo = await api.getThreadInfo(threadID);
+      const threadInfo = await getThreadInfoCached(api, threadID);
       const adminIDs = Array.isArray(threadInfo.adminIDs)
         ? threadInfo.adminIDs.map((a) => String(a.id))
         : [];

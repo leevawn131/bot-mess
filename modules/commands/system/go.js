@@ -1,15 +1,18 @@
+const config = require("../../../config.json");
+const prefix = process.env.BOT_PREFIX;
+
 module.exports = {
     name: "gỡ",
     aliases: ["go", "xoa", "xóa", "delete", "remove", "like"],
-    description: "Gỡ tin nhắn của bot (reply rồi gõ !gỡ hoặc !like)",
-    usage: "\n!gỡ / !like (reply tin nhắn bot) → Gỡ tin nhắn của bot\n━{13}\n📌 Reply vào tin nhắn của bot rồi gõ !gỡ hoặc !like\n⚠️ Chỉ gỡ được tin nhắn của bot",
+    description: `Gỡ tin nhắn của bot (reply rồi gõ ${prefix}gỡ hoặc ${prefix}like)`,
+    usage: `\n${prefix}gỡ / ${prefix}like (reply tin nhắn bot) → Gỡ tin nhắn của bot\n━━━━━━━━━━━━━\n📌 Reply vào tin nhắn của bot rồi gõ ${prefix}gỡ hoặc ${prefix}like\n⚠️ Chỉ gỡ được tin nhắn của bot`,
 
     execute: async ({ api, event }) => {
         const { threadID, messageID, messageReply, senderID } = event;
 
         // Kiểm tra có reply không
         if (!messageReply) {
-            return api.sendMessage("⚠️ Hãy reply vào tin nhắn của bot rồi gõ !gỡ", threadID, messageID);
+            return api.sendMessage(`⚠️ Hãy reply vào tin nhắn của bot rồi gõ ${prefix}gỡ`, threadID, messageID);
         }
 
         // Kiểm tra tin nhắn reply là của bot không

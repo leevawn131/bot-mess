@@ -3,6 +3,47 @@ const path = require("path");
 const { checkCooldown } = require("../../utils/cooldown");
 // Load resolver at runtime inside execute to pick up hot-reloads
 
+function normalizeMentionLabel(text) {
+  const raw = String(text || "").replace(/^@+/, "").replace(/\u200b/g, "");
+  try {
+    const decomposed = raw.normalize("NFD").replace(/\p{M}/gu, "");
+    const mapped = decomposed.replace(/\u0111/g, "d").replace(/\u0110/g, "D");
+    return String(mapped).replace(/\s+/g, " ").trim().toLowerCase();
+  } catch (e) {
+    const fallback = raw.replace(/[\u0300-\u036f]/g, "").replace(/\u0111/g, "d").replace(/\u0110/g, "D");
+    return String(fallback).replace(/\s+/g, " ").trim().toLowerCase();
+  }
+}
+
+function splitMentionLabelQualifier(rawLabel) {
+  const label = String(rawLabel || "").trim();
+  const match = label.match(/^(.*?)(?:\s*\(([^()]+)\))\s*$/);
+  if (!match) return { baseLabel: label, qualifier: "" };
+  return {
+    baseLabel: String(match[1] || "").trim(),
+    qualifier: String(match[2] || "").trim().toLowerCase(),
+  };
+}
+
+function findDuplicateCandidates(threadInfo, rawLabel) {
+  const { baseLabel } = splitMentionLabelQualifier(rawLabel);
+  const normalizedLabel = normalizeMentionLabel(baseLabel);
+  if (!normalizedLabel) return [];
+
+  const members = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
+  return members
+    .filter((user) => normalizeMentionLabel(user?.name || "") === normalizedLabel)
+    .map((user) => String(user?.id || "").trim())
+    .filter(Boolean);
+}
+
+function buildDuplicatePrompt(rawLabel, candidateCount) {
+  return [
+    `⚠️ Tên "${rawLabel}" bị trùng ${candidateCount} người.`,
+    `Bot sẽ chọn người khớp đầu tiên để lệnh chạy ngay.`,
+  ].join("\n");
+}
+
 const KISS_MESSAGES = [
   "{actor} nhẹ nhàng hôn {target} một cái thật tình cảm 😘",
   "{actor} trao cho {target} một nụ hôn ngọt như kẹo 🍬",

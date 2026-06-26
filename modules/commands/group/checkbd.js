@@ -1,5 +1,7 @@
 const { checkCooldown } = require("../../utils/cooldown");
 const { getAdminBotUIDs } = require("../../utils/checkPermission");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
+const prefix = process.env.BOT_PREFIX;
 
 function chunkLines(lines, maxChars = 3500) {
   const chunks = [];
@@ -123,7 +125,7 @@ module.exports = {
   name: "checkbd",
   description: "Liệt kê thành viên chưa set biệt danh và hỗ trợ kick theo STT",
   usage:
-    "\n!checkbd → Liệt kê thành viên chưa set biệt danh\n!checkbd canhbao → Tag toàn bộ chưa setbd (trừ QTV)\n!checkbd kickall → Kick toàn bộ chưa setbd (trừ QTV)\n━{13}\n↩️ Reply STT (vd: 1 2 3) để kick từng người (tối đa 5)\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được",
+    `\n${prefix}checkbd → Liệt kê thành viên chưa set biệt danh\n${prefix}checkbd canhbao → Tag toàn bộ chưa setbd (trừ QTV)\n${prefix}checkbd kickall → Kick toàn bộ chưa setbd (trừ QTV)\n━━━━━━━━━━━━━\n↩️ Reply STT (vd: 1 2 3) để kick từng người (tối đa 5)\n⚠️ Bot cần quyền QTV để kick\n🔒 Chỉ QTV nhóm/chủ bot mới dùng được`,
 
   execute: async ({ api, event, args }) => {
     const { threadID, messageID, senderID } = event;
@@ -142,7 +144,7 @@ module.exports = {
     }
 
     try {
-      const threadInfo = await api.getThreadInfo(threadID);
+      const threadInfo = await getThreadInfoCached(api, threadID);
       if (!threadInfo.isGroup) {
         return api.sendMessage(
           "⚠️ Lệnh này chỉ dùng trong nhóm.",
@@ -194,7 +196,7 @@ module.exports = {
 
         const warningLines = [
           { text: "CẢNH BÁO CHƯA SET BIỆT DANH" },
-          { text: "━{13}" },
+          { text: "━━━━━━━━━━━━━" },
           {
             text: `Có ${nonAdminMissingList.length} thành viên chưa set biệt danh:`,
           },
@@ -312,7 +314,7 @@ module.exports = {
 
       const lines = [
         "🪪 CHECKBD - CHƯA SET BIỆT DANH",
-        "━{13}",
+        "━━━━━━━━━━━━━",
         ...missingList.map((item, idx) => {
           const adminTag = adminIDs.includes(String(item.uid)) ? " [QTV]" : "";
           return `${idx + 1}. ${item.name}${adminTag}`;
@@ -321,8 +323,8 @@ module.exports = {
         "↩️ Reply nhiều STT (vd: 1 2 3 hoặc 1,2,3; tối đa 5) để kick thành viên chưa setbd",
         "",
         "📌 Lệnh nhanh:",
-        "• !checkbd kickall → kick toàn bộ thành viên chưa setbd (trừ QTV)",
-        "• !checkbd canhbao → cảnh báo toàn bộ thành viên chưa setbd (trừ QTV)",
+        `• ${prefix}checkbd kickall → kick toàn bộ thành viên chưa setbd (trừ QTV)`,
+        `• ${prefix}checkbd canhbao → cảnh báo toàn bộ thành viên chưa setbd (trừ QTV)`,
       ];
 
       const chunks = chunkLines(lines);
@@ -416,7 +418,7 @@ module.exports = {
         );
       }
 
-      const threadInfo = await api.getThreadInfo(threadID);
+      const threadInfo = await getThreadInfoCached(api, threadID);
       const adminIDs = (threadInfo.adminIDs || []).map((a) => String(a.id));
       const participantSet = new Set(
         (threadInfo.participantIDs || []).map((id) => String(id)),

@@ -1,14 +1,17 @@
 const { checkCooldown } = require("../../utils/cooldown");
-const { getAdminBotUIDs } = require("../../utils/checkPermission");
+const { getAdminBotUIDs, toAdminIdList } = require("../../utils/checkPermission");
 const { getAutochaoSetting, setAutochaoEnabled } = require("../../utils/autochaoSettings");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
+const prefix = process.env.BOT_PREFIX;
 
 module.exports = {
     name: "autochao",
     description: "Bật/tắt auto chào để bot tự gửi sticker khi có người nhắn lời chào",
-    usage: "\n!autochao on → Bật auto chào\n!autochao off → Tắt auto chào\n!autochao status → Xem trạng thái hiện tại\n━{13}\n🤖 Bot sẽ tự gửi sticker khi phát hiện lời chào ngắn như hi/hello/chào\n🔒 Chỉ QTV nhóm hoặc chủ bot mới dùng được",
+    usage: `\n${prefix}autochao on → Bật auto chào\n${prefix}autochao off → Tắt auto chào\n${prefix}autochao status → Xem trạng thái hiện tại\n━━━━━━━━━━━━━\n🤖 Bot sẽ tự gửi sticker khi phát hiện lời chào ngắn như hi/hello/chào\n🔒 Chỉ QTV nhóm hoặc chủ bot mới dùng được`,
 
-    execute: async ({ api, event, args }) => {
+    execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
+        const prefix = config?.prefix || "!";
 
         const cooldown = checkCooldown({ command: "autochao", key: senderID, durationMs: 10000 });
         if (!cooldown.allowed) {
@@ -16,12 +19,12 @@ module.exports = {
         }
 
         try {
-            const threadInfo = await api.getThreadInfo(threadID);
+            const threadInfo = await getThreadInfoCached(api, threadID);
             if (!threadInfo || typeof threadInfo !== "object" || !threadInfo.isGroup) {
                 return api.sendMessage("⚠️ Không thể lấy thông tin nhóm hoặc lệnh này chỉ dùng trong nhóm chat.", threadID, messageID);
             }
 
-            const adminIDs = (threadInfo.adminIDs || []).map((item) => String(item.id || item));
+            const adminIDs = toAdminIdList(threadInfo);
             const botID = String(api.getCurrentUserID());
             const isSenderAdmin = adminIDs.includes(String(senderID));
             const adminBotUIDs = getAdminBotUIDs();
@@ -39,14 +42,14 @@ module.exports = {
                 const stateText = current.enabled ? "ON" : "OFF";
                 const botAdminText = isBotAdmin ? "✅ Có" : "❌ Không";
                 return api.sendMessage(
-                    `🤖 AUTOCHAO: ${stateText}\n👮 Bot có quyền QTV: ${botAdminText}\n💡 Dùng: !autochao on hoặc !autochao off`,
+                    `🤖 AUTOCHAO: ${stateText}\n👮 Bot có quyền QTV: ${botAdminText}\n💡 Dùng: ${prefix}autochao on hoặc ${prefix}autochao off`,
                     threadID,
                     messageID
                 );
             }
 
             if (!["on", "off"].includes(action)) {
-                return api.sendMessage("⚠️ Cách dùng: !autochao [on | off | status]", threadID, messageID);
+                return api.sendMessage(`⚠️ Cách dùng: ${prefix}autochao [on | off | status]`, threadID, messageID);
             }
 
             const nextEnabled = action === "on";
