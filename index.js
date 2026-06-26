@@ -205,7 +205,7 @@ app.post("/webhook/sepay", async (req, res) => {
     // Tìm giao dịch đang chờ dựa vào Nội dung chuyển khoản
     // Vì người dùng có thể ghi kèm chữ khác, nên dùng LIKE '%BOTxxxx%'
     const pendingTx = await execute(
-      "SELECT * FROM transactions WHERE status = 'pending' AND ? LIKE CONCAT('%', transaction_code, '%') LIMIT 1",
+      "SELECT * FROM transactions WHERE status = 'pending' AND ? LIKE ('%' || transaction_code || '%') LIMIT 1",
       [content],
     );
 
@@ -242,11 +242,11 @@ app.post("/webhook/sepay", async (req, res) => {
         await execute(
           `
           INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at, is_admin_rental)
-          VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP, ?)
-          ON DUPLICATE KEY UPDATE
-            expire_date = DATE_ADD(GREATEST(COALESCE(expire_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP), INTERVAL ? DAY),
+          VALUES (?, datetime('now', '+' || ? || ' day'), ?, datetime('now'), ?)
+          ON CONFLICT(thread_id) DO UPDATE SET
+            expire_date = datetime(max(coalesce(expire_date, datetime('now')), datetime('now')), '+' || ? || ' day'),
             renter_id = ?,
-            rented_at = CURRENT_TIMESTAMP,
+            rented_at = datetime('now'),
             is_admin_rental = ?
         `,
           [tx.thread_id, daysToAdd, tx.user_id, isAdminPlan ? 1 : 0, daysToAdd, tx.user_id, isAdminPlan ? 1 : 0],

@@ -48,23 +48,18 @@ function getDBConfigFromRuntime(config) {
 }
 
 async function ensureEnergyColumns(connection) {
-    const [columns] = await connection.execute(
-        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'messenger_users'
-                     AND COLUMN_NAME IN ('energy', 'max_energy', 'last_energy_update', 'last_energy_update_unix')`
-    );
-
-    const existing = new Set(columns.map((row) => String(row.COLUMN_NAME)));
+    const [columns] = await connection.execute("PRAGMA table_info(messenger_users)");
+    const existing = new Set(columns.map((row) => String(row.name)));
 
     if (!existing.has("energy")) {
         await connection.execute(
-            "ALTER TABLE messenger_users ADD COLUMN energy INT NOT NULL DEFAULT 100"
+            "ALTER TABLE messenger_users ADD COLUMN energy INTEGER NOT NULL DEFAULT 100"
         );
     }
 
     if (!existing.has("max_energy")) {
         await connection.execute(
-            "ALTER TABLE messenger_users ADD COLUMN max_energy INT NOT NULL DEFAULT 100"
+            "ALTER TABLE messenger_users ADD COLUMN max_energy INTEGER NOT NULL DEFAULT 100"
         );
     }
 
@@ -79,7 +74,7 @@ async function ensureEnergyColumns(connection) {
             "ALTER TABLE messenger_users ADD COLUMN last_energy_update_unix BIGINT NULL"
         );
         await connection.execute(
-            "UPDATE messenger_users SET last_energy_update_unix = UNIX_TIMESTAMP(last_energy_update) WHERE last_energy_update IS NOT NULL"
+            "UPDATE messenger_users SET last_energy_update_unix = strftime('%s', last_energy_update) WHERE last_energy_update IS NOT NULL"
         );
     }
 }
@@ -127,7 +122,7 @@ async function persistEnergyState(connection, userID, state) {
     const unixSeconds = Math.floor(state.lastUpdateMs / 1000);
     await connection.execute(
         `UPDATE messenger_users
-         SET energy = ?, max_energy = ?, last_energy_update_unix = ?, last_energy_update = FROM_UNIXTIME(?)
+         SET energy = ?, max_energy = ?, last_energy_update_unix = ?, last_energy_update = datetime(?, 'unixepoch')
          WHERE psid = ?`,
         [state.energy, state.maxEnergy, unixSeconds, unixSeconds, String(userID)]
     );
@@ -206,7 +201,7 @@ async function readAndSyncEnergy(connection, userID, nowMs = Date.now()) {
 
     const [rows] = await connection.execute(
         `SELECT psid, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
-            UNIX_TIMESTAMP(last_energy_update) AS last_energy_update_unix_fallback
+            strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
          FROM messenger_users WHERE psid = ?`,
         [String(userID)]
     );
@@ -235,8 +230,8 @@ async function consumeEnergy(connection, userID, cost, nowMs = Date.now()) {
     try {
         const [rows] = await connection.execute(
             `SELECT psid, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
-                    UNIX_TIMESTAMP(last_energy_update) AS last_energy_update_unix_fallback
-             FROM messenger_users WHERE psid = ? FOR UPDATE`,
+                    strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
+             FROM messenger_users WHERE psid = ?`,
             [String(userID)]
         );
 
@@ -295,8 +290,8 @@ async function restoreEnergy(connection, userID, amount, nowMs = Date.now()) {
     try {
         const [rows] = await connection.execute(
             `SELECT psid, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
-                    UNIX_TIMESTAMP(last_energy_update) AS last_energy_update_unix_fallback
-             FROM messenger_users WHERE psid = ? FOR UPDATE`,
+                    strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
+             FROM messenger_users WHERE psid = ?`,
             [String(userID)]
         );
 
@@ -338,14 +333,14 @@ async function ensureEnergyPotionItem(connection) {
     await connection.execute(
         `INSERT INTO shop_items (item_key, name, price, type, effect_value, uses, stackable, description)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-            name = VALUES(name),
-            price = VALUES(price),
-            type = VALUES(type),
-            effect_value = VALUES(effect_value),
-            uses = VALUES(uses),
-            stackable = VALUES(stackable),
-            description = VALUES(description)`,
+         ON CONFLICT(item_key) DO UPDATE SET
+            name = excluded.name,
+            price = excluded.price,
+            type = excluded.type,
+            effect_value = excluded.effect_value,
+            uses = excluded.uses,
+            stackable = excluded.stackable,
+            description = excluded.description`,
         [
             item.item_key,
             item.name,

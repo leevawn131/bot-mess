@@ -78,3 +78,4 @@ venv/
 # package-lock.json
 
 youtube_cookies.txt
+runtime/

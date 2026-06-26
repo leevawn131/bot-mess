@@ -18,18 +18,8 @@ async function ensureRentedGroupsSchema() {
     `);
 
     const columnExists = async (columnName) => {
-      const rows = await execute(
-        `
-          SELECT COUNT(*) AS count
-          FROM information_schema.COLUMNS
-          WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME = 'rented_groups'
-            AND COLUMN_NAME = ?
-        `,
-        [columnName],
-      );
-
-      return rows && rows.length > 0 && Number(rows[0].count) > 0;
+      const rows = await execute(`PRAGMA table_info(rented_groups)`);
+      return rows && rows.some(row => String(row.name).toLowerCase() === String(columnName).toLowerCase());
     };
 
     if (!(await columnExists("renter_id"))) {

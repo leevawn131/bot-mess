@@ -74,11 +74,11 @@ module.exports = {
       // 3. Cập nhật Database
       await execute(`
         INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at, is_admin_rental)
-        VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP, ?)
-        ON DUPLICATE KEY UPDATE
-          expire_date = DATE_ADD(GREATEST(COALESCE(expire_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP), INTERVAL ? DAY),
+        VALUES (?, datetime('now', '+' || ? || ' day'), ?, datetime('now'), ?)
+        ON CONFLICT(thread_id) DO UPDATE SET
+          expire_date = datetime(max(coalesce(expire_date, datetime('now')), datetime('now')), '+' || ? || ' day'),
           renter_id = ?,
-          rented_at = CURRENT_TIMESTAMP,
+          rented_at = datetime('now'),
           is_admin_rental = ?
       `, [targetThreadID, daysToAdd, String(event.senderID), isAdminPlan ? 1 : 0, daysToAdd, String(event.senderID), isAdminPlan ? 1 : 0]);
 

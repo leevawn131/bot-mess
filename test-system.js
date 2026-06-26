@@ -103,7 +103,7 @@ async function testDatabase() {
     // Test simple query
     printInfo('Testing simple query...');
     const { execute } = require('./modules/utils/database');
-    const [result] = await execute('SELECT 1 as test, NOW() as test_time');
+    const [result] = await execute('SELECT 1 as test, CURRENT_TIMESTAMP as test_time');
     if (result && result.test === 1) {
       printSuccess('Simple query test passed');
       printInfo(`  Current time: ${result.test_time}`);

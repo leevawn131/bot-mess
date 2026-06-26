@@ -6,7 +6,7 @@ async function syncBankPool(connection) {
     const totalBalance = parseInt(sumRows[0]?.total, 10) || 0;
 
     await connection.execute(
-        'INSERT INTO bank_pool (id, total_balance) VALUES (1, ?) ON DUPLICATE KEY UPDATE total_balance = VALUES(total_balance)',
+        'INSERT INTO bank_pool (id, total_balance) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET total_balance = excluded.total_balance',
         [totalBalance]
     );
 

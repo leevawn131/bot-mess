@@ -3,13 +3,14 @@ const { chromium } = require('playwright-core');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
+require('dotenv').config();
 
 // ==========================================
 // CẤU HÌNH
 // ==========================================
 const ADSPOWER_API = 'http://127.0.0.1:50325';
 const USER_ID = 'k1cyhomj';          // Thay bằng user_id của bạn nếu cần
-const API_KEY = process.env.ADSPOWER_API; // Điền API Key AdsPower của bạn vào đây
+const API_KEY = process.env.ADSPOWER_APIKEY || ''; // Đọc từ file .env
 
 // Tự động xác định đường dẫn lưu file appstate.json ở thư mục runtime cùng cấp với script này
 const APPSTATE_PATH = path.join(__dirname, 'runtime', 'appstate.json');

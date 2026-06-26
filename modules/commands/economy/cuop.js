@@ -224,11 +224,9 @@ module.exports = {
           );
 
           await execute(
-            "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE jail_until = ?, reason = ?",
+            "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON CONFLICT(psid) DO UPDATE SET jail_until = excluded.jail_until, reason = excluded.reason",
             [
               senderID,
-              jailUntil,
-              "Cướp ngân hàng",
               jailUntil,
               "Cướp ngân hàng",
             ],
@@ -383,8 +381,8 @@ module.exports = {
         // Vào tù 3 phút
         const jailUntil = new Date(Date.now() + 3 * 60 * 1000);
         await execute(
-          "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE jail_until = ?, reason = ?",
-          [senderID, jailUntil, "Cướp fail", jailUntil, "Cướp fail"],
+          "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON CONFLICT(psid) DO UPDATE SET jail_until = excluded.jail_until, reason = excluded.reason",
+          [senderID, jailUntil, "Cướp fail"],
         );
 
         api.sendMessage(

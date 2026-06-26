@@ -167,7 +167,7 @@ module.exports = {
 
       // Kiểm tra xem nhóm đã có giao dịch nào đang chờ trong 15 phút qua chưa
       const existingTx = await execute(
-        "SELECT * FROM transactions WHERE thread_id = ? AND status = 'pending' AND created_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)",
+        "SELECT * FROM transactions WHERE thread_id = ? AND status = 'pending' AND created_at > datetime('now', '-15 minutes')",
         [threadID]
       );
 
@@ -319,7 +319,7 @@ module.exports = {
 
       try {
         const existingTx = await execute(
-          "SELECT * FROM transactions WHERE thread_id = ? AND status = 'pending' AND created_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)",
+          "SELECT * FROM transactions WHERE thread_id = ? AND status = 'pending' AND created_at > datetime('now', '-15 minutes')",
           [threadID]
         );
 
@@ -600,11 +600,11 @@ module.exports = {
           await execute(
             `
             INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at, is_admin_rental)
-            VALUES (?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? DAY), ?, CURRENT_TIMESTAMP, ?)
-            ON DUPLICATE KEY UPDATE
-              expire_date = DATE_ADD(GREATEST(COALESCE(expire_date, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP), INTERVAL ? DAY),
+            VALUES (?, datetime('now', '+' || ? || ' day'), ?, datetime('now'), ?)
+            ON CONFLICT(thread_id) DO UPDATE SET
+              expire_date = datetime(max(coalesce(expire_date, datetime('now')), datetime('now')), '+' || ? || ' day'),
               renter_id = ?,
-              rented_at = CURRENT_TIMESTAMP,
+              rented_at = datetime('now'),
               is_admin_rental = ?
           `,
             [targetThreadID, daysToAdd, senderID, isAdminPlan ? 1 : 0, daysToAdd, senderID, isAdminPlan ? 1 : 0]

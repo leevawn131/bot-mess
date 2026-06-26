@@ -1,67 +1,107 @@
-const mysql = require('mysql2/promise');
-const { getConnectionPoolConfig, getDatabaseConfig } = require('./envConfig');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
+const fs = require('fs');
 
-// Connection pool instance
-let pool = null;
+const DB_PATH = process.env.SQLITE_DB_PATH || path.resolve(process.cwd(), 'runtime', 'bot.db');
+
+// Ensure parent directory exists
+const dir = path.dirname(DB_PATH);
+if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+}
+
+let db = null;
 
 /**
- * Initialize database connection pool
+ * Initialize SQLite database connection
  */
 function initializePool() {
-    if (pool) {
-        return pool;
+    if (db) {
+        return db;
     }
 
-    const dbConfig = getDatabaseConfig();
-    const poolConfig = getConnectionPoolConfig();
-
-    pool = mysql.createPool({
-        host: dbConfig.host,
-        port: dbConfig.port,
-        user: dbConfig.user,
-        password: dbConfig.password,
-        database: dbConfig.database,
-        waitForConnections: true,
-        connectionLimit: poolConfig.max,
-        queueLimit: 0,
-        enableKeepAlive: true,
-        keepAliveInitialDelay: 0
-    });
-
-    // Handle pool errors
-    pool.on('connection', (connection) => {
-        console.log('New database connection established');
-    });
-
-    pool.on('error', (err) => {
-        console.error('Database pool error:', err);
-        if (err.code === 'PROTOCOL_CONNECTION_LOST') {
-            console.error('Database connection was closed.');
+    db = new sqlite3.Database(DB_PATH, (err) => {
+        if (err) {
+            console.error('❌ Failed to open SQLite database:', err.message);
+        } else {
+            console.log('✅ SQLite database connected at:', DB_PATH);
+            // Optimization for SQLite performance
+            db.run('PRAGMA journal_mode=WAL;');
+            db.run('PRAGMA foreign_keys=ON;');
         }
     });
 
-    return pool;
+    return db;
 }
 
 /**
- * Get connection from pool
+ * Get mock connection from pool to maintain compatibility with mysql2 structure
  */
 async function getConnection() {
-    if (!pool) {
+    if (!db) {
         initializePool();
     }
 
-    try {
-        const connection = await pool.getConnection();
-        return connection;
-    } catch (error) {
-        console.error('Error getting database connection:', error);
-        throw error;
-    }
+    return {
+        execute: async (query, params = []) => {
+            return new Promise((resolve, reject) => {
+                const isReadQuery = /^\s*(SELECT|PRAGMA|SHOW|EXPLAIN|WITH)\b/i.test(query);
+                if (isReadQuery) {
+                    db.all(query, params, (err, rows) => {
+                        if (err) return reject(err);
+                        resolve([rows]);
+                    });
+                } else {
+                    db.run(query, params, function (err) {
+                        if (err) return reject(err);
+                        resolve([{
+                            affectedRows: this.changes,
+                            insertId: this.lastID,
+                            lastID: this.lastID,
+                            changes: this.changes
+                        }]);
+                    });
+                }
+            });
+        },
+        beginTransaction: async () => {
+            return new Promise((resolve, reject) => {
+                db.run('BEGIN TRANSACTION', (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+        },
+        commit: async () => {
+            return new Promise((resolve, reject) => {
+                db.run('COMMIT', (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+        },
+        rollback: async () => {
+            return new Promise((resolve, reject) => {
+                db.run('ROLLBACK', (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+        },
+        ping: async () => {
+            return new Promise((resolve, reject) => {
+                db.get('SELECT 1', (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+        },
+        release: () => {} // No-op for SQLite
+    };
 }
 
 /**
- * Execute query with automatic connection management
+ * Execute query with automatic connection simulation
  */
 async function execute(query, params = []) {
     const connection = await getConnection();
@@ -79,7 +119,7 @@ async function execute(query, params = []) {
 async function executeTransaction(queries) {
     const connection = await getConnection();
     try {
-        await connection.beginTransaction();
+        await connection.execute('BEGIN TRANSACTION');
 
         const results = [];
         for (const { query, params } of queries) {
@@ -87,10 +127,10 @@ async function executeTransaction(queries) {
             results.push(result);
         }
 
-        await connection.commit();
+        await connection.execute('COMMIT');
         return results;
     } catch (error) {
-        await connection.rollback();
+        await connection.execute('ROLLBACK');
         throw error;
     } finally {
         connection.release();
@@ -101,29 +141,31 @@ async function executeTransaction(queries) {
  * Close connection pool
  */
 async function closePool() {
-    if (pool) {
-        await pool.end();
-        pool = null;
-        console.log('Database connection pool closed');
-    }
+    return new Promise((resolve, reject) => {
+        if (db) {
+            db.close((err) => {
+                if (err) {
+                    console.error('Error closing SQLite database:', err);
+                    return reject(err);
+                }
+                db = null;
+                console.log('SQLite database connection closed');
+                resolve();
+            });
+        } else {
+            resolve();
+        }
+    });
 }
 
 /**
- * Get pool statistics
+ * Get pool statistics (mocked for compatibility)
  */
 function getPoolStats() {
-    if (!pool) {
-        return {
-            activeConnections: 0,
-            idleConnections: 0,
-            totalConnections: 0
-        };
-    }
-
     return {
-        activeConnections: pool.pool._allConnections.length - pool.pool._freeConnections.length,
-        idleConnections: pool.pool._freeConnections.length,
-        totalConnections: pool.pool._allConnections.length
+        activeConnections: db ? 1 : 0,
+        idleConnections: 0,
+        totalConnections: db ? 1 : 0
     };
 }
 
@@ -134,10 +176,9 @@ async function healthCheck() {
     try {
         const connection = await getConnection();
         await connection.ping();
-        connection.release();
-        return { healthy: true, message: 'Database connection is healthy' };
+        return { healthy: true, message: 'SQLite database connection is healthy' };
     } catch (error) {
-        return { healthy: false, message: `Database health check failed: ${error.message}` };
+        return { healthy: false, message: `SQLite health check failed: ${error.message}` };
     }
 }
 
