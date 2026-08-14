@@ -30,20 +30,22 @@ function getDBConfigFromRuntime(config) {
     }
 
     try {
-        const configPath = path.resolve(process.cwd(), "config.json");
-        if (!fs.existsSync(configPath)) return null;
+        let configPath = path.resolve(process.cwd(), "config.json");
+        if (!fs.existsSync(configPath)) {
+            configPath = path.resolve(__dirname, "../../config.json");
+        }
+        if (!fs.existsSync(configPath)) return { type: "sqlite" };
         const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        const fileDb = fileConfig?.database;
-        if (!fileDb) return null;
+        const fileDb = fileConfig?.database || {};
         return {
-            host: fileDb.host,
-            port: fileDb.port,
-            user: fileDb.user,
-            password: fileDb.password,
-            database: fileDb.name
+            host: fileDb.host || "localhost",
+            port: fileDb.port || 3306,
+            user: fileDb.user || "root",
+            password: fileDb.password || "",
+            database: fileDb.name || "bot"
         };
     } catch {
-        return null;
+        return { type: "sqlite" };
     }
 }
 
@@ -118,13 +120,14 @@ function isStateChanged(row, state, nowMs) {
     );
 }
 
-async function persistEnergyState(connection, userID, state) {
+async function persistEnergyState(connection, threadID, userID, state) {
     const unixSeconds = Math.floor(state.lastUpdateMs / 1000);
+    const thread = String(threadID || 'global');
     await connection.execute(
         `UPDATE messenger_users
          SET energy = ?, max_energy = ?, last_energy_update_unix = ?, last_energy_update = datetime(?, 'unixepoch')
-         WHERE psid = ?`,
-        [state.energy, state.maxEnergy, unixSeconds, unixSeconds, String(userID)]
+         WHERE thread_id = ? AND psid = ?`,
+        [state.energy, state.maxEnergy, unixSeconds, unixSeconds, thread, String(userID)]
     );
 }
 
@@ -195,56 +198,107 @@ function buildNotEnoughEnergyMessage(cost, state) {
     };
 }
 
-async function readAndSyncEnergy(connection, userID, nowMs = Date.now()) {
+function parseUserArgs(arg2, arg3, arg4) {
+    let threadID, userID, cost;
+    if (arg4 !== undefined) {
+        threadID = String(arg2);
+        userID = String(arg3);
+        cost = arg4;
+    } else if (typeof arg3 === 'number' || (!isNaN(Number(arg3)) && typeof arg2 === 'string' && String(arg2).length > 10)) {
+        // (connection, userID, cost)
+        threadID = null;
+        userID = String(arg2);
+        cost = arg3;
+    } else {
+        threadID = String(arg2);
+        userID = String(arg3);
+        cost = 0;
+    }
+    return { threadID, userID, cost };
+}
+
+async function fetchEnergyUserRow(connection, threadID, userID) {
+    let rows = [];
+    const uid = String(userID);
+    const tid = threadID && threadID !== 'global' ? String(threadID) : null;
+
+    if (tid) {
+        [rows] = await connection.execute(
+            `SELECT psid, thread_id, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
+                    strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
+             FROM messenger_users WHERE thread_id = ? AND psid = ?`,
+            [tid, uid]
+        );
+    }
+
+    if (!rows || rows.length === 0) {
+        [rows] = await connection.execute(
+            `SELECT psid, thread_id, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
+                    strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
+             FROM messenger_users WHERE psid = ? ORDER BY last_energy_update_unix DESC LIMIT 1`,
+            [uid]
+        );
+    }
+
+    if (!rows || rows.length === 0) {
+        const createTid = tid || 'global';
+        await connection.execute(
+            `INSERT OR IGNORE INTO messenger_users (thread_id, psid, credits, energy, max_energy) VALUES (?, ?, 10000, 100, 100)`,
+            [createTid, uid]
+        );
+        [rows] = await connection.execute(
+            `SELECT psid, thread_id, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
+                    strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
+             FROM messenger_users WHERE psid = ? ORDER BY last_energy_update_unix DESC LIMIT 1`,
+            [uid]
+        );
+    }
+
+    return rows;
+}
+
+async function readAndSyncEnergy(connection, arg2, arg3, nowMs = Date.now()) {
     await ensureEnergyColumns(connection);
     const safeNowMs = toSecondPrecisionMs(nowMs);
+    let threadID = null;
+    let userID = String(arg2);
+    if (arg3 && typeof arg3 !== 'number') {
+        threadID = String(arg2);
+        userID = String(arg3);
+    }
 
-    const [rows] = await connection.execute(
-        `SELECT psid, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
-            strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
-         FROM messenger_users WHERE psid = ?`,
-        [String(userID)]
-    );
-
-    if (rows.length === 0) {
+    const rows = await fetchEnergyUserRow(connection, threadID, userID);
+    if (!rows || rows.length === 0) {
         return { ok: false, reason: "no_account" };
     }
 
     const current = rows[0];
+    const actualThreadID = current.thread_id || threadID;
     const state = computeRegeneratedState(current, safeNowMs);
     const changed = isStateChanged(current, state, safeNowMs);
 
     if (changed) {
-        await persistEnergyState(connection, userID, state);
+        await persistEnergyState(connection, actualThreadID, userID, state);
     }
 
     return { ok: true, ...state };
 }
 
-async function consumeEnergy(connection, userID, cost, nowMs = Date.now()) {
+async function consumeEnergy(connection, arg2, arg3, arg4, nowMs = Date.now()) {
+    const { threadID, userID, cost } = parseUserArgs(arg2, arg3, arg4);
     const required = Math.max(0, Math.floor(Number(cost) || 0));
     const safeNowMs = toSecondPrecisionMs(nowMs);
     await ensureEnergyColumns(connection);
 
     await connection.beginTransaction();
     try {
-        const [rows] = await connection.execute(
-            `SELECT psid, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
-                    strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
-             FROM messenger_users WHERE psid = ?`,
-            [String(userID)]
-        );
-
-        if (rows.length === 0) {
-            await connection.rollback();
-            return { ok: false, reason: "no_account" };
-        }
-
+        const rows = await fetchEnergyUserRow(connection, threadID, userID);
         const current = rows[0];
+        const actualThreadID = current.thread_id || threadID;
         const state = computeRegeneratedState(current, safeNowMs);
 
         if (isStateChanged(current, state, safeNowMs)) {
-            await persistEnergyState(connection, userID, state);
+            await persistEnergyState(connection, actualThreadID, userID, state);
         }
 
         if (state.energy < required) {
@@ -265,7 +319,7 @@ async function consumeEnergy(connection, userID, cost, nowMs = Date.now()) {
             lastUpdateMs: state.lastUpdateMs
         };
 
-        await persistEnergyState(connection, userID, nextState);
+        await persistEnergyState(connection, actualThreadID, userID, nextState);
         await connection.commit();
 
         return {
@@ -281,26 +335,17 @@ async function consumeEnergy(connection, userID, cost, nowMs = Date.now()) {
     }
 }
 
-async function restoreEnergy(connection, userID, amount, nowMs = Date.now()) {
+async function restoreEnergy(connection, arg2, arg3, arg4, nowMs = Date.now()) {
+    const { threadID, userID, cost: amount } = parseUserArgs(arg2, arg3, arg4);
     const restoreAmount = Math.max(0, Math.floor(Number(amount) || 0));
     const safeNowMs = toSecondPrecisionMs(nowMs);
     await ensureEnergyColumns(connection);
 
     await connection.beginTransaction();
     try {
-        const [rows] = await connection.execute(
-            `SELECT psid, vip_until, energy, max_energy, last_energy_update, last_energy_update_unix,
-                    strftime('%s', last_energy_update) AS last_energy_update_unix_fallback
-             FROM messenger_users WHERE psid = ?`,
-            [String(userID)]
-        );
-
-        if (rows.length === 0) {
-            await connection.rollback();
-            return { ok: false, reason: "no_account" };
-        }
-
+        const rows = await fetchEnergyUserRow(connection, threadID, userID);
         const current = rows[0];
+        const actualThreadID = current.thread_id || threadID;
         const state = computeRegeneratedState(current, safeNowMs);
         const before = state.energy;
         const after = Math.min(state.maxEnergy, before + restoreAmount);
@@ -311,7 +356,7 @@ async function restoreEnergy(connection, userID, amount, nowMs = Date.now()) {
             lastUpdateMs: state.lastUpdateMs
         };
 
-        await persistEnergyState(connection, userID, nextState);
+        await persistEnergyState(connection, actualThreadID, userID, nextState);
         await connection.commit();
 
         return {

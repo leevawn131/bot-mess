@@ -36,6 +36,7 @@ function toAdminIdList(threadInfo) {
  */
 function getAdminBotUIDs() {
   try {
+    let adminIDs = [];
     // Prefer reading adminIDs from config.json (persisted file) so runtime updates
     // written by the webhook (granting admin) are respected immediately.
     try {
@@ -43,14 +44,27 @@ function getAdminBotUIDs() {
       if (fs.existsSync(cfgPath)) {
         const raw = fs.readFileSync(cfgPath, 'utf8');
         const cfg = JSON.parse(raw || '{}');
-        if (Array.isArray(cfg.adminIDs)) return cfg.adminIDs.map(String);
+        if (Array.isArray(cfg.adminIDs)) {
+          adminIDs = cfg.adminIDs.map(String);
+        }
       }
     } catch (e) {
       // fallback to env-based bot config
+      const config = getBotConfig();
+      adminIDs = (config?.adminIDs || []).map(String);
     }
 
-    const config = getBotConfig();
-    return config?.adminIDs || [];
+    // Always include the currently logged-in bot UID
+    if (global.botID && !adminIDs.includes(String(global.botID))) {
+      adminIDs.push(String(global.botID));
+    } else if (global.api_instance && typeof global.api_instance.getCurrentUserID === 'function') {
+      const botID = String(global.api_instance.getCurrentUserID());
+      if (botID && !adminIDs.includes(botID)) {
+        adminIDs.push(botID);
+      }
+    }
+
+    return adminIDs;
   } catch (error) {
     console.error('Error getting admin bot UIDs:', error);
     return [];
@@ -88,28 +102,74 @@ async function checkPermission(threadID, senderID, api, commandName = "") {
     return { allowed: true, reason: "Bot admin" };
   }
 
+  // 1. Kiểm tra nếu người dùng bị cấm riêng trong nhóm này (Group Ban)
+  try {
+    const { isGroupBanned } = require("./groupBannedUsers");
+    if (isGroupBanned(threadID, senderID)) {
+      return { allowed: false, reason: "Bạn đã bị Người thuê bot / QTV cấm sử dụng bot trong nhóm này!" };
+    }
+  } catch (e) {}
+
+  // 2. Người thuê bot (Renter) có quyền ưu tiên như QTV trong nhóm của họ
+  try {
+    const { getRenterID } = require("./rental");
+    const renterID = await getRenterID(threadID);
+    if (renterID && String(senderID) === String(renterID)) {
+      return { allowed: true, reason: "Bot Renter (Người thuê bot)" };
+    }
+  } catch (e) {}
+
   // Bot tự dùng lệnh ngang hàng với admin
   const botUID = String(api.getCurrentUserID());
   if (String(senderID) === botUID) {
     return { allowed: true, reason: "Bot self-command" };
   }
 
-  // Nếu là lệnh mode, nhóm thuê gói admin và người gửi là QTV nhóm -> Cho phép
+  // Lệnh mode: Nếu nhóm thuê gói admin và người gửi là QTV nhóm hoặc người thuê bot -> Cho phép
   if (commandName === "mode") {
     try {
-      const { checkIsAdminRental } = require("./rental");
+      const { checkIsAdminRental, getRenterID } = require("./rental");
       const isAdminRental = await checkIsAdminRental(threadID);
       if (isAdminRental) {
+        const renterID = await getRenterID(threadID);
         const threadInfo = await getThreadInfoSafe(api, threadID);
-        if (threadInfo) {
-          const adminIDs = toAdminIdList(threadInfo);
-          if (adminIDs.includes(String(senderID))) {
-            return { allowed: true, reason: "Group admin in Admin-rented group (mode command unlocked)" };
-          }
+        const adminIDs = threadInfo ? toAdminIdList(threadInfo) : [];
+        if (adminIDs.includes(String(senderID)) || (renterID && String(senderID) === String(renterID))) {
+          return { allowed: true, reason: "Group admin/renter in Admin-rented group (mode command unlocked)" };
         }
       }
     } catch (e) {
       console.error("[checkPermission] Error checking admin rental mode command:", e);
+    }
+  }
+
+  // 3. Kiểm tra phân quyền bắt buộc của riêng lệnh đó (hasPermssion)
+  let commandPermission = 0;
+  if (commandName) {
+    if (global.commands && typeof global.commands.get === "function") {
+      const command = global.commands.get(commandName.toLowerCase());
+      if (command) {
+        commandPermission = command.hasPermssion ?? command.hasPermission ?? command.config?.hasPermssion ?? command.config?.hasPermission ?? 0;
+      }
+    }
+  }
+
+  if (commandPermission >= 2) {
+    return { allowed: false, reason: "Lệnh này chỉ dành cho Admin Bot!" };
+  } else if (commandPermission === 1) {
+    let isQtv = false;
+    try {
+      const threadInfo = await getThreadInfoSafe(api, threadID);
+      if (threadInfo) {
+        const adminIDs = toAdminIdList(threadInfo);
+        if (adminIDs.includes(String(senderID))) {
+          isQtv = true;
+        }
+      }
+    } catch (e) {}
+
+    if (!isQtv) {
+      return { allowed: false, reason: "Lệnh này chỉ dành cho Quản trị viên nhóm!" };
     }
   }
 
@@ -142,8 +202,23 @@ async function checkPermission(threadID, senderID, api, commandName = "") {
     };
   }
 
-  // Mode ADMINBOT: Chỉ chủ bot
+  // Mode ADMINBOT: Chỉ chủ bot (nếu nhóm thuê gói admin thì QTV nhóm / người thuê bot cũng được)
   if (mode === "adminbot") {
+    try {
+      const { checkIsAdminRental, getRenterID } = require("./rental");
+      const isAdminRental = await checkIsAdminRental(threadID);
+      if (isAdminRental) {
+        const renterID = await getRenterID(threadID);
+        const threadInfo = await getThreadInfoSafe(api, threadID);
+        const adminIDs = threadInfo ? toAdminIdList(threadInfo) : [];
+        if (adminIDs.includes(String(senderID)) || (renterID && String(senderID) === String(renterID))) {
+          return { allowed: true, reason: "Group admin/renter in Admin-rented group (adminbot mode)" };
+        }
+      }
+    } catch (e) {
+      console.error("[checkPermission] Error checking adminbot mode permission:", e);
+    }
+
     return { allowed: false, reason: `Mode ${mode} - Chỉ chủ bot mở được` };
   }
 

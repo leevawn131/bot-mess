@@ -78,8 +78,8 @@ module.exports = {
         `SELECT ui.*, si.type, si.effect_value, si.uses, si.name, si.description
                 FROM user_inventory ui
                 JOIN shop_items si ON ui.item_key = si.item_key
-                WHERE ui.psid = ? AND ui.item_key = ? AND ui.uses_left > 0`,
-        [senderID, itemKey],
+                WHERE ui.thread_id = ? AND ui.psid = ? AND ui.item_key = ? AND ui.uses_left > 0`,
+        [String(threadID), senderID, itemKey],
       );
 
       if (invItems.length === 0) {
@@ -102,11 +102,68 @@ module.exports = {
       }
 
       if (invItem.type === "vip") {
-        return api.sendMessage(
-          "❌ VIP tự động kích hoạt khi mua, không cần dùng.",
-          threadID,
-          messageID,
-        );
+        let connection;
+        try {
+          connection = await getConnection();
+          await connection.beginTransaction();
+
+          // Lấy thông tin user
+          const [userRows] = await connection.execute(
+            "SELECT name, vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?",
+            [String(threadID), senderID]
+          );
+
+          if (userRows.length === 0) {
+            return api.sendMessage(
+              "❌ Bạn chưa có tài khoản trong thế giới này.",
+              threadID,
+              messageID
+            );
+          }
+
+          const now = new Date();
+          let vipUntil;
+          if (userRows[0].vip_until && new Date(userRows[0].vip_until) > now) {
+            vipUntil = new Date(userRows[0].vip_until);
+            vipUntil.setDate(vipUntil.getDate() + (Number(invItem.effect_value) || 0));
+          } else {
+            vipUntil = new Date();
+            vipUntil.setDate(vipUntil.getDate() + (Number(invItem.effect_value) || 0));
+          }
+
+          // Cập nhật VIP
+          await connection.execute(
+            "UPDATE messenger_users SET vip_until = ? WHERE thread_id = ? AND psid = ?",
+            [vipUntil, String(threadID), senderID]
+          );
+
+          // Trừ vật phẩm
+          if (invItem.uses_left <= 1) {
+            await connection.execute(
+              "DELETE FROM user_inventory WHERE id = ?",
+              [invItem.id]
+            );
+          } else {
+            await connection.execute(
+              "UPDATE user_inventory SET uses_left = uses_left - 1 WHERE id = ?",
+              [invItem.id]
+            );
+          }
+
+          await connection.commit();
+
+          return api.sendMessage(
+            `👑 KÍCH HOẠT VIP THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 Người dùng: ${userRows[0].name || "Bạn"}\n✨ Vật phẩm sử dụng: ${invItem.name}\n👑 VIP đến ngày: ${vipUntil.toLocaleString("vi-VN")}`,
+            threadID,
+            messageID
+          );
+        } catch (err) {
+          if (connection) await connection.rollback();
+          console.error("Lỗi sử dụng VIP:", err);
+          return api.sendMessage("❌ Lỗi kích hoạt VIP.", threadID, messageID);
+        } finally {
+          if (connection) connection.release();
+        }
       }
 
       if (isEnergyRestoreItem(invItem)) {
@@ -128,6 +185,7 @@ module.exports = {
           connection = await getConnection();
           restored = await restoreEnergy(
             connection,
+            String(threadID),
             senderID,
             restoreAmount,
           );

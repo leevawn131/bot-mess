@@ -18,7 +18,8 @@ module.exports = {
   name: "greetingSticker",
   eventType: ["message"],
 
-  execute: async ({ api, event }) => {
+  run: async function(Obj) { return this.execute(Obj); },
+    execute: async ({ api, event }) => {
     try {
       if (!event || !event.body) return;
 

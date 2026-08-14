@@ -117,10 +117,6 @@ function ensureDir(dirPath) {
 function normalizeText(input) {
     return String(input || "")
         .toLowerCase()
-        .replace(/đ/g, "d")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9\s@._-]+/g, " ")
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -144,7 +140,30 @@ function readAutorepSettings() {
     try {
         if (!fs.existsSync(SETTINGS_PATH)) return {};
         const raw = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf8"));
-        return raw && typeof raw === "object" ? raw : {};
+        if (raw && typeof raw === "object") {
+            let modified = false;
+            for (const threadID of Object.keys(raw)) {
+                const threadRules = raw[threadID];
+                if (threadRules && typeof threadRules === "object") {
+                    for (const key of Object.keys(threadRules)) {
+                        const rule = threadRules[key];
+                        if (rule?.media?.path) {
+                            const filename = path.basename(rule.media.path);
+                            const expectedPath = path.join(MEDIA_DIR, filename);
+                            if (rule.media.path !== expectedPath) {
+                                rule.media.path = expectedPath;
+                                modified = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if (modified) {
+                fs.writeFileSync(SETTINGS_PATH, JSON.stringify(raw, null, 2));
+            }
+            return raw;
+        }
+        return {};
     } catch {
         return {};
     }
@@ -323,8 +342,20 @@ function findMatchingRule(threadID, body) {
         .filter((rule) => rule && rule.normalizedKeyword)
         .sort((a, b) => b.normalizedKeyword.length - a.normalizedKeyword.length);
 
-    // Use permissive substring matching for all rules to increase hit rate
-    return rules.find((rule) => normalizedBody.includes(rule.normalizedKeyword)) || null;
+    return rules.find((rule) => {
+        const keyword = rule.normalizedKeyword;
+        if (!keyword) return false;
+        
+        try {
+            const escapedKeyword = escapeRegExp(keyword);
+            const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])(${escapedKeyword})([^\\p{L}\\p{N}_]|$)`, 'iu');
+            return regex.test(normalizedBody);
+        } catch (e) {
+            const escapedKeyword = escapeRegExp(keyword);
+            const regex = new RegExp(`(^|\\W)(${escapedKeyword})(\\W|$)`, 'i');
+            return regex.test(normalizedBody);
+        }
+    }) || null;
 }
 
 module.exports = {

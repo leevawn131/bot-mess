@@ -295,20 +295,59 @@ function indexMembersForLookup(threadInfo) {
 }
 
 function inferMentionEntriesFromBody(threadInfo, body) {
-  const labels = parseMentionLabelsFromBody(body);
-  if (labels.length === 0) return [];
-  const inferred = [];
-
-  for (const rawLabel of labels) {
-    const uid = findUniqueMemberUIDByLabel(threadInfo, rawLabel);
+  const memberInfo = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
+  const nicknames = threadInfo?.nicknames && typeof threadInfo.nicknames === "object" ? threadInfo.nicknames : {};
+  
+  const namesMap = new Map();
+  for (const user of memberInfo) {
+    const uid = String(user?.id || "").trim();
     if (!uid) continue;
-
-    inferred.push({
-      id: String(uid),
-      tag: toTagText(rawLabel),
-    });
+    if (user.name) {
+      namesMap.set(normalizeMentionLabel(user.name), uid);
+    }
+    if (nicknames[uid]) {
+      namesMap.set(normalizeMentionLabel(nicknames[uid]), uid);
+    }
   }
 
+  const text = String(body || "");
+  const inferred = [];
+  
+  let index = text.indexOf("@");
+  while (index !== -1) {
+    let endIdx = text.indexOf("@", index + 1);
+    if (endIdx === -1) endIdx = text.length;
+    let newlineIdx = text.indexOf("\n", index + 1);
+    if (newlineIdx !== -1 && newlineIdx < endIdx) endIdx = newlineIdx;
+    
+    const afterAt = text.slice(index + 1, endIdx).trim();
+    if (afterAt) {
+      const words = afterAt.split(/\s+/);
+      let longestMatch = null;
+      let matchedUid = null;
+      
+      for (let i = 1; i <= words.length; i++) {
+        const candidate = words.slice(0, i).join(" ");
+        const norm = normalizeMentionLabel(candidate);
+        if (namesMap.has(norm)) {
+          longestMatch = candidate;
+          matchedUid = namesMap.get(norm);
+        }
+      }
+      
+      if (longestMatch && matchedUid) {
+        inferred.push({
+          id: matchedUid,
+          tag: `@${longestMatch}`
+        });
+        index = text.indexOf("@", index + longestMatch.length);
+        continue;
+      }
+    }
+    
+    index = text.indexOf("@", index + 1);
+  }
+  
   return inferred;
 }
 

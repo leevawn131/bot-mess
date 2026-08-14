@@ -2,7 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = process.env.SQLITE_DB_PATH || path.resolve(process.cwd(), 'runtime', 'bot.db');
+const DB_PATH = process.env.SQLITE_DB_PATH || path.resolve(__dirname, '../../runtime/bot.db');
 
 // Ensure parent directory exists
 const dir = path.dirname(DB_PATH);
@@ -45,14 +45,29 @@ async function getConnection() {
     return {
         execute: async (query, params = []) => {
             return new Promise((resolve, reject) => {
-                const isReadQuery = /^\s*(SELECT|PRAGMA|SHOW|EXPLAIN|WITH)\b/i.test(query);
+                const translatedQuery = query.replace(/\bNOW\s*\(\s*\)/gi, "datetime('now', 'localtime')");
+                const sanitizedParams = params.map(p => {
+                    if (p instanceof Date) {
+                        const pad = (num) => String(num).padStart(2, '0');
+                        const year = p.getFullYear();
+                        const month = pad(p.getMonth() + 1);
+                        const day = pad(p.getDate());
+                        const hours = pad(p.getHours());
+                        const minutes = pad(p.getMinutes());
+                        const seconds = pad(p.getSeconds());
+                        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                    }
+                    return p;
+                });
+
+                const isReadQuery = /^\s*(SELECT|PRAGMA|SHOW|EXPLAIN|WITH)\b/i.test(translatedQuery);
                 if (isReadQuery) {
-                    db.all(query, params, (err, rows) => {
+                    db.all(translatedQuery, sanitizedParams, (err, rows) => {
                         if (err) return reject(err);
                         resolve([rows]);
                     });
                 } else {
-                    db.run(query, params, function (err) {
+                    db.run(translatedQuery, sanitizedParams, function (err) {
                         if (err) return reject(err);
                         resolve([{
                             affectedRows: this.changes,
@@ -138,6 +153,54 @@ async function executeTransaction(queries) {
 }
 
 /**
+ * Ensure user account exists for (threadID, psid) with 10,000 initial credits
+ */
+async function ensureUserAccount(threadID, psid, defaultName = "Người dùng") {
+    const thread = String(threadID || 'global');
+    const userPsid = String(psid);
+    const connection = await getConnection();
+    try {
+        const [rows] = await connection.execute(
+            "SELECT * FROM messenger_users WHERE thread_id = ? AND psid = ?",
+            [thread, userPsid]
+        );
+
+        if (rows.length === 0) {
+            await connection.execute(
+                "INSERT OR IGNORE INTO messenger_users (thread_id, psid, name, credits, level, current_exp, total_exp) VALUES (?, ?, ?, 10000, 0, 0, 0)",
+                [thread, userPsid, defaultName]
+            );
+            const [newRows] = await connection.execute(
+                "SELECT * FROM messenger_users WHERE thread_id = ? AND psid = ?",
+                [thread, userPsid]
+            );
+            return newRows[0];
+        }
+
+        if (rows.length > 0) {
+            if (rows[0].name === "Người dùng" && defaultName !== "Người dùng") {
+                await connection.execute(
+                    "UPDATE messenger_users SET name = ? WHERE thread_id = ? AND psid = ?",
+                    [defaultName, thread, userPsid]
+                );
+                rows[0].name = defaultName;
+            }
+            if (Number(rows[0].level) === 1 && Number(rows[0].total_exp || 0) === 0) {
+                await connection.execute(
+                    "UPDATE messenger_users SET level = 0 WHERE thread_id = ? AND psid = ?",
+                    [thread, userPsid]
+                );
+                rows[0].level = 0;
+            }
+        }
+
+        return rows[0];
+    } finally {
+        connection.release();
+    }
+}
+
+/**
  * Close connection pool
  */
 async function closePool() {
@@ -187,6 +250,7 @@ module.exports = {
     getConnection,
     execute,
     executeTransaction,
+    ensureUserAccount,
     closePool,
     getPoolStats,
     healthCheck

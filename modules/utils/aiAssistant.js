@@ -378,7 +378,7 @@ function buildBotHelpReply(query, settings) {
     if (topicSection) {
         const sectionCommands = {
             "🎮 Minigame": ["taixiu", "baucua", "lode", "duoihinhbatchu"],
-            "👥 Nhóm": ["admingr", "add", "kick", "grinfo", "checkout", "anti", "checktt", "checkbd", "ghepdoi", "setbd", "setwelcome"],
+            "👥 Nhóm": ["admingr", "add", "kick", "grinfo", "checkout", "anti", "checktt", "checkbd", "ghepdoi", "setbd", "setkitu", "setwelcome"],
             "💰 Kinh tế": ["tien", "chuyentien", "bank", "lamviec", "diemdanh", "vay", "shop", "buy", "inv", "use", "openbox", "cuop", "daigia", "quest"],
         };
 

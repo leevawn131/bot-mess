@@ -1,5 +1,6 @@
 const { isAntitagallEnabled } = require("../utils/antitagallSettings");
 const { getThreadInfoCached } = require("../utils/threadInfo");
+const { checkCooldown } = require("../utils/cooldown");
 
 function suppressLeaveEvents(threadID, durationMs = 15000) {
     global.leaveEventSuppressByThread = global.leaveEventSuppressByThread || {};
@@ -16,102 +17,118 @@ function toAdminIdList(threadInfo) {
     const list = Array.isArray(threadInfo?.adminIDs) ? threadInfo.adminIDs : [];
     return list
         .map((item) => {
-            if (!item || typeof item !== "object") return String(item || "").trim();
-            return String(item.id || item.userID || item.adminID || "").trim();
+            if (!item) return "";
+            if (typeof item === "object") {
+                return String(item.id || item.userID || item.adminID || "").trim();
+            }
+            return String(item).trim();
         })
         .filter(Boolean);
 }
 
-function hasTagAllMessage(event) {
+function isTagAllMessage(event) {
     const body = String(event?.body || "").toLowerCase();
-    return body.includes("@everyone") || body.includes("@mọi người");
+
+    // 1. Thẻ mặc định của Facebook
+    if (body.includes("@everyone") || body.includes("@mọi người") || body.includes("@all")) {
+        return true;
+    }
+
+    // 2. Thẻ nhiều người dùng (Mass mention >= 5 người một lúc)
+    if (event.mentions && typeof event.mentions === "object") {
+        const mentionCount = Object.keys(event.mentions).length;
+        if (mentionCount >= 5) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 module.exports = {
     name: "antitagall",
     eventType: ["message", "message_reply"],
 
-    execute: async ({ api, event }) => {
+    run: async function(Obj) { return this.execute(Obj); },
+    execute: async ({ api, event, config }) => {
         if (!event.threadID || !event.senderID || !event.body) return;
 
-        if (!isAntitagallEnabled(event.threadID)) {
-            return;
-        }
+        const threadID = String(event.threadID);
+        const senderID = String(event.senderID);
+        const botID = String(api.getCurrentUserID());
+
+        // 1. Bỏ qua nếu chính bot gửi tin nhắn
+        if (senderID === botID) return;
+
+        // 2. Bỏ qua nếu tính năng antitagall không được bật cho nhóm này
+        if (!isAntitagallEnabled(threadID)) return;
+
+        // 3. Kiểm tra xem tin nhắn có phải tag all / mass tag không
+        if (!isTagAllMessage(event)) return;
 
         try {
-            // Kiểm tra xem tin nhắn có chứa @everyone hoặc @mọi người không
-            const hasTagAll = hasTagAllMessage(event);
+            // Lấy thông tin nhóm
+            const threadInfo = await getThreadInfoCached(api, threadID);
+            if (!threadInfo || typeof threadInfo !== "object") return;
 
-            if (!hasTagAll) return;
+            const adminIDs = toAdminIdList(threadInfo);
+            const adminBotUIDs = (config?.adminIDs || global.config?.adminIDs || []).map(String);
 
-            const threadInfo = await getThreadInfoCached(api, event.threadID);
-            if (!threadInfo || typeof threadInfo !== "object") {
-                return api.sendMessage(
-                    "⚠️ Phát hiện tag @everyone/@mọi người nhưng không lấy được thông tin nhóm để xử lý kick.",
-                    event.threadID,
-                    event.messageID,
-                );
+            // 4. Bỏ qua nếu người gửi là QTV nhóm hoặc Admin Bot
+            if (adminIDs.includes(senderID) || adminBotUIDs.includes(senderID)) {
+                return;
             }
 
-            const senderName = getSenderName(threadInfo, event.senderID);
-
-            // Kiểm tra quyền của bot
-            const adminIDs = toAdminIdList(threadInfo);
-            const botID = String(api.getCurrentUserID());
+            const senderName = getSenderName(threadInfo, senderID);
             const isBotAdmin = adminIDs.includes(botID);
 
+            // 5. Nếu Bot KHÔNG PHẢI QTV nhóm -> Cảnh báo (có Cooldown 15s để tránh spam tin nhắn)
             if (!isBotAdmin) {
-                // Nếu bot không có quyền admin, chỉ gửi cảnh báo
-                return api.sendMessage(
-                    `⚠️ Phát hiện spam tag @everyone/@mọi người từ ${senderName}\n❌ Bot cần quyền Quản Trị Viên để tự động kick.`,
-                    event.threadID,
-                    event.messageID,
-                );
-            }
-
-            // Kiểm tra xem sender có phải admin không (bỏ qua nếu là admin)
-            const senderIsAdmin = adminIDs.includes(String(event.senderID));
-            if (senderIsAdmin) {
-                return; // Bỏ qua nếu sender là QTV
-            }
-
-            // Kiểm tra xem sender có phải bot không
-            if (String(event.senderID) === botID) {
-                return; // Bỏ qua chính bot
-            }
-
-            // Chặn leave event gửi thêm dòng thông báo bên dưới sau khi kick
-            suppressLeaveEvents(event.threadID, 15000);
-
-            // Thực hiện kick
-            const kickUser = async (uid, tid) => {
-                if (api.removeUserFromGroup) {
-                    return await api.removeUserFromGroup(uid, tid);
-                } else if (api.removeParticipant) {
-                    return await api.removeParticipant(uid, tid);
-                } else if (api.gcmember) {
-                    return await api.gcmember("remove", uid, tid);
-                } else if (api.removeUser) {
-                    return await api.removeUser(uid, tid);
-                } else if (api.removeUserFromThread) {
-                    return await api.removeUserFromThread(uid, tid);
-                } else if (api.removeParticipantFromThread) {
-                    return await api.removeParticipantFromThread(uid, tid);
-                } else {
-                    throw new Error("Không hỗ trợ hàm kick");
+                const cooldown = checkCooldown({
+                    command: "antitagall_warn",
+                    key: threadID,
+                    durationMs: 15000
+                });
+                if (cooldown.allowed) {
+                    api.sendMessage(
+                        `⚠️ Phát hiện ${senderName} tag @everyone/@mọi người!\n❌ Bot cần quyền Quản Trị Viên nhóm để tự động kick người vi phạm.`,
+                        threadID,
+                        event.messageID
+                    ).catch(() => {});
                 }
-            };
-
-            const kickResult = await kickUser(event.senderID, event.threadID);
-            if (kickResult && kickResult.type === "error_gc") {
-                throw new Error(kickResult.error || "gcmember remove failed");
+                return;
             }
 
-            // Gửi thông báo
-            api.sendMessage(
-                `🔨 Tự động kick ${senderName} do tag @everyone/@mọi người.\n🛡️ Antitagall bảo vệ nhóm.`,
-                event.threadID
-            ).catch(() => {});
+            // 6. Bot CÓ QUYỀN QTV -> Thực hiện kick người vi phạm ngay lập tức không cảnh báo
+            try {
+                // Tắt tạm thời các sự kiện leave nếu có thể
+                if (global.leaveEventSuppressByThread) {
+                    global.leaveEventSuppressByThread[threadID] = Date.now() + 15000;
+                }
+
+                if (typeof api.removeUserFromGroup === "function") {
+                    await api.removeUserFromGroup(senderID, threadID);
+                } else if (typeof api.removeParticipant === "function") {
+                    await api.removeParticipant(senderID, threadID);
+                } else if (typeof api.gcmember === "function") {
+                    await api.gcmember("remove", senderID, threadID);
+                } else if (typeof api.removeUser === "function") {
+                    await api.removeUser(senderID, threadID);
+                } else {
+                    throw new Error("Không tìm thấy hàm kick trong thư viện API");
+                }
+
+                api.sendMessage(
+                    `🔨 [ANTITAGALL] Đã kick thành viên ${senderName} (${senderID}) ra khỏi nhóm vì tự ý tag all/mass mention.`,
+                    threadID
+                ).catch(() => {});
+            } catch (kickErr) {
+                console.error("❌ Lỗi kick thành viên vi phạm antitagall:", kickErr);
+                api.sendMessage(
+                    `⚠️ [ANTITAGALL] Phát hiện thành viên ${senderName} (${senderID}) tag all/mass mention nhưng bot không thể kick.`,
+                    threadID
+                ).catch(() => {});
+            }
 
         } catch (error) {
             console.error("❌ Lỗi antitagall:", error);

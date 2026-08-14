@@ -1,205 +1,230 @@
-const { execute, getConnection } = require('../../utils/database');
-const { checkCooldown } = require('../../utils/cooldown');
-const prefix = process.env.BOT_PREFIX;
+const { execute, getConnection } = require("../../utils/database");
+const { checkCooldown } = require("../../utils/cooldown");
+
+const ITEM_NAMES = {
+  lucky: "Bùa may",
+  khien: "Khiên chống cướp",
+  "30eng": "Nước tăng lực nhỏ",
+  gangtay: "Găng tay",
+  bh: "Bảo hiểm"
+};
+
+// Helper để random phần thưởng cho 1 hộp bí ẩn
+function generateReward() {
+  const rand = Math.random();
+
+  if (rand < 0.80) {
+    // 80%: Xu thường (7,000 - 15,000 xu)
+    const val = Math.floor(Math.random() * (15000 - 7000 + 1)) + 7000;
+    return { type: "credits", value: val, msg: `💰 +${val.toLocaleString('vi-VN')} xu` };
+  } else if (rand < 0.94) {
+    // 14%: Xu vừa (20,000 - 45,000 xu)
+    const val = Math.floor(Math.random() * (45000 - 20000 + 1)) + 20000;
+    return { type: "credits", value: val, msg: `💰 +${val.toLocaleString('vi-VN')} xu` };
+  } else if (rand < 0.98) {
+    // 4%: Xu lớn (50,000 - 100,000 xu)
+    const val = Math.floor(Math.random() * (100000 - 50000 + 1)) + 50000;
+    return { type: "credits", value: val, msg: `🎁 +${val.toLocaleString('vi-VN')} xu` };
+  } else if (rand < 0.995) {
+    // 1.5%: Vật phẩm ngẫu nhiên
+    const itemRand = Math.random();
+    let itemKey = "lucky";
+    let uses = 1;
+    if (itemRand < 0.4) {
+      itemKey = "lucky";
+    } else if (itemRand < 0.7) {
+      itemKey = "khien";
+    } else {
+      itemKey = "30eng";
+    }
+    const itemName = ITEM_NAMES[itemKey] || itemKey;
+    return { type: "item", itemKey, uses, msg: `🧰 1x ${itemName}` };
+  } else {
+    // 0.5%: Hũ xu thần tài (200,000 - 350,000 xu)
+    const val = Math.floor(Math.random() * (350000 - 200000 + 1)) + 200000;
+    return { type: "credits", value: val, msg: `🎉 NỔ HŨ +${val.toLocaleString('vi-VN')} xu` };
+  }
+}
 
 module.exports = {
-    name: "openbox",
-    description: "Mở hộp bí ẩn",
-    usage: `\n${prefix}openbox → Mở 1 hộp bí ẩn\n${prefix}openbox [số_lượng] → Mở nhiều hộp cùng lúc\n${prefix}openbox all → Mở toàn bộ hộp đang có\n━━━━━━━━━━━━━\n🎲 Phần thưởng ngẫu nhiên: xu, vật phẩm\n💡 Ví dụ: ${prefix}openbox 5`,
-    
-    execute: async ({ api, event, args, config }) => {
-        const { threadID, messageID, senderID } = event;
-        const prefix = config?.prefix || "!";
-        
-        // Xác định số lượng hộp cần mở
-        let quantityToOpen = 1;
-        let openAll = false;
-        
-        if (args[0]) {
-            const arg = args[0].toLowerCase();
-            if (arg === 'all') {
-                openAll = true;
-            } else {
-                const num = parseInt(arg);
-                if (isNaN(num) || num <= 0) {
-                    return api.sendMessage(`⚠️ Số lượng không hợp lệ!\nCách dùng: ${prefix}openbox [số] hoặc ${prefix}openbox all`, threadID, messageID);
-                }
-                quantityToOpen = num;
-            }
-        }
+  name: "openbox",
+  description: "Mở hộp bí ẩn mở ra xu và vật phẩm hiếm",
+  usage: `\n!openbox → Mở 1 hộp bí ẩn\n!openbox [số_lượng] → Mở nhiều hộp cùng lúc\n!openbox all → Mở toàn bộ hộp đang có`,
 
-        // Check cooldown (10s)
-        const cooldown = checkCooldown({ command: "openbox", key: senderID, durationMs: 10000 });
-        if (!cooldown.allowed) {
-            return api.sendMessage(`⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi mở hộp lại!`, threadID, messageID);
-        }
+  execute: async ({ api, event, args, config }) => {
+    const { threadID, messageID, senderID } = event;
+    const prefix = config?.prefix || "!";
 
-        let connection;
-        try {
-            connection = await getConnection();
-
-            // Check xem có hộp bí ẩn không
-            const [boxes] = await connection.execute(
-                `SELECT ui.* FROM user_inventory ui
-                WHERE ui.psid = ? AND ui.item_key = 'box' AND ui.uses_left > 0`,
-                [senderID]
-            );
-            
-            if (boxes.length === 0) {
-                return api.sendMessage(`❌ Bạn không có hộp bí ẩn nào.\n👉 Mua tại ${prefix}shop với giá 20,000 xu`, threadID, messageID);
-            }
-
-            // Helper function để random phần thưởng
-            const generateReward = () => {
-                const rand = Math.random();
-                let reward = {};
-
-                if (rand < 0.815) {
-                    // 81.5%: Tiền ít (8k-15k)
-                    reward.type = 'credits';
-                    reward.value = Math.floor(Math.random() * (15000 - 8000 + 1)) + 8000;
-                    reward.msg = `💰 ${reward.value.toLocaleString()} xu`;
-                } else if (rand < 0.965) {
-                    // 15%: Tiền trung bình (15k-30k)
-                    reward.type = 'credits';
-                    reward.value = Math.floor(Math.random() * (30000 - 15000 + 1)) + 15000;
-                    reward.msg = `💰 ${reward.value.toLocaleString()} xu`;
-                } else if (rand < 0.995) {
-                    // 3%: Tiền cao (40k-80k)
-                    reward.type = 'credits';
-                    reward.value = Math.floor(Math.random() * (80000 - 40000 + 1)) + 40000;
-                    reward.msg = `💰 ${reward.value.toLocaleString()} xu`;
-                } else {
-                    // 0.5%: Tiền rất cao (200k)
-                    reward.type = 'credits';
-                    reward.value = 200000;
-                    reward.msg = `💰 ${reward.value.toLocaleString()} xu 🎉`;
-                }
-                return reward;
-            };
-
-            if (openAll || quantityToOpen > 1) {
-                // Mở nhiều hộp
-                let totalBoxes = 0;
-                let totalCredits = 0;
-                const rewards = [];
-
-                await connection.beginTransaction();
-                try {
-                    const [lockedBoxes] = await connection.execute(
-                        'SELECT id, uses_left FROM user_inventory WHERE id = ? AND psid = ? FOR UPDATE',
-                        [boxes[0].id, senderID]
-                    );
-
-                    if (lockedBoxes.length === 0 || Number(lockedBoxes[0].uses_left) <= 0) {
-                        await connection.rollback();
-                        return api.sendMessage("❌ Hộp đã hết hoặc không còn tồn tại. Thử lại sau nhé.", threadID, messageID);
-                    }
-
-                    const currentBox = lockedBoxes[0];
-                    totalBoxes = openAll ? Number(currentBox.uses_left) : quantityToOpen;
-
-                    if (totalBoxes > Number(currentBox.uses_left)) {
-                        await connection.rollback();
-                        return api.sendMessage(`❌ Bạn chỉ có ${currentBox.uses_left} hộp. Không thể mở ${totalBoxes} hộp!`, threadID, messageID);
-                    }
-
-                    // Mở từng hộp
-                    for (let i = 0; i < totalBoxes; i++) {
-                        const reward = generateReward();
-                        if (reward.type === 'credits') {
-                            totalCredits += reward.value;
-                            rewards.push(reward.msg);
-                        }
-                    }
-
-                    // Trừ hộp bí ẩn
-                    const remainingBoxes = Number(currentBox.uses_left) - totalBoxes;
-                    if (remainingBoxes <= 0) {
-                        await connection.execute('DELETE FROM user_inventory WHERE id = ?', [currentBox.id]);
-                    } else {
-                        await connection.execute('UPDATE user_inventory SET uses_left = ? WHERE id = ?', [remainingBoxes, currentBox.id]);
-                    }
-
-                    // Trao thưởng (credits)
-                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [totalCredits, senderID]);
-
-                    await connection.commit();
-                } catch (err) {
-                    await connection.rollback();
-                    throw err;
-                }
-
-                // Hiển thị kết quả
-                const rewardList = rewards.slice(0, 10).join('\n');
-                const remainingCount = rewards.length > 10 ? `\n... và ${rewards.length - 10} phần thưởng khác` : '';
-
-                return api.sendMessage(
-                    `📦 MỞ ${totalBoxes} HỘP BÍ ẨN\n━━━━━━━━━━━━━\n\n✨ Phần thưởng:\n${rewardList}${remainingCount}\n\n💰 Tổng cộng: ${totalCredits.toLocaleString()} xu\n\n🎊 Chúc mừng!`,
-                    threadID, messageID
-                );
-            } else {
-                // Mở 1 hộp (cách cũ)
-                const reward = generateReward();
-
-                await connection.beginTransaction();
-                try {
-                    const [lockedBoxes] = await connection.execute(
-                        'SELECT id, uses_left FROM user_inventory WHERE id = ? AND psid = ? FOR UPDATE',
-                        [boxes[0].id, senderID]
-                    );
-
-                    if (lockedBoxes.length === 0 || Number(lockedBoxes[0].uses_left) <= 0) {
-                        await connection.rollback();
-                        return api.sendMessage("❌ Hộp đã hết hoặc không còn tồn tại. Thử lại sau nhé.", threadID, messageID);
-                    }
-
-                    const box = lockedBoxes[0];
-                    if (Number(box.uses_left) <= 1) {
-                        await connection.execute('DELETE FROM user_inventory WHERE id = ?', [box.id]);
-                    } else {
-                        await connection.execute('UPDATE user_inventory SET uses_left = uses_left - 1 WHERE id = ?', [box.id]);
-                    }
-
-                    // Trao thưởng
-                    if (reward.type === 'credits') {
-                        await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [reward.value, senderID]);
-                    } else if (reward.type === 'item') {
-                        const [existing] = await connection.execute(
-                            'SELECT * FROM user_inventory WHERE psid = ? AND item_key = ?',
-                            [senderID, reward.itemKey]
-                        );
-
-                        if (existing.length > 0) {
-                            await connection.execute(
-                                'UPDATE user_inventory SET uses_left = uses_left + ? WHERE psid = ? AND item_key = ?',
-                                [reward.uses, senderID, reward.itemKey]
-                            );
-                        } else {
-                            await connection.execute(
-                                'INSERT INTO user_inventory (psid, item_key, uses_left) VALUES (?, ?, ?)',
-                                [senderID, reward.itemKey, reward.uses]
-                            );
-                        }
-                    }
-
-                    await connection.commit();
-                } catch (txErr) {
-                    await connection.rollback();
-                    throw txErr;
-                }
-
-                return api.sendMessage(
-                    `📦 MỞ HỘP BÍ ẨN\n━━━━━━━━━━━━━\n\n✨ Bạn nhận được:\n${reward.msg}\n\n🎊 Chúc mừng!`,
-                    threadID, messageID
-                );
-            }
-
-        } catch (e) {
-            console.error(e);
-            return api.sendMessage("❌ Lỗi khi mở hộp.", threadID, messageID);
-        } finally {
-            if (connection) connection.release();
-        }
+    // Check cooldown (3s)
+    const cooldown = checkCooldown({
+      command: "openbox",
+      key: senderID,
+      durationMs: 3000
+    });
+    if (!cooldown.allowed) {
+      return api.sendMessage(
+        `⏳ Vui lòng chờ ${cooldown.timeLeft}s trước khi mở lại hộp bí ẩn!`,
+        threadID,
+        messageID
+      );
     }
+
+    let connection;
+    try {
+      connection = await getConnection();
+
+      // Lấy danh sách hộp bí ẩn còn lại của người dùng
+      const [boxes] = await connection.execute(
+        `SELECT id, uses_left FROM user_inventory WHERE thread_id = ? AND psid = ? AND item_key = 'box' AND uses_left > 0 ORDER BY id ASC`,
+        [String(threadID), senderID]
+      );
+
+      const totalAvailable = boxes.reduce((acc, b) => acc + Number(b.uses_left || 0), 0);
+
+      if (totalAvailable === 0) {
+        return api.sendMessage(
+          `❌ Bạn không có hộp bí ẩn nào trong túi đồ!\n👉 Dùng lệnh ${prefix}shop để mua (20,000 xu/hộp).`,
+          threadID,
+          messageID
+        );
+      }
+
+      let countToOpen = 1;
+
+      if (args[0]) {
+        const arg = String(args[0]).toLowerCase();
+        if (arg === "all") {
+          countToOpen = totalAvailable;
+        } else {
+          const num = parseInt(arg, 10);
+          if (isNaN(num) || num <= 0) {
+            return api.sendMessage(
+              `⚠️ Số lượng mở không hợp lệ!\nCách dùng: ${prefix}openbox [số] hoặc ${prefix}openbox all`,
+              threadID,
+              messageID
+            );
+          }
+          if (num > totalAvailable) {
+            return api.sendMessage(
+              `❌ Bạn chỉ đang có ${totalAvailable} hộp bí ẩn. Không đủ để mở ${num} hộp!`,
+              threadID,
+              messageID
+            );
+          }
+          countToOpen = num;
+        }
+      }
+
+      await connection.beginTransaction();
+
+      try {
+        // Trừ bớt số lượng hộp trong user_inventory
+        let remainingDeduct = countToOpen;
+        for (const boxRow of boxes) {
+          if (remainingDeduct <= 0) break;
+
+          const rowUses = Number(boxRow.uses_left || 0);
+          if (rowUses <= remainingDeduct) {
+            await connection.execute(`DELETE FROM user_inventory WHERE id = ?`, [boxRow.id]);
+            remainingDeduct -= rowUses;
+          } else {
+            const newUses = rowUses - remainingDeduct;
+            await connection.execute(`UPDATE user_inventory SET uses_left = ? WHERE id = ?`, [newUses, boxRow.id]);
+            remainingDeduct = 0;
+          }
+        }
+
+        // Random phần thưởng cho từng hộp
+        let totalCredits = 0;
+        const itemRewards = {};
+        const rewardDetails = [];
+
+        for (let i = 0; i < countToOpen; i++) {
+          const reward = generateReward();
+          rewardDetails.push(reward.msg);
+
+          if (reward.type === "credits") {
+            totalCredits += reward.value;
+          } else if (reward.type === "item") {
+            itemRewards[reward.itemKey] = (itemRewards[reward.itemKey] || 0) + (reward.uses || 1);
+          }
+        }
+
+        // Cập nhật xu cho người dùng
+        if (totalCredits > 0) {
+          const [userExist] = await connection.execute(
+            `SELECT credits FROM messenger_users WHERE thread_id = ? AND psid = ?`,
+            [String(threadID), senderID]
+          );
+
+          if (userExist.length > 0) {
+            await connection.execute(
+              `UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?`,
+              [totalCredits, String(threadID), senderID]
+            );
+          } else {
+            const userName = (global.data && global.data.userName && global.data.userName.get(senderID)) || "Người dùng";
+            await connection.execute(
+              `INSERT INTO messenger_users (thread_id, psid, name, credits) VALUES (?, ?, ?, ?)`,
+              [String(threadID), senderID, userName, 10000 + totalCredits]
+            );
+          }
+        }
+
+        // Cập nhật vật phẩm trúng thưởng vào user_inventory
+        for (const [itemKey, addUses] of Object.entries(itemRewards)) {
+          const [existing] = await connection.execute(
+            `SELECT id FROM user_inventory WHERE thread_id = ? AND psid = ? AND item_key = ?`,
+            [String(threadID), senderID, itemKey]
+          );
+
+          if (existing.length > 0) {
+            await connection.execute(
+              `UPDATE user_inventory SET uses_left = uses_left + ? WHERE thread_id = ? AND psid = ? AND item_key = ?`,
+              [addUses, String(threadID), senderID, itemKey]
+            );
+          } else {
+            await connection.execute(
+              `INSERT INTO user_inventory (thread_id, psid, item_key, uses_left) VALUES (?, ?, ?, ?)`,
+              [String(threadID), senderID, itemKey, addUses]
+            );
+          }
+        }
+
+        await connection.commit();
+
+        // Chuẩn bị tin nhắn báo kết quả
+        let msg = `📦 MỞ THÀNH CÔNG ${countToOpen} HỘP BÍ ẨN\n━━━━━━━━━━━━━\n`;
+
+        if (countToOpen === 1) {
+          msg += `\n✨ Phần thưởng bạn nhận được:\n${rewardDetails[0]}\n`;
+        } else {
+          msg += `\n💰 Tổng xu nhận được: +${totalCredits.toLocaleString('vi-VN')} xu\n`;
+          if (Object.keys(itemRewards).length > 0) {
+            msg += `🧰 Vật phẩm trúng thưởng:\n`;
+            for (const [k, v] of Object.entries(itemRewards)) {
+              msg += `  • ${ITEM_NAMES[k] || k}: x${v}\n`;
+            }
+          }
+          msg += `\n📜 Chi tiết 10 hộp đầu tiên:\n`;
+          msg += rewardDetails.slice(0, 10).map((r, idx) => `${idx + 1}. ${r}`).join("\n");
+          if (rewardDetails.length > 10) {
+            msg += `\n... và ${rewardDetails.length - 10} phần thưởng khác`;
+          }
+        }
+
+        msg += `\n\n🎊 Chúc mừng bạn! Dùng ${prefix}inv để xem túi đồ.`;
+
+        return api.sendMessage(msg, threadID, messageID);
+      } catch (err) {
+        await connection.rollback();
+        throw err;
+      }
+    } catch (e) {
+      console.error("❌ Lỗi openbox:", e);
+      return api.sendMessage("❌ Có lỗi xảy ra khi mở hộp bí ẩn. Vui lòng thử lại sau!", threadID, messageID);
+    } finally {
+      if (connection) connection.release();
+    }
+  }
 };

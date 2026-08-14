@@ -1,5 +1,5 @@
-const mysql = require("mysql2/promise");
 const { checkCooldown } = require("../../utils/cooldown");
+const { execute } = require("../../utils/database");
 const {
   getUserQuests,
   acceptRandomQuest,
@@ -60,7 +60,7 @@ module.exports = {
     }
 
     try {
-      const data = await getUserQuests(senderID);
+      const data = await getUserQuests(senderID, threadID);
       const quests = data.quests;
 
       if (subCommand === "claim") {
@@ -75,8 +75,8 @@ module.exports = {
 
         try {
           const rows = await execute(
-            "SELECT credits FROM messenger_users WHERE psid = ?",
-            [senderID],
+            "SELECT credits FROM messenger_users WHERE thread_id = ? AND psid = ?",
+            [String(threadID), senderID],
           );
           if (rows.length === 0) {
             const prefix = config?.prefix || "!";
@@ -100,8 +100,8 @@ module.exports = {
             }
 
             await execute(
-              "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-              [claimAllResult.totalReward, senderID],
+              "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+              [claimAllResult.totalReward, String(threadID), senderID],
             );
             const markResult = await markQuestsClaimed(
               senderID,
@@ -116,14 +116,14 @@ module.exports = {
             }
 
             return api.sendMessage(
-              `🎉 Nhận thưởng ${claimAllResult.claimableCount} nhiệm vụ: +${claimAllResult.totalReward.toLocaleString()} xu\n` +
-                `💳 Số dư mới: ${(baseCredits + claimAllResult.totalReward).toLocaleString()} xu`,
+              `🎉 Nhận thưởng ${claimAllResult.claimableCount} nhiệm vụ: +${claimAllResult.totalReward.toLocaleString('vi-VN')} xu\n` +
+                `💳 Số dư mới: ${(baseCredits + claimAllResult.totalReward).toLocaleString('vi-VN')} xu`,
               threadID,
               messageID,
             );
           }
 
-          const latestData = await getUserQuests(senderID);
+          const latestData = await getUserQuests(senderID, threadID);
           const acceptedQuests = latestData.quests.filter(
             (quest) => quest.accepted,
           );
@@ -169,8 +169,8 @@ module.exports = {
 
           if (preview.totalReward > 0) {
             await execute(
-              "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-              [preview.totalReward, senderID],
+              "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+              [preview.totalReward, String(threadID), senderID],
             );
             const markResult = await markQuestsClaimed(
               senderID,
@@ -186,12 +186,12 @@ module.exports = {
 
           let rewardMsg = "🎁 KẾT QUẢ NHẬN THƯỞNG\n━━━━━━━━━━━━━\n";
           rewardMsg += `✅ Nhận thành công: ${preview.claimableCount}\n`;
-          rewardMsg += `💰 Tổng thưởng: +${preview.totalReward.toLocaleString()} xu\n`;
+          rewardMsg += `💰 Tổng thưởng: +${preview.totalReward.toLocaleString('vi-VN')} xu\n`;
           if (preview.alreadyClaimedCount > 0)
             rewardMsg += `ℹ️ Đã nhận trước đó: ${preview.alreadyClaimedCount}\n`;
           if (preview.notCompleteCount > 0)
             rewardMsg += `⏳ Chưa hoàn thành: ${preview.notCompleteCount}\n`;
-          rewardMsg += `💳 Số dư mới: ${(baseCredits + preview.totalReward).toLocaleString()} xu`;
+          rewardMsg += `💳 Số dư mới: ${(baseCredits + preview.totalReward).toLocaleString('vi-VN')} xu`;
 
           return api.sendMessage(rewardMsg, threadID, messageID);
         } catch (error) {
@@ -225,8 +225,8 @@ module.exports = {
 
           checkMsg += `${index + 1}. ${quest.title}\n`;
           checkMsg += `   - Nhiệm vụ: ${quest.description}\n`;
-          checkMsg += `   - Tiến độ: ${Number(quest.progress).toLocaleString()}/${Number(quest.target).toLocaleString()}\n`;
-          checkMsg += `   - Thưởng: ${Number(quest.reward).toLocaleString()} xu\n`;
+          checkMsg += `   - Tiến độ: ${Number(quest.progress).toLocaleString('vi-VN')}/${Number(quest.target).toLocaleString('vi-VN')}\n`;
+          checkMsg += `   - Thưởng: ${Number(quest.reward).toLocaleString('vi-VN')} xu\n`;
           checkMsg += `   - Trạng thái: ${status}\n\n`;
         });
 
@@ -237,12 +237,33 @@ module.exports = {
       }
 
       if (["nhan", "accept", "random"].includes(subCommand)) {
-        const result = await acceptRandomQuest(senderID);
+        let targetTier = null;
+        if (args[1]) {
+          targetTier = parseTierFilter(args[1]);
+          if (!targetTier) {
+            return api.sendMessage(
+              `⚠️ Độ khó không hợp lệ: "${args[1]}"\nCác lựa chọn hợp lệ: dễ (easy), trung bình (medium), khó (hard), hiếm (rare).`,
+              threadID,
+              messageID
+            );
+          }
+        }
+
+        const result = await acceptRandomQuest(senderID, targetTier, threadID);
 
         if (!result.ok && result.reason === "limit_reached") {
           return api.sendMessage(
             `📦 Bạn đã đạt giới hạn quest hôm nay: ${result.acceptedCount}/${result.maxAccepted}${result.hasVip ? " (VIP)" : ""}.\n` +
               "💡 Dùng quest check để xem tiến độ và quest claim all để nhận thưởng.",
+            threadID,
+            messageID,
+          );
+        }
+
+        if (!result.ok && result.reason === "no_available_tier") {
+          return api.sendMessage(
+            `📭 Hôm nay bạn không còn nhiệm vụ nào ở mức độ khó: ${getTierLabel(result.requestedTier)}.\n` +
+              "💡 Hãy chọn độ khó khác hoặc dùng quest nhan để nhận ngẫu nhiên.",
             threadID,
             messageID,
           );
@@ -272,8 +293,8 @@ module.exports = {
         msg += `📌 ${quest.title}\n`;
         msg += `- Mức độ: ${tierLabel}\n`;
         msg += `- ${quest.description}\n`;
-        msg += `- Mục tiêu: ${Number(quest.target).toLocaleString()}\n`;
-        msg += `- Thưởng: ${Number(quest.reward).toLocaleString()} xu\n`;
+        msg += `- Mục tiêu: ${Number(quest.target).toLocaleString('vi-VN')}\n`;
+        msg += `- Thưởng: ${Number(quest.reward).toLocaleString('vi-VN')} xu\n`;
         msg += `🎯 Đã nhận: ${result.acceptedCount}/${result.maxAccepted}${result.hasVip ? " (VIP)" : ""}\n`;
         msg += `🎁 Slot còn lại: ${result.remainingSlots}\n`;
         msg += "━━━━━━━━━━━━━\n";

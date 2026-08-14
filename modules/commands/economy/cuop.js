@@ -73,7 +73,7 @@ module.exports = {
     try {
       connection = await getConnection();
 
-      const energyUse = await consumeEnergy(connection, senderID, 20);
+      const energyUse = await consumeEnergy(connection, String(threadID), senderID, 20);
       if (!energyUse.ok) {
         if (energyUse.reason === "not_enough") {
           return api.sendMessage(energyUse.message, threadID, messageID);
@@ -87,8 +87,8 @@ module.exports = {
 
       // Check tù
       const jailRows = await execute(
-        "SELECT jail_until, reason FROM user_jail WHERE psid = ? AND jail_until > NOW()",
-        [senderID],
+        "SELECT jail_until, reason FROM user_jail WHERE thread_id = ? AND psid = ? AND jail_until > datetime('now', 'localtime')",
+        [String(threadID), senderID],
       );
 
       if (jailRows.length > 0) {
@@ -104,8 +104,8 @@ module.exports = {
       // --- CƯỚP NGÂN HÀNG ---
       if (isBankRob) {
         const [senderRows] = await connection.execute(
-          "SELECT credits, name FROM messenger_users WHERE psid = ?",
-          [senderID],
+          "SELECT credits, name FROM messenger_users WHERE thread_id = ? AND psid = ?",
+          [String(threadID), senderID],
         );
         if (senderRows.length === 0) {
           return api.sendMessage(
@@ -158,7 +158,8 @@ module.exports = {
 
           // Lấy danh sách tất cả users có tài khoản ngân hàng
           const [bankUsers] = await connection.execute(
-            "SELECT psid, balance FROM bank_accounts WHERE balance > 0",
+            "SELECT psid, balance FROM bank_accounts WHERE thread_id = ? AND balance > 0",
+            [String(threadID)]
           );
 
           await connection.beginTransaction();
@@ -170,8 +171,8 @@ module.exports = {
               for (const user of bankUsers) {
                 const deductAmount = Math.min(sharePerUser, user.balance);
                 await connection.execute(
-                  "UPDATE bank_accounts SET balance = balance - ? WHERE psid = ?",
-                  [deductAmount, user.psid],
+                  "UPDATE bank_accounts SET balance = balance - ? WHERE thread_id = ? AND psid = ?",
+                  [deductAmount, String(threadID), user.psid],
                 );
                 totalStolen += deductAmount; // Cộng dồn số tiền thực tế bị trừ
               }
@@ -185,14 +186,14 @@ module.exports = {
 
             // Thêm tiền cho kẻ cướp với số tiền THỰC TẾ
             await connection.execute(
-              "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-              [finalGain, senderID],
+              "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+              [finalGain, String(threadID), senderID],
             );
 
             if (taxAmount > 0 && senderID !== BOSS_ID) {
               await connection.execute(
-                "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-                [taxAmount, BOSS_ID],
+                "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+                [taxAmount, String(threadID), BOSS_ID],
               );
             }
 
@@ -206,7 +207,7 @@ module.exports = {
           const finalGain = Math.max(0, totalStolen - taxAmount);
 
           api.sendMessage(
-            `🏦 **CƯỚP NGÂN HÀNG THÀNH CÔNG!**\n👤 ${senderName}\n💰 Lấy được: ${totalStolen.toLocaleString()}\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n🔥 Thoát khỏi truy nã... tạm thời!`,
+            `🏦 **CƯỚP NGÂN HÀNG THÀNH CÔNG!**\n👤 ${senderName}\n💰 Lấy được: ${totalStolen.toLocaleString('vi-VN')}\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString('vi-VN')}\n✅ Thực nhận: ${finalGain.toLocaleString('vi-VN')}\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n🔥 Thoát khỏi truy nã... tạm thời!`,
             threadID,
             messageID,
           );
@@ -215,17 +216,18 @@ module.exports = {
           const jailUntil = new Date(now.getTime() + 1 * 60 * 60 * 1000);
 
           await execute(
-            "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-            [fine, senderID],
+            "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+            [fine, String(threadID), senderID],
           );
           await execute(
-            "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-            [fine, BOSS_ID],
+            "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+            [fine, String(threadID), BOSS_ID],
           );
 
           await execute(
-            "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON CONFLICT(psid) DO UPDATE SET jail_until = excluded.jail_until, reason = excluded.reason",
+            "INSERT INTO user_jail (thread_id, psid, jail_until, reason) VALUES (?, ?, ?, ?) ON CONFLICT(thread_id, psid) DO UPDATE SET jail_until = excluded.jail_until, reason = excluded.reason",
             [
+              String(threadID),
               senderID,
               jailUntil,
               "Cướp ngân hàng",
@@ -244,8 +246,8 @@ module.exports = {
 
       // 3. Lấy thông tin tài chính + Tên của 2 người + VIP status
       const [rows] = await connection.execute(
-        "SELECT psid, credits, name, vip_until FROM messenger_users WHERE psid IN (?, ?)",
-        [senderID, targetID],
+        "SELECT psid, credits, name, vip_until FROM messenger_users WHERE thread_id = ? AND psid IN (?, ?)",
+        [String(threadID), senderID, targetID],
       );
 
       const senderData = rows.find((r) => r.psid == senderID);
@@ -269,7 +271,7 @@ module.exports = {
         try {
           const userInfo = await api.getUserInfo(targetID);
           targetName = userInfo[targetID].name;
-        } catch (e) {}
+        } catch (e) { }
       }
 
       // Kiểm tra điều kiện cướp
@@ -326,18 +328,18 @@ module.exports = {
         const finalGain = Math.max(0, stealAmount - taxAmount);
 
         await connection.execute(
-          "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-          [finalGain, senderID],
+          "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+          [finalGain, String(threadID), senderID],
         );
         await connection.execute(
-          "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-          [stealAmount, targetID],
+          "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+          [stealAmount, String(threadID), targetID],
         );
 
         if (taxAmount > 0 && senderID !== BOSS_ID) {
           await connection.execute(
-            "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-            [taxAmount, BOSS_ID],
+            "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+            [taxAmount, String(threadID), BOSS_ID],
           );
         }
 
@@ -352,7 +354,7 @@ module.exports = {
           );
         }
 
-        let msg = `🔫 **CƯỚP THÀNH CÔNG!**\nBạn đã trấn lột ${stealAmount.toLocaleString()} credits từ ${targetName}.\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString()}\n✅ Thực nhận: ${finalGain.toLocaleString()}\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n(Nạn nhân khóc thét 😭)`;
+        let msg = `🔫 **CƯỚP THÀNH CÔNG!**\nBạn đã trấn lột ${stealAmount.toLocaleString('vi-VN')} credits từ ${targetName}.\n🧾 Thuế cướp (8%): ${taxAmount.toLocaleString('vi-VN')}\n✅ Thực nhận: ${finalGain.toLocaleString('vi-VN')}\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n(Nạn nhân khóc thét 😭)`;
         if (hasShield && !isBossRobber)
           msg += `\n🛡️ Khien bao ve da giam sat thuong!`;
         if (targetHasVIP && !isBossRobber)
@@ -366,34 +368,34 @@ module.exports = {
 
         // Trừ tiền thằng đi cướp
         await execute(
-          "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-          [fine, senderID],
+          "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+          [fine, String(threadID), senderID],
         );
 
         // Cộng tiền phạt vào ví BOSS (Nếu Boss không phải là người đi cướp)
         if (senderID !== BOSS_ID) {
           await execute(
-            "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-            [fine, BOSS_ID],
+            "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+            [fine, String(threadID), BOSS_ID],
           );
         }
 
         // Vào tù 3 phút
         const jailUntil = new Date(Date.now() + 3 * 60 * 1000);
         await execute(
-          "INSERT INTO user_jail (psid, jail_until, reason) VALUES (?, ?, ?) ON CONFLICT(psid) DO UPDATE SET jail_until = excluded.jail_until, reason = excluded.reason",
-          [senderID, jailUntil, "Cướp fail"],
+          "INSERT INTO user_jail (thread_id, psid, jail_until, reason) VALUES (?, ?, ?, ?) ON CONFLICT(thread_id, psid) DO UPDATE SET jail_until = excluded.jail_until, reason = excluded.reason",
+          [String(threadID), senderID, jailUntil, "Cướp fail"],
         );
 
         api.sendMessage(
-          `👮 **BỊ BẮT RỒI CON ƠI!**\nCướp ${targetName} bất thành, bạn bị Công An phạt ${fine.toLocaleString()} credits.\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n🔒 Bạn bị giam 3 phút.\n(Tiền phạt đã được nộp vào kho bạc của Boss 🐧)`,
+          `👮 **BỊ BẮT RỒI CON ƠI!**\nCướp ${targetName} bất thành, bạn bị Công An phạt ${fine.toLocaleString('vi-VN')} credits.\n⚡ Thể lực: ${energyUse.energy}/${energyUse.maxEnergy} (trừ 20)\n🔒 Bạn bị giam 3 phút.\n(Tiền phạt đã được nộp vào kho bạc của Boss 🐧)`,
           threadID,
           messageID,
         );
       }
     } catch (e) {
       console.error(e);
-      api.sendMessage("❌ Lỗi Database.", threadID, messageID);
+      api.sendMessage(`❌ Mày chưa có tài khoản mà đòi cướp à.\nDùng /tien mà tạo tài khoản.`, threadID, messageID);
     } finally {
       if (connection) connection.release();
     }

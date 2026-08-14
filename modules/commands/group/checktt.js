@@ -23,23 +23,23 @@ function writeStats(stats) {
 
 function toDateKeys(now = new Date()) {
   const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-  const year = vnTime.getFullYear();
-  const month = String(vnTime.getMonth() + 1).padStart(2, "0");
-  const day = String(vnTime.getDate()).padStart(2, "0");
+  const year = vnTime.getUTCFullYear();
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(vnTime.getUTCDate()).padStart(2, "0");
   const dayKey = `${year}-${month}-${day}`;
   const monthKey = `${year}-${month}`;
 
-  const weekDate = new Date(year, vnTime.getMonth(), day);
-  const weekDay = (weekDate.getDay() + 6) % 7;
-  weekDate.setDate(weekDate.getDate() - weekDay + 3);
+  const weekDate = new Date(Date.UTC(year, vnTime.getUTCMonth(), vnTime.getUTCDate()));
+  const weekDay = (weekDate.getUTCDay() + 6) % 7;
+  weekDate.setUTCDate(weekDate.getUTCDate() - weekDay + 3);
 
-  const firstThursday = new Date(weekDate.getFullYear(), 0, 4);
-  const firstWeekDay = (firstThursday.getDay() + 6) % 7;
-  firstThursday.setDate(firstThursday.getDate() - firstWeekDay + 3);
+  const firstThursday = new Date(Date.UTC(weekDate.getUTCFullYear(), 0, 4));
+  const firstWeekDay = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstWeekDay + 3);
 
   const weekNumber =
     1 + Math.round((weekDate - firstThursday) / (7 * 24 * 60 * 60 * 1000));
-  const weekKey = `${weekDate.getFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+  const weekKey = `${weekDate.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
 
   return { dayKey, weekKey, monthKey };
 }
@@ -50,6 +50,19 @@ function formatMonthLabel(monthKey) {
   return `${month}/${year}`;
 }
 
+function formatDateTime(timestamp) {
+  if (!timestamp) return "Chưa có dữ liệu";
+  const date = new Date(timestamp);
+  const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const hours = String(vnTime.getUTCHours()).padStart(2, "0");
+  const minutes = String(vnTime.getUTCMinutes()).padStart(2, "0");
+  const seconds = String(vnTime.getUTCSeconds()).padStart(2, "0");
+  const day = String(vnTime.getUTCDate()).padStart(2, "0");
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, "0");
+  const year = vnTime.getUTCFullYear();
+  return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
+}
+
 function normalizeStatEntry(rawEntry) {
   if (typeof rawEntry === "number") {
     return {
@@ -57,6 +70,7 @@ function normalizeStatEntry(rawEntry) {
       daily: {},
       weekly: {},
       monthly: {},
+      streak: { current: 0, lastDate: null, lastTime: 0, longest: 0, brokenCount: 0 }
     };
   }
 
@@ -66,6 +80,7 @@ function normalizeStatEntry(rawEntry) {
       daily: {},
       weekly: {},
       monthly: {},
+      streak: { current: 0, lastDate: null, lastTime: 0, longest: 0, brokenCount: 0 }
     };
   }
 
@@ -84,6 +99,13 @@ function normalizeStatEntry(rawEntry) {
     daily: sanitizeMap(rawEntry.daily),
     weekly: sanitizeMap(rawEntry.weekly),
     monthly: sanitizeMap(rawEntry.monthly),
+    streak: {
+      current: Number(rawEntry.streak?.current) || 0,
+      lastDate: rawEntry.streak?.lastDate || null,
+      lastTime: Number(rawEntry.streak?.lastTime) || 0,
+      longest: Number(rawEntry.streak?.longest) || 0,
+      brokenCount: Number(rawEntry.streak?.brokenCount) || 0
+    }
   };
 }
 
@@ -149,7 +171,7 @@ function buildRankList({ threadInfo, threadStats, threshold }) {
     const monthCount = Number(normalized.monthly?.[monthKey] || 0);
     const inGroup = participantSet.has(uid);
 
-    return { uid, name, count, dayCount, weekCount, monthCount, inGroup };
+    return { uid, name, count, dayCount, weekCount, monthCount, inGroup, streak: normalized.streak };
   });
 
   const filtered =
@@ -191,13 +213,80 @@ function suppressLeaveEvents(threadID, durationMs = 15000) {
   global.leaveEventSuppressByThread[String(threadID)] = Date.now() + durationMs;
 }
 
+async function sendWarning({ api, threadID, ranked, botID, metricKey = "count", threshold = 0 }) {
+  const limit = Number(threshold);
+  const metricLabels = {
+    count: "tổng tin nhắn",
+    dayCount: "tin nhắn hôm nay",
+    weekCount: "tin nhắn tuần này",
+    monthCount: "tin nhắn tháng này",
+  };
+  const metricLabel = metricLabels[metricKey] || metricLabels.count;
+
+  const candidates = ranked.filter((item) => {
+    const uid = String(item.uid);
+    if (!item.inGroup) return false;
+    if (uid === botID) return false;
+    return Number(item[metricKey] || 0) <= limit;
+  });
+
+  if (candidates.length === 0) {
+    return api.sendMessage(
+      `📭 Không có thành viên nào có ${metricLabel} ≤ ${limit}.`,
+      threadID
+    );
+  }
+
+  let body = `📣 CẢNH BÁO TƯƠNG TÁC\nCác thành viên sau đây có ${metricLabel} ≤ ${limit}:\n━━━━━━━━━━━━━\n`;
+  const mentions = [];
+
+  candidates.forEach((item, index) => {
+    const cleanName = String(item.name || "").replace(/[\r\n]+/g, " ").trim() || `User ${String(item.uid).slice(-6)}`;
+    const mentionText = `@${cleanName}`;
+    const prefixOfLine = `${index + 1}. `;
+    const fromIndex = body.length + prefixOfLine.length;
+
+    body += `${prefixOfLine}${mentionText} — ${Number(item[metricKey] || 0)} tin\n`;
+
+    mentions.push({
+      id: String(item.uid),
+      tag: mentionText,
+      fromIndex: fromIndex
+    });
+  });
+
+  body += `\n👉 Vui lòng tương tác tích cực hơn để tránh bị lọc khỏi nhóm!`;
+
+  await sendMessageSafe(api, { body, mentions }, threadID);
+}
+
 module.exports = {
   name: "checktt",
   description: "Kiểm tra tương tác, lọc/kick/reset dữ liệu tin nhắn",
   usage:
-    `\n${prefix}checktt all → Xem top tương tác tất cả thành viên\n${prefix}checktt → Xem top tương tác của 1 người\n${prefix}checktt ngày → Top tương tác hôm nay\n${prefix}checktt tuần → Top tuần này\n${prefix}checktt tháng → Top tháng này\n${prefix}checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n${prefix}checktt kickdead → Kick thành viên bị bay acc\n${prefix}checktt clear → Làm sạch dữ liệu tương tác\n${prefix}checktt reset → Reset dữ liệu nhóm (Admin)\n━━━━━━━━━━━━━\n📊 Thống kê tự động theo ngày/tuần/tháng`,
+    `\n${prefix}checktt all → Xem top tương tác tất cả thành viên\n${prefix}checktt → Xem top tương tác của 1 người\n${prefix}checktt ngày → Top tương tác hôm nay\n${prefix}checktt tuần → Top tuần này\n${prefix}checktt tháng → Top tháng này\n${prefix}checktt toplv → Xem bảng xếp hạng level trong nhóm\n${prefix}checktt locmem [X] → Lọc thành viên từ X tin nhắn trở xuống\n${prefix}checktt kickdead → Kick thành viên bị bay acc\n${prefix}checktt clear → Làm sạch dữ liệu tương tác\n${prefix}checktt canhbao [X] → Cảnh báo theo tổng tin nhắn ≤ X (mặc định 0)\n${prefix}checktt canhbao [ngày|tuần|tháng] [X] → Cảnh báo theo mốc thời gian, X mặc định 0\n${prefix}checktt reset → Reset dữ liệu nhóm (Admin)\n━━━━━━━━━━━━━\n📊 Thống kê tự động theo ngày/tuần/tháng`,
 
-  execute: async ({ api, event, args }) => {
+  execute: async ({ api: originalApi, event, args }) => {
+    const api = Object.create(originalApi);
+    api.sendMessage = (...args) => {
+      let msg = args[0];
+      let text = typeof msg === "string" ? msg : (msg && msg.body) || "";
+      if (text.startsWith("📊") && typeof api.sendMessageEffect === "function") {
+        const effects = ["LOVE", "GIFTWRAP", "CELEBRATION", "FIRE"];
+        const randomEffect = effects[Math.floor(Math.random() * effects.length)];
+        if (typeof msg === "string") {
+          msg = { body: msg, effect: randomEffect };
+        } else if (msg && typeof msg === "object") {
+          if (!msg.effect) {
+            msg.effect = randomEffect;
+          }
+        }
+        args[0] = msg;
+        return api.sendMessageEffect(...args);
+      }
+      return originalApi.sendMessage(...args);
+    };
+
     const { threadID, messageID, senderID } = event;
 
     const cooldown = checkCooldown({
@@ -248,19 +337,19 @@ module.exports = {
         adminBotUIDs = [];
       }
 
+      // Check renter status for management actions
+      let isRenter = false;
+      try {
+        const { getRenterID } = require("../../utils/rental");
+        const renterID = await getRenterID(threadID);
+        isRenter = renterID && String(senderID) === String(renterID);
+      } catch (e) {}
+
       const isSenderBotAdmin = Array.isArray(adminBotUIDs)
         ? adminBotUIDs.includes(String(senderID))
         : false;
       const isBotAdmin = adminIDs.includes(botID);
-      const canUseChecktt = isSenderAdmin || isSenderBotAdmin;
-
-      if (!canUseChecktt) {
-        return api.sendMessage(
-          "⚠️ Lệnh checktt chỉ dành cho QTV nhóm hoặc chủ bot.",
-          threadID,
-          messageID,
-        );
-      }
+      const canManageChecktt = isSenderAdmin || isSenderBotAdmin || isRenter;
 
       const stats = readStats();
       if (!stats[threadID]) stats[threadID] = {};
@@ -270,10 +359,49 @@ module.exports = {
       const sub = (args[0] || "").toLowerCase();
       const subNorm = stripDiacritics(sub);
 
-      if (sub === "reset") {
-        if (!canUseChecktt) {
+      if (subNorm === "canhbao" || subNorm === "cb") {
+        if (!canManageChecktt) {
           return api.sendMessage(
-            "⚠️ Chỉ QTV nhóm hoặc chủ bot mới được reset dữ liệu tương tác.",
+            "⚠️ Chỉ QTV nhóm, người thuê bot hoặc chủ bot mới được sử dụng tính năng cảnh báo.",
+            threadID,
+            messageID,
+          );
+        }
+
+        const warningPeriods = {
+          ngay: "dayCount",
+          tuan: "weekCount",
+          thang: "monthCount",
+        };
+        const requestedPeriod = stripDiacritics(String(args[1] ?? "").trim());
+        const metricKey = warningPeriods[requestedPeriod] || "count";
+        const rawThreshold = String(
+          warningPeriods[requestedPeriod] ? args[2] ?? "" : args[1] ?? "",
+        ).trim();
+        const threshold = rawThreshold === "" ? 0 : Number(rawThreshold);
+        if (!Number.isInteger(threshold) || threshold < 0) {
+          return api.sendMessage(
+            `⚠️ Dùng: ${prefix}checktt canhbao [X] hoặc ${prefix}checktt canhbao [ngày|tuần|tháng] [X], với X là số nguyên ≥ 0.`,
+            threadID,
+            messageID,
+          );
+        }
+
+        await sendWarning({
+          api,
+          threadID,
+          ranked: rankedBase,
+          botID,
+          metricKey,
+          threshold,
+        });
+        return;
+      }
+
+      if (sub === "reset") {
+        if (!canManageChecktt) {
+          return api.sendMessage(
+            "⚠️ Chỉ QTV nhóm, người thuê bot hoặc chủ bot mới được reset dữ liệu tương tác.",
             threadID,
             messageID,
           );
@@ -289,9 +417,9 @@ module.exports = {
       }
 
       if (sub === "clear") {
-        if (!canUseChecktt) {
+        if (!canManageChecktt) {
           return api.sendMessage(
-            "⚠️ Chỉ QTV nhóm hoặc chủ bot mới được clear dữ liệu tương tác.",
+            "⚠️ Chỉ QTV nhóm, người thuê bot hoặc chủ bot mới được clear dữ liệu tương tác.",
             threadID,
             messageID,
           );
@@ -328,9 +456,9 @@ module.exports = {
       }
 
       if (sub === "kickdead") {
-        if (!canUseChecktt) {
+        if (!canManageChecktt) {
           return api.sendMessage(
-            "⚠️ Chỉ QTV nhóm hoặc chủ bot mới được kickdead.",
+            "⚠️ Chỉ QTV nhóm, người thuê bot hoặc chủ bot mới được kickdead.",
             threadID,
             messageID,
           );
@@ -580,6 +708,8 @@ module.exports = {
           );
         }
 
+        const totalPeriodMessages = ranked.reduce((acc, item) => acc + Number(item[config.metricKey] || 0), 0);
+
         const title = config.getTitle
           ? config.getTitle()
           : `📊 TOP ${config.label}`;
@@ -588,10 +718,15 @@ module.exports = {
           "━━━━━━━━━━━━━",
           ...ranked.map((item, idx) => {
             const status = item.inGroup ? "" : " (❌)";
-            return `${idx + 1}. ${item.name}${status} — ${Number(item[config.metricKey] || 0)}`;
+            const count = Number(item[config.metricKey] || 0);
+            const streak = item.streak?.current || 0;
+            return `${idx + 1}. ${item.name}${status} - ${count} tin | ${streak} ngày 🔥`;
           }),
+          "━━━━━━━━━━━━━",
+          `💬 Tổng tin nhắn ${config.label.toLowerCase()}: ${totalPeriodMessages}`,
           "",
           "(Reply STT để kick/xóa data)",
+          `Gõ ${prefix}help checktt để xem hướng dẫn chi tiết`
         ];
 
         const chunks = chunkLines(lines);
@@ -637,8 +772,14 @@ module.exports = {
         return;
       }
 
-      if (!sub) {
-        const targetID = String(event.messageReply?.senderID || senderID);
+      if (!sub || (event.mentions && Object.keys(event.mentions).length > 0)) {
+        let targetID = String(senderID);
+        if (event.messageReply) {
+          targetID = String(event.messageReply.senderID);
+        } else if (event.mentions && Object.keys(event.mentions).length > 0) {
+          targetID = String(Object.keys(event.mentions)[0]);
+        }
+
         const target = rankedBase.find((item) => String(item.uid) === targetID);
 
         const sortedByMetric = (metricKey) => {
@@ -657,30 +798,114 @@ module.exports = {
           return idx >= 0 ? idx + 1 : sortedList.length;
         };
 
+        const mentionName = event.mentions && event.mentions[targetID] ? String(event.mentions[targetID]).replace(/^@/, '') : `User ${targetID.slice(-6)}`;
         const safeTarget = target || {
           uid: targetID,
-          name: `User ${targetID.slice(-6)}`,
+          name: mentionName,
           count: 0,
           dayCount: 0,
           weekCount: 0,
           monthCount: 0,
           inGroup: false,
+          streak: { current: 0, lastDate: null, lastTime: 0, longest: 0, brokenCount: 0 }
         };
+
+        const LevelSystem = require("../../utils/LevelSystem");
+        const userLevel = await LevelSystem.getLevel(safeTarget.uid, threadID);
+        const userExp = await LevelSystem.getExp(safeTarget.uid, threadID);
+        const reqExp = LevelSystem.getRequiredExp(userLevel);
 
         const dayRank = getRank(sortedByMetric("dayCount"), safeTarget.uid);
         const weekRank = getRank(sortedByMetric("weekCount"), safeTarget.uid);
         const monthRank = getRank(sortedByMetric("monthCount"), safeTarget.uid);
         const totalRank = getRank(sortedByMetric("count"), safeTarget.uid);
 
-        let msg = `📊 ${safeTarget.name}: \n`;
-        msg += `Ngày: #${dayRank}/${rankedBase.length} (${safeTarget.dayCount})\nTuần: #${weekRank}/${rankedBase.length} (${safeTarget.weekCount})\nTháng: #${monthRank}/${rankedBase.length} (${safeTarget.monthCount})\nTổng: #${totalRank}/${rankedBase.length} (${safeTarget.count})`;
+        let msg = `📊 THÔNG TIN TƯƠNG TÁC: ${safeTarget.name}\n`;
+        msg += `━━━━━━━━━━━━━\n`;
+        msg += `• Hạng ngày: #${dayRank}/${rankedBase.length} (${safeTarget.dayCount} tin)\n`;
+        msg += `• Hạng tuần: #${weekRank}/${rankedBase.length} (${safeTarget.weekCount} tin)\n`;
+        msg += `• Hạng tháng: #${monthRank}/${rankedBase.length} (${safeTarget.monthCount} tin)\n`;
+        msg += `• Hạng tổng: #${totalRank}/${rankedBase.length} (${safeTarget.count} tin)\n`;
+        msg += `━━━━━━━━━━━━━\n`;
+        const formatNum = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+        const titleInfo = LevelSystem.getTitle(userLevel);
+
+        msg += `⭐ Cấp: ${userLevel}\n`;
+        msg += `🏷️ Danh hiệu: ${titleInfo.icon} ${titleInfo.title}\n`;
+        msg += `EXP: ${formatNum(userExp)} / ${formatNum(reqExp)}\n`;
+        msg += `━━━━━━━━━━━━━\n`;
+        msg += `🔥 Chuỗi tương tác: ${safeTarget.streak?.current || 0} ngày liên tục\n`;
+        msg += `🏆 Kỷ lục chuỗi: ${safeTarget.streak?.longest || 0} ngày\n`;
+
+        const lastTimeFormatted = formatDateTime(safeTarget.streak?.lastTime);
+        msg += `⏰ Tương tác gần nhất: ${lastTimeFormatted}`;
 
         return api.sendMessage(msg, threadID, messageID);
       }
 
+      if (subNorm === "toplv" || subNorm === "level") {
+        const LevelSystem = require("../../utils/LevelSystem");
+        const { getConnection } = require("../../utils/database");
+        const connection = await getConnection();
+        let dbRows = [];
+        try {
+          const [rows] = await connection.execute(
+            "SELECT psid, level, current_exp, total_exp FROM messenger_users WHERE thread_id = ?",
+            [String(threadID)]
+          );
+          dbRows = rows || [];
+        } finally {
+          connection.release();
+        }
+
+        const dbMap = new Map(dbRows.map(row => [String(row.psid), row]));
+        const levelRanked = rankedBase.map(member => {
+          const dbRow = dbMap.get(String(member.uid)) || { level: 0, current_exp: 0, total_exp: 0 };
+          return {
+            uid: member.uid,
+            name: member.name,
+            inGroup: member.inGroup,
+            level: dbRow.level !== undefined && dbRow.level !== null ? Number(dbRow.level) : 0,
+            currentExp: Number(dbRow.current_exp) || 0,
+            totalExp: Number(dbRow.total_exp) || 0
+          };
+        }).sort((a, b) => {
+          if (b.level !== a.level) return b.level - a.level;
+          return b.totalExp - a.totalExp;
+        });
+
+        if (levelRanked.length === 0) {
+          return api.sendMessage("📭 Chưa có dữ liệu cấp độ để hiển thị.", threadID, messageID);
+        }
+
+        const formatNum = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+        const lines = [
+          "🏆 BẢNG XẾP HẠNG LEVEL NHÓM 🏆",
+          "━━━━━━━━━━━━━━━━━",
+          ...levelRanked.map((item, idx) => {
+            const status = item.inGroup ? "" : " (❌)";
+            const titleInfo = LevelSystem.getTitle(item.level);
+            return `${idx + 1}. ${item.name}${status} - Cấp ${item.level} [${titleInfo.icon} ${titleInfo.title}]`;
+          }),
+          "━━━━━━━━━━━━━━━━━",
+          "👉 Hãy tích cực trò chuyện để nâng cao thứ hạng của bạn!"
+        ];
+
+        const chunks = chunkLines(lines);
+        for (let i = 0; i < chunks.length; i++) {
+          await sendMessageSafe(
+            api,
+            chunks[i],
+            threadID,
+            i === chunks.length - 1 ? messageID : undefined,
+          );
+        }
+        return;
+      }
+
       if (sub !== "all") {
         return api.sendMessage(
-          "⚠️ Cú pháp không hợp lệ. Dùng: checktt | checktt all | checktt ngày | checktt tuần | checktt tháng",
+          "⚠️ Cú pháp không hợp lệ. Dùng: checktt | checktt all | checktt ngày | checktt tuần | checktt tháng | checktt toplv",
           threadID,
           messageID,
         );
@@ -700,10 +925,13 @@ module.exports = {
         "━━━━━━━━━━━━━",
         ...ranked.map((item, idx) => {
           const status = item.inGroup ? "" : " (❌)";
-          return `${idx + 1}. ${item.name}${status} — ${item.count}`;
+          const count = Number(item.count || 0);
+          const streak = item.streak?.current || 0;
+          return `${idx + 1}. ${item.name}${status} - ${count} tin | ${streak} ngày 🔥`;
         }),
         "",
         "(Reply STT để kick/xóa data)",
+        `Gõ ${prefix}help checktt để xem hướng dẫn chi tiết`
       ];
 
       const chunks = chunkLines(lines);
@@ -750,7 +978,27 @@ module.exports = {
     }
   },
 
-  handleReply: async ({ api, event }) => {
+  handleReply: async ({ api: originalApi, event }) => {
+    const api = Object.create(originalApi);
+    api.sendMessage = (...args) => {
+      let msg = args[0];
+      let text = typeof msg === "string" ? msg : (msg && msg.body) || "";
+      if (text.startsWith("📊") && typeof api.sendMessageEffect === "function") {
+        const effects = ["LOVE", "GIFTWRAP", "CELEBRATION", "FIRE"];
+        const randomEffect = effects[Math.floor(Math.random() * effects.length)];
+        if (typeof msg === "string") {
+          msg = { body: msg, effect: randomEffect };
+        } else if (msg && typeof msg === "object") {
+          if (!msg.effect) {
+            msg.effect = randomEffect;
+          }
+        }
+        args[0] = msg;
+        return api.sendMessageEffect(...args);
+      }
+      return originalApi.sendMessage(...args);
+    };
+
     try {
       if (event.type !== "message_reply") return;
 
@@ -769,10 +1017,23 @@ module.exports = {
       }
 
       const input = String(body || "").trim();
+      const botID = String(api.getCurrentUserID());
 
       // allow replying with: locmem <threshold>
       try {
-        const bodyNorm = stripDiacritics(input).trim();
+        const bodyNorm = stripDiacritics(input).trim().toLowerCase();
+
+        if (bodyNorm === "canhbao" || bodyNorm === "cb" || bodyNorm === "checktt canhbao" || bodyNorm === `${prefix}checktt canhbao`) {
+          await sendWarning({
+            api,
+            threadID,
+            ranked: context.ranked,
+            metricKey: context.metricKey,
+            botID,
+          });
+          return;
+        }
+
         const locm = bodyNorm.match(/^locmem(?:\s+(\d+))?$/i);
         if (locm && context.metricKey) {
           const threshold = Number(locm[1]);
@@ -787,7 +1048,6 @@ module.exports = {
 
           const threadInfo = await getThreadInfoCached(api, threadID);
           const adminIDs = toAdminIdList(threadInfo);
-          const botID = String(api.getCurrentUserID());
           const isSenderAdmin = adminIDs.includes(String(senderID));
 
           // Get admin bot UIDs safely
@@ -910,6 +1170,10 @@ module.exports = {
         console.error("Error handling locmem reply:", err);
       }
 
+      if (!/^[0-9\s,.-]+$/.test(input)) {
+        return;
+      }
+
       const sttMatches = input.match(/\d+/g) || [];
       const sttList = [
         ...new Set(sttMatches.map((n) => Number(n)).filter(Number.isInteger)),
@@ -940,10 +1204,7 @@ module.exports = {
       }
 
       const threadInfo = await getThreadInfoCached(api, threadID);
-      const adminIDs = Array.isArray(threadInfo.adminIDs)
-        ? threadInfo.adminIDs.map((a) => String(a.id))
-        : [];
-      const botID = String(api.getCurrentUserID());
+      const adminIDs = toAdminIdList(threadInfo);
       const isSenderAdmin = adminIDs.includes(String(senderID));
 
       // Get admin bot UIDs safely

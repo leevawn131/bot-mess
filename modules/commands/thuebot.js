@@ -2,14 +2,16 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const { execute } = require("../utils/database");
-const { ensureRentedGroupsSchema } = require("../utils/rentalSchema");
+const { ensureRentedGroupsSchema, ensureTransactionsSchema } = require("../utils/rentalSchema");
+const { ensureAccountClusterSchema } = require("../utils/accountSchema");
 const { getThreadInfoCached } = require("../utils/threadInfo");
 
 async function sendRentedList(api, threadID, senderID, page) {
   try {
     await ensureRentedGroupsSchema();
+    await ensureAccountClusterSchema();
     const rented = await execute(
-      "SELECT * FROM rented_groups ORDER BY expire_date DESC"
+      "SELECT * FROM rented_groups WHERE thread_id NOT IN ('1523319575522034', '844251878447942') ORDER BY expire_date DESC"
     );
 
     if (!rented || rented.length === 0) {
@@ -20,8 +22,6 @@ async function sendRentedList(api, threadID, senderID, page) {
     const totalPages = Math.ceil(rented.length / itemsPerPage);
 
     if (page < 1) page = 1;
-    if (page > totalPages) page = totalPages;
-
     const startIndex = (page - 1) * itemsPerPage;
     const pageItems = rented.slice(startIndex, startIndex + itemsPerPage);
 
@@ -35,11 +35,18 @@ async function sendRentedList(api, threadID, senderID, page) {
       const rentedAt = group.rented_at ? new Date(group.rented_at) : null;
       const renterId = group.renter_id ? String(group.renter_id) : "";
 
+      const isStopped = !!group.is_stopped;
+      const pausedMs = Number(group.paused_remaining_ms || 0);
+
       const now = new Date();
       const diffMs = expireDate - now;
       let statusText = "";
 
-      if (diffMs > 0) {
+      if (isStopped) {
+        const pDays = Math.floor(pausedMs / (1000 * 60 * 60 * 24));
+        const pHours = Math.floor((pausedMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        statusText = `⏸️ ĐÃ TẠM DỪNG (Bảo lưu ${pDays}d ${pHours}h)`;
+      } else if (diffMs > 0) {
         const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
         statusText = `còn ${diffDays} ngày`;
       } else {
@@ -50,7 +57,7 @@ async function sendRentedList(api, threadID, senderID, page) {
       try {
         const tInfo = await getThreadInfoCached(api, rThreadID);
         if (tInfo && tInfo.threadName) groupName = tInfo.threadName;
-      } catch (e) {}
+      } catch (e) { }
 
       let renterName = "Không rõ";
       try {
@@ -76,20 +83,46 @@ async function sendRentedList(api, threadID, senderID, page) {
             }
           }
         }
-      } catch (e) {}
+      } catch (e) { }
+
+      let assignedProfilesText = "Default";
+      try {
+        const binding = await execute(`SELECT cluster_id, assigned_profiles FROM group_profile_bindings WHERE thread_id = ?`, [rThreadID]);
+        if (binding && binding.length > 0) {
+          const clusterId = binding[0].cluster_id;
+          const accountProfilesManager = require("../../src/managers/accountProfilesManager");
+          accountProfilesManager.loadConfig();
+          const clusters = accountProfilesManager.config ? accountProfilesManager.config.clusters : [];
+          const clusterObj = clusters.find(c => String(c.cluster_id) === String(clusterId));
+          if (clusterObj && clusterObj.active_profile) {
+            assignedProfilesText = clusterObj.active_profile;
+          } else {
+            const profilesArr = JSON.parse(binding[0].assigned_profiles);
+            if (Array.isArray(profilesArr) && profilesArr.length > 0) {
+              assignedProfilesText = profilesArr[0];
+            }
+          }
+        }
+      } catch (e) { }
 
       const packageType = group.is_admin_rental ? "ADMIN-BOT" : "THƯỜNG";
       msg += `${displayIndex}. Nhóm: ${groupName}\n`;
       msg += `   TID: ${rThreadID}\n`;
       msg += `   Gói: ${packageType}\n`;
+      msg += `   Profile đang chạy: ${assignedProfilesText}\n`;
       msg += `   Người thuê: ${renterName}\n`;
       msg += `   Thời điểm thuê: ${rentedAt ? rentedAt.toLocaleString("vi-VN") : "Không rõ"}\n`;
-      msg += `   Hết hạn: ${expireDate.toLocaleString("vi-VN")} (${statusText})\n\n`;
+      if (isStopped) {
+        msg += `   Hết hạn: ⏸️ Đang tạm dừng tính ngày (${statusText})\n\n`;
+      } else {
+        msg += `   Hết hạn: ${expireDate.toLocaleString("vi-VN")} (${statusText})\n\n`;
+      }
     }
 
     msg += "━━━━━━━━━━━━━\n";
     msg += `👉 Phản hồi (reply) tin nhắn này kèm:\n`;
     msg += `• del <Số thứ tự> để xóa nhóm khỏi danh sách\n`;
+    msg += `• stop <Số thứ tự> để tạm dừng / tiếp tục tính ngày\n`;
     msg += `• giahan <Số thứ tự> <thuong/admin> <thời gian: 30d/1m>\n`;
     msg += `• page <Số trang> để chuyển trang (Ví dụ: page 2)\n`;
     msg += `⚠️ Tin nhắn này sẽ tự động gỡ sau khi thực hiện thao tác.`;
@@ -124,17 +157,234 @@ async function sendRentedList(api, threadID, senderID, page) {
   }
 }
 
+
+async function sendOrderHistory(api, threadID, senderID, page) {
+  try {
+    await ensureTransactionsSchema();
+    await execute(
+      "UPDATE transactions SET status = 'cancelled', updated_at = datetime('now') WHERE status = 'pending' AND created_at <= datetime('now', '-15 minutes')"
+    );
+    const orders = await execute(
+      "SELECT * FROM transactions ORDER BY created_at DESC"
+    );
+
+    if (!orders || orders.length === 0) {
+      return api.sendMessage("📭 Chưa có giao dịch nào trong lịch sử.", threadID);
+    }
+
+    const itemsPerPage = 7;
+    const totalPages = Math.ceil(orders.length / itemsPerPage);
+
+    if (page < 1) page = 1;
+    if (page > totalPages) page = totalPages;
+    const startIndex = (page - 1) * itemsPerPage;
+    const pageItems = orders.slice(startIndex, startIndex + itemsPerPage);
+
+    const statusEmoji = {
+      pending: "⏳ Chờ thanh toán",
+      success: "✅ Thành công",
+      cancelled: "❌ Đã hủy"
+    };
+
+    function formatDate(dateStr) {
+      if (!dateStr) return "—";
+      try {
+        const d = new Date(dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T") + "Z");
+        if (isNaN(d.getTime())) return dateStr;
+        return d.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+      } catch (e) {
+        return dateStr;
+      }
+    }
+
+    let msg = `📋 LỊCH SỬ ĐƠN HÀNG [Trang ${page}/${totalPages}]\n━━━━━━━━━━━━━\n\n`;
+
+    for (let i = 0; i < pageItems.length; i++) {
+      const displayIndex = startIndex + i + 1;
+      const o = pageItems[i];
+
+      const groupName = o.group_name || "(chưa lưu)";
+      const planName = o.plan_name || (o.transaction_code?.startsWith("ADM") ? "ADMIN-BOT" : "THƯỜNG");
+      const monthsStr = o.months ? `${o.months} tháng` : "—";
+      const amountStr = Number(o.amount).toLocaleString("vi-VN");
+      const statusStr = statusEmoji[o.status] || o.status;
+      const updatedStr = o.updated_at ? ` (${formatDate(o.updated_at)})` : "";
+
+      msg += `#${displayIndex} — ${o.transaction_code}\n`;
+      msg += `   📌 Nhóm: ${groupName}\n`;
+      msg += `   🆔 TID: ${o.thread_id}\n`;
+      msg += `   👤 Người thuê: ${o.user_id}\n`;
+      msg += `   📦 Gói: ${planName} — ${monthsStr}\n`;
+      msg += `   💵 Số tiền: ${amountStr} VNĐ\n`;
+      msg += `   📅 Tạo: ${formatDate(o.created_at)}\n`;
+      msg += `   🏷️ Trạng thái: ${statusStr}${updatedStr}\n\n`;
+    }
+
+    msg += `━━━━━━━━━━━━━\n`;
+    msg += `📄 Trang ${page}/${totalPages} (Tổng: ${orders.length} đơn)\n`;
+    if (totalPages > 1) {
+      msg += `Reply "page <số>" để chuyển trang`;
+    }
+
+    const info = await api.sendMessage(msg, threadID);
+
+    if (!global.client) global.client = {};
+    if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
+
+    // Xóa các order_history cũ trong thread này
+    const list = global.client.handleReply;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (
+        list[i].name === "thuebot" &&
+        list[i].type === "order_history" &&
+        String(list[i].threadID) === String(threadID)
+      ) {
+        list.splice(i, 1);
+      }
+    }
+
+    global.client.handleReply.push({
+      name: "thuebot",
+      type: "order_history",
+      author: senderID,
+      messageID: info.messageID,
+      threadID: threadID,
+      page: page
+    });
+  } catch (e) {
+    console.error("Lỗi khi tải lịch sử đơn hàng:", e);
+    return api.sendMessage("❌ Lỗi khi lấy lịch sử đơn hàng.", threadID);
+  }
+}
+
+
+const botPrefix = process.env.BOT_PREFIX || "!";
+
 module.exports = {
   name: "thuebot",
-  description: "Thuê bot hoặc gia hạn bot bằng mã QR tự động",
-  usage: "!thuebot [số_tháng] | list (chỉ admin)",
+  description: "Bảng giá thuê bot, chuyển khoản tự động, quản lý nhóm thuê & slot cụm acc",
+  usage:
+    `\n${botPrefix}thuebot → Xem bảng giá & tạo mã QR thuê bot tự động` +
+    `\n${botPrefix}thuebot giahan → Gia hạn thời hạn sử dụng bot cho nhóm hiện tại` +
+    `\n${botPrefix}thuebot doigoi → Đổi gói thuê (THƯỜNG ⇄ ADMIN-BOT)` +
+    `\n${botPrefix}thuebot doigoi xacnhan → Xác nhận thực hiện chuyển đổi gói` +
+    `\n${botPrefix}thuebot huy → Hủy giao dịch thuê bot đang chờ thanh toán` +
+    `\n━━━━━━━━━━━━━━━━━━━━━━━` +
+    `\n👑 CÁC LỆNH DÀNH CHO ADMIN BOT:` +
+    `\n${botPrefix}thuebot list → Xem danh sách tất cả các nhóm đang thuê bot` +
+    `\n${botPrefix}thuebot lichsu → Xem lịch sử đơn hàng thuê bot` +
+    `\n${botPrefix}thuebot stop [STT / TID] → Tạm dừng / Tiếp tục đếm ngày thuê bot` +
+    `\n${botPrefix}thuebot del [STT / TID] → Xóa nhóm khỏi danh sách thuê bot`,
 
   async execute({ api, event, args, config }) {
     const threadID = event.threadID;
     const senderID = event.senderID;
+    const messageID = event.messageID;
+    const prefix = config?.prefix || "!";
 
     try {
       await ensureRentedGroupsSchema();
+
+      const subArg = args && args[0] ? args[0].toLowerCase() : "";
+
+
+      // Xử lý các lệnh quản lý trực tiếp bằng TID hoặc STT (chỉ admin bot)
+      if (["stop", "pause", "start", "resume", "del", "delete"].includes(subArg) && args[1]) {
+        const { getAdminBotUIDs } = require("../utils/checkPermission");
+        const adminIDs = getAdminBotUIDs();
+        if (!adminIDs.includes(String(senderID))) {
+          return api.sendMessage("⚠️ Chỉ Admin Bot mới có quyền dùng lệnh này.", threadID, messageID);
+        }
+
+        const targetArg = args[1].trim();
+        const rented = await execute(
+          "SELECT * FROM rented_groups WHERE thread_id NOT IN ('1523319575522034', '844251878447942') ORDER BY expire_date DESC"
+        );
+
+        let targetGroup = null;
+        let targetIndexStr = "";
+
+        // 1. Nếu targetArg là TID dạng số dài (length >= 10)
+        if (/^\d{10,}$/.test(targetArg)) {
+          targetGroup = rented.find(g => String(g.thread_id) === targetArg);
+          targetIndexStr = `TID ${targetArg}`;
+        } else if (!isNaN(targetArg)) {
+          // 2. Nếu targetArg là STT
+          const idx = parseInt(targetArg);
+          if (idx >= 1 && idx <= rented.length) {
+            targetGroup = rented[idx - 1];
+            targetIndexStr = `STT ${idx}`;
+          }
+        }
+
+        if (!targetGroup) {
+          return api.sendMessage(`❌ Không tìm thấy nhóm nào có TID hoặc STT là "${targetArg}" trong danh sách thuê bot.`, threadID, messageID);
+        }
+
+        const targetThreadID = String(targetGroup.thread_id);
+
+        // Xử lý XÓA
+        if (subArg === "del" || subArg === "delete") {
+          await execute("DELETE FROM rented_groups WHERE thread_id = ?", [targetThreadID]);
+          try {
+            const { clearRentalCache } = require("../utils/rental");
+            clearRentalCache(targetThreadID);
+          } catch (e) { }
+
+          try {
+            await api.sendMessage("⚠️ Nhóm của bạn đã bị gỡ quyền sử dụng bot do admin hủy thuê.", targetThreadID);
+          } catch (e) { }
+
+          return api.sendMessage(`✅ Đã xóa thành công nhóm ${targetIndexStr} (TID: ${targetThreadID}) khỏi danh sách thuê bot.`, threadID, messageID);
+        }
+
+        // Xử lý TẠM DỪNG / TIẾP TỤC
+        if (["stop", "pause", "start", "resume"].includes(subArg)) {
+          const isStopped = !!targetGroup.is_stopped;
+          if (!isStopped) {
+            // Tạm dừng
+            const expireDate = new Date(targetGroup.expire_date);
+            const remainingMs = expireDate.getTime() - Date.now();
+
+            if (remainingMs <= 0) {
+              return api.sendMessage(`⚠️ Nhóm ${targetIndexStr} (TID: ${targetThreadID}) đã hết hạn, không thể tạm dừng.`, threadID, messageID);
+            }
+
+            await execute("UPDATE rented_groups SET is_stopped = 1, paused_remaining_ms = ? WHERE thread_id = ?", [remainingMs, targetThreadID]);
+            try {
+              const { clearRentalCache } = require("../utils/rental");
+              clearRentalCache(targetThreadID);
+            } catch (e) { }
+
+            const pDays = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+            const pHours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+            try {
+              await api.sendMessage(`⏸️ [ THÔNG BÁO TẠM DỪNG TÍNH NGÀY ]\n\nNhóm của bạn đã được Admin tạm dừng tính ngày thuê bot.\n⌛ Thời gian còn lại (${pDays} ngày ${pHours} giờ) đã được bảo lưu!`, targetThreadID);
+            } catch (e) { }
+
+            return api.sendMessage(`⏸️ ${targetIndexStr} (TID: ${targetThreadID}): Đã TẠM DỪNG tính ngày (Bảo lưu: ${pDays}d ${pHours}h).`, threadID, messageID);
+          } else {
+            // Mở lại
+            const pausedMs = Number(targetGroup.paused_remaining_ms || 0);
+            const newExpire = new Date(Date.now() + pausedMs);
+
+            await execute("UPDATE rented_groups SET is_stopped = 0, paused_remaining_ms = 0, expire_date = ? WHERE thread_id = ?", [newExpire, targetThreadID]);
+            try {
+              const { clearRentalCache } = require("../utils/rental");
+              clearRentalCache(targetThreadID);
+            } catch (e) { }
+
+            const expireStr = newExpire.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+
+            try {
+              await api.sendMessage(`▶️ [ THÔNG BÁO TIẾP TỤC TÍNH NGÀY ]\n\nNhóm của bạn đã được Admin mở lại đếm ngày thuê bot.\n⏰ Hạn sử dụng mới: ${expireStr}`, targetThreadID);
+            } catch (e) { }
+
+            return api.sendMessage(`▶️ ${targetIndexStr} (TID: ${targetThreadID}): Đã TIẾP TỤC tính ngày (Hạn mới: ${expireStr}).`, threadID, messageID);
+          }
+        }
+      }
 
       if (args && args[0] === "list") {
         const { getAdminBotUIDs } = require("../utils/checkPermission");
@@ -146,13 +396,171 @@ module.exports = {
         return;
       }
 
-      // Xử lý lệnh hủy giao dịch
-      if (args && (args[0] === "huy" || args[0] === "cancel")) {
-        const deleted = await execute(
-          "DELETE FROM transactions WHERE thread_id = ? AND status = 'pending'",
+      if (args && args[0] === "lichsu") {
+        const { getAdminBotUIDs } = require("../utils/checkPermission");
+        const adminIDs = getAdminBotUIDs();
+        if (!adminIDs.includes(String(senderID))) {
+          return api.sendMessage("⚠️ Chỉ Admin Bot mới có quyền xem lịch sử đơn hàng.", threadID, messageID);
+        }
+        await sendOrderHistory(api, threadID, senderID, 1);
+        return;
+      }
+
+      // Xử lý chuyển đổi gói (doigoi)
+      if (args && args[0] === "doigoi") {
+        const { getAdminBotUIDs, toAdminIdList } = require("../utils/checkPermission");
+        const { getRenterID } = require("../utils/rental");
+        const adminIDs = getAdminBotUIDs();
+        const renterID = await getRenterID(threadID);
+
+        let isAuthorized = adminIDs.includes(String(senderID)) || (renterID && String(senderID) === String(renterID));
+        if (!isAuthorized) {
+          try {
+            const threadInfo = await getThreadInfoCached(api, threadID);
+            if (threadInfo) {
+              const grAdmins = toAdminIdList(threadInfo);
+              if (grAdmins.includes(String(senderID))) {
+                isAuthorized = true;
+              }
+            }
+          } catch (e) { }
+        }
+
+        if (!isAuthorized) {
+          return api.sendMessage(
+            "❌ Chỉ có QTV nhóm, Người thuê bot hoặc Admin Bot mới có thể chuyển đổi gói!",
+            threadID,
+            messageID
+          );
+        }
+
+        const rentalInfo = await execute(
+          "SELECT expire_date, is_admin_rental FROM rented_groups WHERE thread_id = ?",
           [threadID]
         );
-        if (deleted.affectedRows > 0) {
+
+        if (!rentalInfo || rentalInfo.length === 0) {
+          return api.sendMessage(
+            "❌ Nhóm của bạn chưa đăng ký gói thuê bot nào, không thể chuyển đổi gói!",
+            threadID,
+            messageID
+          );
+        }
+
+        const isStopped = !!rentalInfo[0].is_stopped;
+        const currentIsAdmin = !!rentalInfo[0].is_admin_rental;
+        const now = new Date();
+
+        let diffMs = 0;
+        let currentExpire = null;
+
+        if (isStopped) {
+          diffMs = Number(rentalInfo[0].paused_remaining_ms || 0);
+        } else {
+          currentExpire = new Date(rentalInfo[0].expire_date);
+          if (currentExpire <= now) {
+            return api.sendMessage(
+              "❌ Hạn thuê bot của nhóm đã hết, vui lòng gia hạn trước khi đổi gói!",
+              threadID,
+              messageID
+            );
+          }
+          diffMs = currentExpire - now;
+        }
+
+        let newIsAdmin = !currentIsAdmin;
+        let newDiffMs = currentIsAdmin ? diffMs * 2 : diffMs / 2;
+        let newExpire = isStopped ? null : new Date(now.getTime() + newDiffMs);
+
+        const currentPlanName = currentIsAdmin ? "ADMIN-BOT" : "THƯỜNG";
+        const newPlanName = newIsAdmin ? "ADMIN-BOT" : "THƯỜNG";
+
+        const isXacNhan = args[1] && (args[1].toLowerCase() === "xacnhan" || args[1].toLowerCase() === "confirm");
+
+        if (!isXacNhan) {
+          const currentDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+          const newDays = Math.round(newDiffMs / (1000 * 60 * 60 * 24));
+          let warnText = currentIsAdmin
+            ? `⚠️ Bạn đang dùng gói [${currentPlanName}]. Khi đổi xuống gói [${newPlanName}], thời hạn còn lại sẽ được nhân đôi (x2) từ ${currentDays} ngày thành ${newDays} ngày.`
+            : `⚠️ Bạn đang dùng gói [${currentPlanName}]. Khi đổi lên gói [${newPlanName}], thời hạn còn lại sẽ bị chia đôi (chia 2) từ ${currentDays} ngày còn ${newDays} ngày.`;
+
+          const expireText = isStopped
+            ? `▪️ Trạng thái: ⏸️ Đang tạm dừng (Bảo lưu mới: ${newDays} ngày)\n`
+            : `▪️ Hạn dùng hiện tại: ${currentExpire.toLocaleString("vi-VN")}\n▪️ Hạn dùng mới sau khi đổi: ${newExpire.toLocaleString("vi-VN")}\n`;
+
+          return api.sendMessage(
+            `${warnText}\n\n` +
+            `${expireText}\n` +
+            `👉 Để xác nhận đổi gói, vui lòng gõ:\n` +
+            `  ${prefix}thuebot doigoi xacnhan`,
+            threadID,
+            messageID
+          );
+        }
+
+        // Thực hiện cập nhật DB
+        if (isStopped) {
+          await execute(
+            "UPDATE rented_groups SET is_admin_rental = ?, paused_remaining_ms = ? WHERE thread_id = ?",
+            [newIsAdmin ? 1 : 0, Math.round(newDiffMs), threadID]
+          );
+        } else {
+          await execute(
+            "UPDATE rented_groups SET is_admin_rental = ?, expire_date = ? WHERE thread_id = ?",
+            [newIsAdmin ? 1 : 0, newExpire, threadID]
+          );
+        }
+
+        try {
+          const { clearRentalCache } = require("../utils/rental");
+          clearRentalCache(threadID);
+        } catch (e) { }
+
+        // Nếu đổi từ gói admin về gói thường -> chỉnh mode về qtv nếu đang ở adminbot
+        let modeDowngradeMsg = "";
+        if (currentIsAdmin && !newIsAdmin) {
+          try {
+            const { readJsonFile, writeJsonFile } = require("../utils/secureFileOps");
+            const modeSettingsPath = path.join(__dirname, "../../mode_settings.json");
+            const modeSettings = await readJsonFile(modeSettingsPath, {});
+            const currentMode = String(modeSettings[String(threadID)] || "qtv").toLowerCase();
+
+            if (currentMode === "adminbot") {
+              modeSettings[String(threadID)] = "qtv";
+              await writeJsonFile(modeSettingsPath, modeSettings);
+              modeDowngradeMsg = `\n🔄 Mode đã tự động chuyển từ ADMINBOT → QTV (do hạ gói về THƯỜNG)`;
+            }
+          } catch (e) {
+            console.error("Lỗi chỉnh mode khi đổi gói:", e);
+          }
+        }
+
+        const finalDays = Math.round(newDiffMs / (1000 * 60 * 60 * 24));
+        const finalExpireStr = isStopped ? `⏸️ Đang tạm dừng (Bảo lưu ${finalDays} ngày)` : newExpire.toLocaleString("vi-VN");
+
+        return api.sendMessage(
+          `🎉 ĐỔI GÓI THÀNH CÔNG!\n━━━━━━━━━━━━━\n` +
+          `▪️ Gói mới: ${newPlanName}\n` +
+          `▪️ Hạn dùng mới: ${finalExpireStr}\n` +
+          `▪️ Thời gian còn lại: ${finalDays} ngày\n\n` +
+          (newIsAdmin ? `👑 Quyền đổi mode đã được mở khóa cho tất cả QTV nhóm!` : `ℹ️ Quyền đổi mode đã bị khóa lại (chỉ Admin Bot dùng được).`) +
+          modeDowngradeMsg,
+          threadID,
+          messageID
+        );
+      }
+
+      // Xử lý lệnh hủy giao dịch
+      if (args && (args[0] === "huy" || args[0] === "cancel")) {
+        const pendingTx = await execute(
+          "SELECT id FROM transactions WHERE thread_id = ? AND status = 'pending'",
+          [threadID]
+        );
+        if (pendingTx && pendingTx.length > 0) {
+          await execute(
+            "UPDATE transactions SET status = 'cancelled', updated_at = datetime('now') WHERE thread_id = ? AND status = 'pending'",
+            [threadID]
+          );
           return api.sendMessage(
             "✅ Đã hủy giao dịch thuê bot đang chờ của nhóm thành công!",
             threadID
@@ -174,52 +582,87 @@ module.exports = {
       if (existingTx && existingTx.length > 0) {
         return api.sendMessage(
           "⏳ Nhóm này đang có 1 giao dịch thuê bot chờ thanh toán.\n" +
-            "Vui lòng thanh toán mã cũ hoặc chờ 15 phút để mã cũ tự động hủy trước khi tạo mã mới!",
+          "Vui lòng thanh toán mã cũ hoặc chờ 15 phút để mã cũ tự động hủy trước khi tạo mã mới!" +
+          `\nHoặc bạn có thể dùng ${prefix}thuebot huy để hủy giao dịch hiện tại.`,
           threadID
         );
       }
 
       // Kiểm tra thời gian còn lại nếu nhóm đã thuê bot
-      const rentalInfo = await execute(
-        "SELECT expire_date FROM rented_groups WHERE thread_id = ?",
-        [threadID]
-      );
+      const isGiaHan = args && args[0] === "giahan";
 
-      if (rentalInfo && rentalInfo.length > 0) {
-        const expireDate = new Date(rentalInfo[0].expire_date);
-        const now = new Date();
+      if (!isGiaHan) {
+        const rentalInfo = await execute(
+          "SELECT expire_date, is_admin_rental, is_stopped, paused_remaining_ms FROM rented_groups WHERE thread_id = ?",
+          [threadID]
+        );
 
-        if (expireDate > now) {
-          const diffMs = expireDate - now;
-          const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-          const diffHours = Math.floor(
-            (diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
-          );
-          const diffMinutes = Math.floor(
-            (diffMs % (1000 * 60 * 60)) / (1000 * 60)
-          );
+        if (rentalInfo && rentalInfo.length > 0) {
+          const isStopped = !!rentalInfo[0].is_stopped;
+          const currentPlanName = !!rentalInfo[0].is_admin_rental ? "ADMIN-BOT" : "THƯỜNG";
 
-          let timeText = "";
-          if (diffDays > 0) timeText += `${diffDays} ngày `;
-          if (diffHours > 0) timeText += `${diffHours} giờ `;
-          if (diffMinutes > 0) timeText += `${diffMinutes} phút`;
+          if (isStopped) {
+            const pausedMs = Number(rentalInfo[0].paused_remaining_ms || 0);
+            const pDays = Math.floor(pausedMs / (1000 * 60 * 60 * 24));
+            const pHours = Math.floor((pausedMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const pMins = Math.floor((pausedMs % (1000 * 60 * 60)) / (1000 * 60));
 
-          return api.sendMessage(
-            `✅ Nhóm này đã thuê bot.\n\n📅 Thời gian còn lại: ${timeText.trim()}\n⏰ Hết hạn: ${expireDate.toLocaleString(
-              "vi-VN"
-            )}`,
-            threadID
-          );
-        } else {
-          // Đã hết hạn, xóa khỏi database
-          await execute("DELETE FROM rented_groups WHERE thread_id = ?", [
-            threadID
-          ]);
-          try {
-            const { clearRentalCache } = require("../utils/rental");
-            clearRentalCache(threadID);
-          } catch (e) {
-            console.error("Lỗi xóa cache thuê bot khi xóa nhóm hết hạn:", e);
+            let pTimeText = "";
+            if (pDays > 0) pTimeText += `${pDays} ngày `;
+            if (pHours > 0) pTimeText += `${pHours} giờ `;
+            if (pMins > 0) pTimeText += `${pMins} phút`;
+
+            return api.sendMessage(
+              `✅ Nhóm này đã thuê bot (Gói: ${currentPlanName}).\n\n` +
+              `⏸️ Trạng thái: ĐANG TẠM DỪNG TÍNH NGÀY\n` +
+              `📅 Thời gian được bảo lưu: ${pTimeText.trim() || "0 phút"}\n\n` +
+              `👉 Để gia hạn thêm, vui lòng gõ:\n` +
+              `  ${prefix}thuebot giahan\n` +
+              `👉 Để đổi gói (ADMIN-BOT ⇄ THƯỜNG), vui lòng gõ:\n` +
+              `  ${prefix}thuebot doigoi`,
+              threadID
+            );
+          }
+
+          const expireDate = new Date(rentalInfo[0].expire_date);
+          const now = new Date();
+
+          if (expireDate > now) {
+            const diffMs = expireDate - now;
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            const diffHours = Math.floor(
+              (diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+            );
+            const diffMinutes = Math.floor(
+              (diffMs % (1000 * 60 * 60)) / (1000 * 60)
+            );
+
+            let timeText = "";
+            if (diffDays > 0) timeText += `${diffDays} ngày `;
+            if (diffHours > 0) timeText += `${diffHours} giờ `;
+            if (diffMinutes > 0) timeText += `${diffMinutes} phút`;
+
+            return api.sendMessage(
+              `✅ Nhóm này đã thuê bot (Gói: ${currentPlanName}).\n\n` +
+              `📅 Thời gian còn lại: ${timeText.trim()}\n` +
+              `⏰ Hết hạn: ${expireDate.toLocaleString("vi-VN")}\n\n` +
+              `👉 Để gia hạn thêm, vui lòng gõ:\n` +
+              `  ${prefix}thuebot giahan\n` +
+              `👉 Để đổi gói (ADMIN-BOT ⇄ THƯỜNG), vui lòng gõ:\n` +
+              `  ${prefix}thuebot doigoi`,
+              threadID
+            );
+          } else {
+            // Đã hết hạn, xóa khỏi database
+            await execute("DELETE FROM rented_groups WHERE thread_id = ?", [
+              threadID
+            ]);
+            try {
+              const { clearRentalCache } = require("../utils/rental");
+              clearRentalCache(threadID);
+            } catch (e) {
+              console.error("Lỗi xóa cache thuê bot khi xóa nhóm hết hạn:", e);
+            }
           }
         }
       }
@@ -227,18 +670,19 @@ module.exports = {
       console.error("Lỗi kiểm tra CSDL thuebot:", e);
     }
 
+
     const menuMessage =
       `--- 💸 BẢNG GIÁ THUÊ BOT 💸 ---\n\n` +
       `[ THUÊ BOT THƯỜNG ]\n` +
       `1️⃣ 1 Tháng - 25,000 VNĐ\n` +
       `2️⃣ 3 Tháng - 70,000 VNĐ\n` +
-      `3️⃣ 6 Tháng - 150,000 VNĐ\n` +
+      `3️⃣ 6 Tháng - 140,000 VNĐ\n` +
       `4️⃣ 1 Năm  - 275,000 VNĐ\n\n` +
       `[ THUÊ KÈM QUYỀN ADMIN-BOT ]\n` +
-      `(Được toàn quyền dùng mọi lệnh cấm)\n` +
+      `(Có thể dùng lệnh mode để các TV dùng lệnh, không bị cấm)\n` +
       `5️⃣ 1 Tháng - 50,000 VNĐ\n` +
       `6️⃣ 3 Tháng - 140,000 VNĐ\n` +
-      `7️⃣ 6 Tháng - 300,000 VNĐ\n` +
+      `7️⃣ 6 Tháng - 280,000 VNĐ\n` +
       `8️⃣ 1 Năm  - 550,000 VNĐ\n\n` +
       `👉 Vui lòng REPLY (Phản hồi) tin nhắn này kèm theo SỐ THỨ TỰ ( từ 1 đến 8 ) để chọn gói bạn muốn thuê.`;
 
@@ -246,7 +690,7 @@ module.exports = {
       const info = await api.sendMessage(menuMessage, threadID);
       if (!global.client) global.client = {};
       if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
-      
+
       // Xóa các rent_menu cũ trong thread này
       const list = global.client.handleReply;
       for (let i = list.length - 1; i >= 0; i--) {
@@ -271,8 +715,9 @@ module.exports = {
     }
   },
 
-  async handleReply({ api, event }) {
+  async handleReply({ api, event, config }) {
     const { threadID, messageID, senderID, body, messageReply } = event;
+    const prefix = config?.prefix || "!";
     if (!messageReply || !messageReply.messageID) return;
 
     const list = global.client && Array.isArray(global.client.handleReply) ? global.client.handleReply : [];
@@ -326,15 +771,24 @@ module.exports = {
         if (existingTx && existingTx.length > 0) {
           return api.sendMessage(
             "⏳ Nhóm này đang có 1 giao dịch thuê bot chờ thanh toán.\n" +
-              "Vui lòng thanh toán mã cũ hoặc chờ 15 phút để mã cũ tự động hủy trước khi tạo mã mới!",
+            "Vui lòng thanh toán mã cũ hoặc chờ 15 phút để mã cũ tự động hủy trước khi tạo mã mới!" +
+            `Bạn cũng có thể dùng ${prefix}thuebot huy để hủy giao dịch ngay lập tức.`,
             threadID,
             messageID
           );
         }
 
+        // Lấy tên nhóm để lưu vào lịch sử
+        let groupName = "";
+        try {
+          const threadInfo = await getThreadInfoCached(api, threadID);
+          groupName = threadInfo?.name || threadInfo?.threadName || "";
+        } catch (e) {}
+
+        await ensureTransactionsSchema();
         await execute(
-          "INSERT INTO transactions (transaction_code, amount, thread_id, user_id, status) VALUES (?, ?, ?, ?, ?)",
-          [transactionCode, amount, threadID, senderID, "pending"]
+          "INSERT INTO transactions (transaction_code, amount, thread_id, user_id, status, group_name, plan_name, months) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [transactionCode, amount, threadID, senderID, "pending", groupName, planName, months]
         );
 
         const BANK_ID = "BIDV";
@@ -360,7 +814,7 @@ module.exports = {
         // Gỡ tin nhắn bảng giá thuê bot cũ
         try {
           await api.unsendMessage(handleReply.messageID);
-        } catch (e) {}
+        } catch (e) { }
 
         // Xóa khỏi handleReply
         const list = global.client.handleReply || [];
@@ -390,10 +844,10 @@ module.exports = {
         console.error("Lỗi tạo QR thuê bot:", error);
         api.sendMessage(
           "❌ Không tạo được ảnh QR, nhưng bạn vẫn có thể chuyển khoản thủ công.\n" +
-            `💵 Số tiền: ${amount.toLocaleString("vi-VN")} VNĐ\n` +
-            `🏦 Ngân hàng: BIDV\n` +
-            `🔢 STK: 8850288200\n` +
-            `📝 Nội dung CK: ${transactionCode}`,
+          `💵 Số tiền: ${amount.toLocaleString("vi-VN")} VNĐ\n` +
+          `🏦 Ngân hàng: BIDV\n` +
+          `🔢 STK: 8850288200\n` +
+          `📝 Nội dung CK: ${transactionCode}`,
           threadID,
           messageID
         );
@@ -415,17 +869,19 @@ module.exports = {
 
       const trimmed = String(body || "").trim();
       const delMatch = trimmed.match(/^del\s+([\d\s,]+)$/i);
+      const stopMatch = trimmed.match(/^(?:stop|pause|start|resume)\s+([\d\s,]+)$/i);
       const giahanMatch = trimmed.match(
         /^giahan\s+(\d+)\s+(\S+)\s+(\S+)(?:\s+(\d+))?$/i
       );
       const pageMatch = trimmed.match(/^page\s+(\d+)$/i);
 
-      if (!delMatch && !giahanMatch && !pageMatch) {
+      if (!delMatch && !stopMatch && !giahanMatch && !pageMatch) {
         return api.sendMessage(
           "⚠️ Cú pháp phản hồi không hợp lệ!\n" +
-            "👉 del <Số thứ tự> để xóa nhóm\n" +
-            "👉 giahan <Số thứ tự> <thuong/admin> <thời gian: 30d/1m> <id_admin (nếu là admin)>\n" +
-            "👉 page <Số trang> để chuyển trang",
+          "👉 del <Số thứ tự> để xóa nhóm\n" +
+          "👉 stop <Số thứ tự> để tạm dừng / tiếp tục tính ngày\n" +
+          "👉 giahan <Số thứ tự> <thuong/admin> <thời gian: 30d/1m>\n" +
+          "👉 page <Số trang> để chuyển trang",
           threadID,
           messageID
         );
@@ -436,7 +892,7 @@ module.exports = {
         const targetPage = parseInt(pageMatch[1]);
         try {
           const rented = await execute(
-            "SELECT * FROM rented_groups ORDER BY expire_date DESC"
+            "SELECT * FROM rented_groups WHERE thread_id NOT IN ('1523319575522034', '844251878447942') ORDER BY expire_date DESC"
           );
           const totalPages = Math.ceil(rented.length / 5);
 
@@ -451,7 +907,7 @@ module.exports = {
           // Gỡ tin nhắn cũ
           try {
             await api.unsendMessage(handleReply.messageID);
-          } catch (err) {}
+          } catch (err) { }
 
           // Xóa handleReply cũ
           const list = global.client.handleReply || [];
@@ -479,7 +935,7 @@ module.exports = {
 
         try {
           const rented = await execute(
-            "SELECT * FROM rented_groups ORDER BY expire_date DESC"
+            "SELECT * FROM rented_groups WHERE thread_id NOT IN ('1523319575522034', '844251878447942') ORDER BY expire_date DESC"
           );
 
           const invalidChoices = choices.filter(c => c < 1 || c > rented.length);
@@ -505,7 +961,7 @@ module.exports = {
             try {
               const { clearRentalCache } = require("../utils/rental");
               clearRentalCache(targetThreadID);
-            } catch (e) {}
+            } catch (e) { }
 
             // Thông báo cho nhóm bị xóa
             try {
@@ -523,7 +979,7 @@ module.exports = {
           // Gỡ tin nhắn list cũ
           try {
             await api.unsendMessage(handleReply.messageID);
-          } catch (e) {}
+          } catch (e) { }
 
           // Xóa handleReply
           const list = global.client.handleReply || [];
@@ -539,6 +995,117 @@ module.exports = {
         } catch (e) {
           console.error(e);
           return api.sendMessage("❌ Lỗi khi xóa nhóm.", threadID, messageID);
+        }
+      }
+
+      // XỬ LÝ TẠM DỪNG / TIẾP TỤC TÍNH NGÀY
+      if (stopMatch) {
+        const choices = stopMatch[1]
+          .split(/[\s,]+/)
+          .map(s => parseInt(s))
+          .filter(n => !isNaN(n));
+
+        if (choices.length === 0) {
+          return api.sendMessage("❌ Cú pháp tạm dừng không hợp lệ.", threadID, messageID);
+        }
+
+        try {
+          const rented = await execute(
+            "SELECT * FROM rented_groups WHERE thread_id NOT IN ('1523319575522034', '844251878447942') ORDER BY expire_date DESC"
+          );
+
+          const invalidChoices = choices.filter(c => c < 1 || c > rented.length);
+          if (invalidChoices.length > 0) {
+            return api.sendMessage(
+              `❌ Số thứ tự nhóm không tồn tại trong danh sách: ${invalidChoices.join(", ")}`,
+              threadID,
+              messageID
+            );
+          }
+
+          const results = [];
+          for (const choice of choices) {
+            const targetGroup = rented[choice - 1];
+            const targetThreadID = targetGroup.thread_id;
+            const isStopped = !!targetGroup.is_stopped;
+
+            if (!isStopped) {
+              // Tạm dừng tính ngày
+              const expireDate = new Date(targetGroup.expire_date);
+              const now = Date.now();
+              const remainingMs = expireDate.getTime() - now;
+
+              if (remainingMs <= 0) {
+                results.push(`⚠️ STT ${choice} (TID: ${targetThreadID}) đã hết hạn, không thể tạm dừng.`);
+                continue;
+              }
+
+              await execute(
+                "UPDATE rented_groups SET is_stopped = 1, paused_remaining_ms = ? WHERE thread_id = ?",
+                [remainingMs, targetThreadID]
+              );
+
+              try {
+                const { clearRentalCache } = require("../utils/rental");
+                clearRentalCache(targetThreadID);
+              } catch (e) { }
+
+              const pDays = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+              const pHours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+              results.push(`⏸️ STT ${choice} (TID: ${targetThreadID}): Đã TẠM DỪNG tính ngày (Bảo lưu: ${pDays}d ${pHours}h).`);
+
+              try {
+                await api.sendMessage(
+                  `⏸️ [ THÔNG BÁO TẠM DỪNG TÍNH NGÀY ]\n\nNhóm của bạn đã được Admin tạm dừng tính ngày thuê bot.\n⌛ Thời gian còn lại (${pDays} ngày ${pHours} giờ) đã được bảo lưu!`,
+                  targetThreadID
+                );
+              } catch (e) { }
+            } else {
+              // Mở lại / tiếp tục tính ngày
+              const pausedMs = Number(targetGroup.paused_remaining_ms || 0);
+              const newExpire = new Date(Date.now() + pausedMs);
+
+              await execute(
+                "UPDATE rented_groups SET is_stopped = 0, paused_remaining_ms = 0, expire_date = ? WHERE thread_id = ?",
+                [newExpire, targetThreadID]
+              );
+
+              try {
+                const { clearRentalCache } = require("../utils/rental");
+                clearRentalCache(targetThreadID);
+              } catch (e) { }
+
+              const expireStr = newExpire.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+              results.push(`▶️ STT ${choice} (TID: ${targetThreadID}): Đã TIẾP TỤC tính ngày (Hạn mới: ${expireStr}).`);
+
+              try {
+                await api.sendMessage(
+                  `▶️ [ THÔNG BÁO TIẾP TỤC TÍNH NGÀY ]\n\nNhóm của bạn đã được Admin mở lại đếm ngày thuê bot.\n⏰ Hạn sử dụng mới: ${expireStr}`,
+                  targetThreadID
+                );
+              } catch (e) { }
+            }
+          }
+
+          // Gỡ tin nhắn list cũ
+          try {
+            await api.unsendMessage(handleReply.messageID);
+          } catch (e) { }
+
+          // Xóa handleReply
+          const list = global.client.handleReply || [];
+          const idx = list.findIndex(h => h.messageID === handleReply.messageID);
+          if (idx > -1) list.splice(idx, 1);
+
+          return api.sendMessage(
+            `📋 XỬ LÝ TẠM DỪNG / TIẾP TỤC TÍNH NGÀY THÀNH CÔNG:\n━━━━━━━━━━━━━\n` +
+            results.join("\n"),
+            threadID,
+            messageID
+          );
+        } catch (e) {
+          console.error(e);
+          return api.sendMessage("❌ Lỗi khi cập nhật trạng thái tạm dừng tính ngày.", threadID, messageID);
         }
       }
 
@@ -583,7 +1150,7 @@ module.exports = {
 
         try {
           const rented = await execute(
-            "SELECT * FROM rented_groups ORDER BY expire_date DESC"
+            "SELECT * FROM rented_groups WHERE thread_id NOT IN ('1523319575522034', '844251878447942') ORDER BY expire_date DESC"
           );
           if (orderNumber < 1 || orderNumber > rented.length) {
             return api.sendMessage(
@@ -597,36 +1164,52 @@ module.exports = {
           const targetThreadID = targetGroup.thread_id;
 
           // Cập nhật CSDL
-          await execute(
-            `
-            INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at, is_admin_rental)
-            VALUES (?, datetime('now', '+' || ? || ' day'), ?, datetime('now'), ?)
-            ON CONFLICT(thread_id) DO UPDATE SET
-              expire_date = datetime(max(coalesce(expire_date, datetime('now')), datetime('now')), '+' || ? || ' day'),
-              renter_id = ?,
-              rented_at = datetime('now'),
-              is_admin_rental = ?
-          `,
-            [targetThreadID, daysToAdd, senderID, isAdminPlan ? 1 : 0, daysToAdd, senderID, isAdminPlan ? 1 : 0]
-          );
+          if (targetGroup.is_stopped) {
+            const addMs = daysToAdd * 24 * 60 * 60 * 1000;
+            const newPausedMs = Number(targetGroup.paused_remaining_ms || 0) + addMs;
+            await execute(
+              "UPDATE rented_groups SET paused_remaining_ms = ?, renter_id = ?, rented_at = datetime('now'), is_admin_rental = ? WHERE thread_id = ?",
+              [newPausedMs, senderID, isAdminPlan ? 1 : 0, targetThreadID]
+            );
+          } else {
+            await execute(
+              `
+              INSERT INTO rented_groups (thread_id, expire_date, renter_id, rented_at, is_admin_rental, is_stopped, paused_remaining_ms)
+              VALUES (?, datetime('now', '+' || ? || ' day'), ?, datetime('now'), ?, 0, 0)
+              ON CONFLICT(thread_id) DO UPDATE SET
+                expire_date = datetime(max(coalesce(expire_date, datetime('now')), datetime('now')), '+' || ? || ' day'),
+                renter_id = ?,
+                rented_at = datetime('now'),
+                is_admin_rental = ?
+            `,
+              [targetThreadID, daysToAdd, senderID, isAdminPlan ? 1 : 0, daysToAdd, senderID, isAdminPlan ? 1 : 0]
+            );
+          }
 
           // Clear cache
           try {
             const { clearRentalCache } = require("../utils/rental");
             clearRentalCache(targetThreadID);
-          } catch (e) {}
+          } catch (e) { }
 
           // Lấy hạn sử dụng mới
           const info = await execute(
-            "SELECT expire_date FROM rented_groups WHERE thread_id = ?",
+            "SELECT expire_date, is_stopped, paused_remaining_ms FROM rented_groups WHERE thread_id = ?",
             [targetThreadID]
           );
           let expireStr = "Không rõ";
           if (info && info.length > 0) {
-            const date = new Date(info[0].expire_date);
-            expireStr = date.toLocaleString("vi-VN", {
-              timeZone: "Asia/Ho_Chi_Minh"
-            });
+            if (info[0].is_stopped) {
+              const pMs = Number(info[0].paused_remaining_ms || 0);
+              const pDays = Math.floor(pMs / (1000 * 60 * 60 * 24));
+              const pHours = Math.floor((pMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+              expireStr = `⏸️ Đang tạm dừng (Bảo lưu: ${pDays} ngày ${pHours} giờ)`;
+            } else {
+              const date = new Date(info[0].expire_date);
+              expireStr = date.toLocaleString("vi-VN", {
+                timeZone: "Asia/Ho_Chi_Minh"
+              });
+            }
           }
 
           // Cấp quyền Admin Bot nếu là gói admin
@@ -635,10 +1218,30 @@ module.exports = {
             adminGrantedMsg = `\n👑 Quyền đổi mode đã được mở khóa cho tất cả QTV nhóm!`;
           }
 
+          // Nếu gia hạn từ gói admin về gói thường -> chỉnh mode về qtv nếu đang ở adminbot
+          let modeDowngradeMsg = "";
+          const wasAdminPlan = !!targetGroup.is_admin_rental;
+          if (wasAdminPlan && !isAdminPlan) {
+            try {
+              const { readJsonFile, writeJsonFile } = require("../utils/secureFileOps");
+              const modeSettingsPath = path.join(__dirname, "../../mode_settings.json");
+              const modeSettings = await readJsonFile(modeSettingsPath, {});
+              const currentMode = String(modeSettings[targetThreadID] || "qtv").toLowerCase();
+
+              if (currentMode === "adminbot") {
+                modeSettings[targetThreadID] = "qtv";
+                await writeJsonFile(modeSettingsPath, modeSettings);
+                modeDowngradeMsg = `\n🔄 Mode đã tự động chuyển từ ADMINBOT → QTV (do hạ gói về THƯỜNG)`;
+              }
+            } catch (e) {
+              console.error("Lỗi chỉnh mode khi gia hạn đổi gói:", e);
+            }
+          }
+
           // Gỡ tin nhắn list cũ
           try {
             await api.unsendMessage(handleReply.messageID);
-          } catch (e) {}
+          } catch (e) { }
 
           // Xóa handleReply
           const list = global.client.handleReply || [];
@@ -649,7 +1252,7 @@ module.exports = {
           let notifyMsg =
             `🎉 [ THÔNG BÁO GIA HẠN ] 🎉\n\n` +
             `Nhóm của bạn đã được Admin gia hạn thêm ${timeStr} sử dụng Bot.\n` +
-            `⏰ Hạn sử dụng mới: ${expireStr}${adminGrantedMsg}\n` +
+            `⏰ Hạn sử dụng mới: ${expireStr}${adminGrantedMsg}${modeDowngradeMsg}\n` +
             `💝 Cảm ơn các bạn đã tiếp tục đồng hành cùng Bot!`;
           try {
             await api.sendMessage(notifyMsg, targetThreadID);
@@ -666,6 +1269,9 @@ module.exports = {
           if (isAdminPlan) {
             adminMsg += `\n👑 Quyền đổi mode đã được mở khóa cho tất cả QTV nhóm!`;
           }
+          if (modeDowngradeMsg) {
+            adminMsg += modeDowngradeMsg;
+          }
 
           return api.sendMessage(adminMsg, threadID, messageID);
         } catch (e) {
@@ -677,6 +1283,41 @@ module.exports = {
           );
         }
       }
+    }
+
+    // 3. XỬ LÝ PHẢN HỒI LỊCH SỬ ĐƠN HÀNG
+    if (handleReply.type === "order_history") {
+      const { getAdminBotUIDs } = require("../utils/checkPermission");
+      const adminIDs = getAdminBotUIDs();
+      if (!adminIDs.includes(String(senderID))) return;
+
+      const trimmed = String(body || "").trim();
+      const pageMatch = trimmed.match(/^page\s+(\d+)$/i);
+
+      if (!pageMatch) {
+        return api.sendMessage(
+          `📖 Reply "page <số trang>" để chuyển trang lịch sử đơn hàng.`,
+          threadID,
+          messageID
+        );
+      }
+
+      const newPage = parseInt(pageMatch[1]);
+      if (isNaN(newPage) || newPage < 1) {
+        return api.sendMessage("❌ Số trang không hợp lệ.", threadID, messageID);
+      }
+
+      // Gỡ tin nhắn cũ
+      try {
+        await api.unsendMessage(handleReply.messageID);
+      } catch (e) {}
+
+      // Xóa handleReply cũ
+      const hrList = global.client.handleReply || [];
+      const hrIdx = hrList.findIndex(h => h.messageID === handleReply.messageID);
+      if (hrIdx > -1) hrList.splice(hrIdx, 1);
+
+      await sendOrderHistory(api, threadID, senderID, newPage);
     }
   }
 };

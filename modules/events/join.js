@@ -1,5 +1,7 @@
+const fs = require("fs");
 const { removeLeaveHistoryEntries } = require("../utils/leaveHistory");
 const { getJoinGreeting } = require("../utils/joinGreetingSettings");
+const { getNickname, hasInteraction } = require("../utils/nicknameStorage");
 
 function buildMentionChunk(participants) {
     const rows = Array.isArray(participants) ? participants : [];
@@ -93,18 +95,19 @@ function formatGreeting(template, newParticipants) {
 module.exports = {
     name: "welcome",
     eventType: ["log:subscribe"], // Sự kiện thêm người vào nhóm
-    
+
+    run: async function(Obj) { return this.execute(Obj); },
     execute: async ({ api, event }) => {
         const { threadID } = event;
-        
+
         // 1. Nếu người được thêm là chính con BOT
         if (event.logMessageData.addedParticipants.some(i => i.userFbId == api.getCurrentUserID())) {
             let prefix = "!";
             try {
                 const config = require("../../config.json");
                 if (config && config.prefix) prefix = config.prefix;
-            } catch (e) {}
-            
+            } catch (e) { }
+
             api.changeNickname(`『 ${prefix} 』• Bot láo loz`, threadID, api.getCurrentUserID(), (err) => {
                 if (err) console.error("Lỗi tự động đặt biệt danh bot:", err);
             });
@@ -113,36 +116,126 @@ module.exports = {
         }
 
         try {
-            // 2. Lấy danh sách toàn bộ người mới
-            const newParticipants = event.logMessageData.addedParticipants;
-            const joinedUIDs = newParticipants
-                .map(user => String(user.userFbId || "").trim())
-                .filter(Boolean);
+            // 2. Lấy danh sách toàn bộ người mới và lọc những ai bị cấm vĩnh viễn (cutvv)
+            const rawParticipants = event.logMessageData.addedParticipants || [];
+            const newParticipants = [];
+            const botID = String(api.getCurrentUserID());
 
-            if (joinedUIDs.length > 0) {
-                removeLeaveHistoryEntries(threadID, joinedUIDs);
+            const { isBlocked } = require("../utils/cutvvStorage");
+            const { getThreadInfoCached } = require("../utils/threadInfo");
+            const { toAdminIdList } = require("../utils/checkPermission");
+
+            // Kiểm tra xem bot có phải QTV không
+            let isBotAdmin = false;
+            try {
+                const threadInfo = await getThreadInfoCached(api, threadID);
+                const adminIDs = toAdminIdList(threadInfo);
+                isBotAdmin = adminIDs.includes(botID);
+            } catch (err) {
+                console.error("Lỗi lấy thông tin admin khi join:", err);
             }
-            
-            // Lấy ra mảng tên: ["Nguyễn Văn A", "Trần Thị B", "Lê Văn C", ...]
-            const namesArray = newParticipants.map(user => user.fullName);
 
-            const customGreeting = getJoinGreeting(threadID);
-            const listNames = namesArray.join(", ");
+            const kickUser = async (uid, tid) => {
+                if (api.removeUserFromGroup) return api.removeUserFromGroup(uid, tid);
+                if (api.removeParticipant) return api.removeParticipant(uid, tid);
+                if (api.gcmember) return api.gcmember("remove", uid, tid);
+                if (api.removeUser) return api.removeUser(uid, tid);
+                if (api.removeUserFromThread) return api.removeUserFromThread(uid, tid);
+                if (api.removeParticipantFromThread)
+                    return api.removeParticipantFromThread(uid, tid);
+                throw new Error("Library missing remove function");
+            };
 
-            // 3. Gửi tin nhắn
-            if (customGreeting) {
-                const formatted = formatGreeting(customGreeting, newParticipants);
-                if (formatted.mentions.length > 0) {
-                    return api.sendMessage({
-                        body: formatted.body,
-                        mentions: formatted.mentions,
-                    }, threadID);
+            for (const user of rawParticipants) {
+                const userID = String(user.userFbId || "").trim();
+                if (!userID) continue;
+
+                const blocked = await isBlocked(threadID, userID);
+                if (blocked) {
+                    if (isBotAdmin) {
+                        try {
+                            await kickUser(userID, threadID);
+                            api.sendMessage(
+                                `⚠️ Phát hiện thành viên ${user.fullName || userID} nằm trong danh sách cấm vĩnh viễn (cutvv) của nhóm. Bot đã tự động kick!`,
+                                threadID
+                            );
+                        } catch (e) {
+                            console.error(`Lỗi tự động kick thành viên bị chặn ${userID}:`, e);
+                        }
+                    } else {
+                        api.sendMessage(
+                            `⚠️ Phát hiện thành viên ${user.fullName || userID} nằm trong danh sách cấm vĩnh viễn (cutvv) của nhóm nhưng Bot hiện không có quyền Quản trị viên để kick!`,
+                            threadID
+                        );
+                    }
+                } else {
+                    newParticipants.push(user);
                 }
-
-                return api.sendMessage(formatted.body, threadID);
             }
 
-            api.sendMessage(`Chào mừng ${listNames} đã tham gia nhóm! 🥳`, threadID);
+            if (newParticipants.length === 0) return;
+
+            const joinedUIDs = newParticipants.map(user => String(user.userFbId || "").trim()).filter(Boolean);
+            if (joinedUIDs.length > 0) removeLeaveHistoryEntries(threadID, joinedUIDs);
+
+            if (newParticipants.length > 0) {
+                const customGreeting = getJoinGreeting(threadID);
+
+                if (!customGreeting || customGreeting.text !== "off") {
+                    const namesArray = newParticipants.map((user) => String(user?.fullName || "").trim()).filter(Boolean);
+                    const listNames = namesArray.join(", ");
+
+                    if (customGreeting && (customGreeting.text || customGreeting.media)) {
+                        let body = "";
+                        let mentions = [];
+
+                        if (customGreeting.text) {
+                            const formatted = formatGreeting(customGreeting.text, newParticipants);
+                            body = formatted.body;
+                            mentions = formatted.mentions;
+                        }
+
+                        let msgPayload = null;
+                        if (customGreeting.media && customGreeting.media.path && fs.existsSync(customGreeting.media.path)) {
+                            const attachmentStream = fs.createReadStream(customGreeting.media.path);
+                            if (body) {
+                                msgPayload = {
+                                    body: body,
+                                    attachment: attachmentStream,
+                                };
+                                if (mentions.length > 0) msgPayload.mentions = mentions;
+                            } else {
+                                msgPayload = {
+                                    attachment: attachmentStream,
+                                };
+                            }
+                        } else if (body) {
+                            msgPayload = mentions.length > 0 ? { body, mentions } : body;
+                        }
+
+                        if (msgPayload) {
+                            api.sendMessage(msgPayload, threadID);
+                        }
+                    } else {
+                        api.sendMessage(`Chào mừng ${listNames} đã tham gia nhóm! 🥳`, threadID);
+                    }
+                }
+            }
+
+            for (const user of oldParticipants) {
+                const userID = String(user.userFbId || "").trim();
+                const userName = user.fullName || "Thành viên cũ";
+                try {
+                    const savedNickname = await getNickname(threadID, userID);
+                    if (savedNickname && savedNickname.trim() !== "") {
+                        setTimeout(() => {
+                            checkAndRestoreOldMemberNickname(api, threadID, userID, userName);
+                        }, 5000);
+                    }
+                } catch (err) {
+                    console.error("Lỗi khi đăng ký khôi phục biệt danh cho thành viên cũ:", err);
+                }
+            }
 
         } catch (e) {
             console.log("Lỗi tại event welcome: ", e);

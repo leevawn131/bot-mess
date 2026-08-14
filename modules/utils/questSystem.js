@@ -476,7 +476,7 @@ async function insertDailyRows(connection, userID, questDate, definitions) {
   });
 
   await connection.execute(
-    `INSERT IGNORE INTO quest_user_daily (psid, quest_date, quest_id, progress, accepted, claimed) VALUES ${placeholders}`,
+    `INSERT OR IGNORE INTO quest_user_daily (psid, quest_date, quest_id, progress, accepted, claimed) VALUES ${placeholders}`,
     params,
   );
 }
@@ -537,11 +537,19 @@ async function loadDailyQuestRows(connection, userID, questDate) {
   return rows;
 }
 
-async function getUserQuestLimit(connection, userID) {
-  const [rows] = await connection.execute(
-    "SELECT vip_until FROM messenger_users WHERE psid = ? LIMIT 1",
-    [String(userID)],
-  );
+async function getUserQuestLimit(connection, userID, threadID = null) {
+  let rows = [];
+  if (threadID) {
+    [rows] = await connection.execute(
+      "SELECT vip_until FROM messenger_users WHERE thread_id = ? AND psid = ? LIMIT 1",
+      [String(threadID), String(userID)],
+    );
+  } else {
+    [rows] = await connection.execute(
+      "SELECT vip_until FROM messenger_users WHERE psid = ? LIMIT 1",
+      [String(userID)],
+    );
+  }
 
   const now = new Date();
   const vipUntil = rows[0]?.vip_until ? new Date(rows[0].vip_until) : null;
@@ -573,7 +581,7 @@ function buildQuestList(rows) {
   });
 }
 
-async function getUserQuests(userID) {
+async function getUserQuests(userID, threadID = null) {
   const questDate = getVNDateString();
 
   // Ensure quest table exists
@@ -605,9 +613,16 @@ async function getUserQuests(userID) {
   `, [userID, questDate]);
 
   // Get user quest limit
-  const userRows = await execute(`
-    SELECT vip_until FROM messenger_users WHERE psid = ?
-  `, [userID]);
+  let userRows;
+  if (threadID) {
+    userRows = await execute(`
+      SELECT vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?
+    `, [String(threadID), userID]);
+  } else {
+    userRows = await execute(`
+      SELECT vip_until FROM messenger_users WHERE psid = ?
+    `, [userID]);
+  }
 
   const hasVip = userRows.length > 0 && userRows[0].vip_until && new Date(userRows[0].vip_until) > new Date();
   const maxAccepted = hasVip ? 5 : 3;
@@ -663,7 +678,7 @@ function recordAction(userID, action, amount = 1) {
 
         await execute(
           `UPDATE quest_user_daily
-                   SET progress = LEAST(?, progress + ?)
+                   SET progress = MIN(?, progress + ?)
                    WHERE psid = ? AND quest_date = ? AND quest_id = ?
                      AND accepted = 1 AND claimed = 0`,
           [
@@ -683,7 +698,7 @@ function recordAction(userID, action, amount = 1) {
   })();
 }
 
-async function acceptQuests(userID, questIDs = []) {
+async function acceptQuests(userID, questIDs = [], threadID = null) {
   // Ensure quest table exists
   await execute(`
     CREATE TABLE IF NOT EXISTS quest_user_daily (
@@ -715,9 +730,16 @@ async function acceptQuests(userID, questIDs = []) {
   `, [userID, questDate]);
 
   // Get user quest limit
-  const userRows = await execute(`
-    SELECT vip_until FROM messenger_users WHERE psid = ?
-  `, [userID]);
+  let userRows;
+  if (threadID) {
+    userRows = await execute(`
+      SELECT vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?
+    `, [String(threadID), userID]);
+  } else {
+    userRows = await execute(`
+      SELECT vip_until FROM messenger_users WHERE psid = ?
+    `, [userID]);
+  }
 
   const hasVip = userRows.length > 0 && userRows[0].vip_until && new Date(userRows[0].vip_until) > new Date();
   const maxAccepted = hasVip ? 5 : 3;
@@ -795,7 +817,7 @@ function pickWeightedTier(availableByTier) {
   return weightedTiers[weightedTiers.length - 1][0];
 }
 
-async function acceptRandomQuest(userID) {
+async function acceptRandomQuest(userID, targetTier = null, threadID = null) {
   // Ensure quest table exists
   await execute(`
     CREATE TABLE IF NOT EXISTS quest_user_daily (
@@ -827,9 +849,16 @@ async function acceptRandomQuest(userID) {
   `, [userID, questDate]);
 
   // Get user quest limit
-  const userRows = await execute(`
-    SELECT vip_until FROM messenger_users WHERE psid = ?
-  `, [userID]);
+  let userRows;
+  if (threadID) {
+    userRows = await execute(`
+      SELECT vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?
+    `, [String(threadID), userID]);
+  } else {
+    userRows = await execute(`
+      SELECT vip_until FROM messenger_users WHERE psid = ?
+    `, [userID]);
+  }
 
   const hasVip = userRows.length > 0 && userRows[0].vip_until && new Date(userRows[0].vip_until) > new Date();
   const maxAccepted = hasVip ? 5 : 3;
@@ -870,7 +899,24 @@ async function acceptRandomQuest(userID) {
     if (availableByTier[tier]) availableByTier[tier].push(quest);
   });
 
-  const selectedTier = pickWeightedTier(availableByTier);
+  let selectedTier = null;
+  if (targetTier) {
+    if (!availableByTier[targetTier] || availableByTier[targetTier].length === 0) {
+      return {
+        ok: false,
+        reason: "no_available_tier",
+        requestedTier: targetTier,
+        hasVip,
+        maxAccepted,
+        acceptedCount,
+        remainingSlots,
+      };
+    }
+    selectedTier = targetTier;
+  } else {
+    selectedTier = pickWeightedTier(availableByTier);
+  }
+
   if (!selectedTier) {
     return {
       ok: false,

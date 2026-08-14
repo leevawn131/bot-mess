@@ -1,8 +1,7 @@
 const { execute } = require('../../utils/database');
 const { recordAction } = require('../../utils/questSystem');
-const prefix = process.env.BOT_PREFIX;
+const prefix = process.env.BOT_PREFIX || '!';
 
-// Bộ nhớ đệm để chống spam race condition (ngăn gửi nhiều lệnh trong 1 giây)
 global.diemdanhLock = global.diemdanhLock || new Set();
 
 module.exports = {
@@ -11,79 +10,82 @@ module.exports = {
     usage: `\n${prefix}diemdanh → Điểm danh nhận xu miễn phí mỗi ngày\n━━━━━━━━━━━━━\n🎁 Nhận xu ngẫu nhiên mỗi lần điểm danh\n👑 VIP nhận thưởng gấp đôi\n⏰ Reset lúc 00:00 hàng ngày`,
     execute: async ({ api, event, config }) => {
         const { threadID, messageID, senderID } = event;
+        const stringThreadID = String(threadID);
+        const stringSenderID = String(senderID);
 
-        // 1. CHỐT CHẶN RACE CONDITION
-        if (global.diemdanhLock.has(senderID)) return;
-        global.diemdanhLock.add(senderID);
+        const lockKey = `${stringThreadID}_${stringSenderID}`;
+        if (global.diemdanhLock.has(lockKey)) return;
+        global.diemdanhLock.add(lockKey);
 
         try {
-            // 2. LẤY THÔNG TIN & FIX MÚI GIỜ VIỆT NAM
-            const rows = await execute('SELECT credits, name, last_checkin, vip_until FROM messenger_users WHERE psid = ?', [senderID]);
+            // Lấy thông tin theo (thread_id, psid)
+            let rows = await execute(
+                'SELECT credits, name, last_checkin, vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?',
+                [stringThreadID, stringSenderID]
+            );
 
             if (rows.length === 0) {
-                global.diemdanhLock.delete(senderID);
-                const prefix = config?.prefix || "!";
-                return api.sendMessage(`❌ Bạn chưa có tài khoản.\nGõ ${prefix}tien để đăng ký.`, threadID, messageID);
+                // Tự tạo tài khoản mới ở nhóm này
+                const userName = (global.data && global.data.userName && global.data.userName.get(stringSenderID)) || "Người dùng";
+                await execute(
+                    'INSERT INTO messenger_users (thread_id, psid, name, credits) VALUES (?, ?, ?, 10000)',
+                    [stringThreadID, stringSenderID, userName]
+                );
+                rows = await execute(
+                    'SELECT credits, name, last_checkin, vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?',
+                    [stringThreadID, stringSenderID]
+                );
             }
 
             const user = rows[0];
             
-            // Tính toán ngày hôm nay theo múi giờ VN (UTC+7)
             const now = new Date();
             const vnTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
             const todayStr = vnTime.toISOString().split('T')[0];
             
-            // Check VIP status
             const hasVIP = user.vip_until && new Date(user.vip_until) > now; 
 
-            // Kiểm tra ngày điểm danh từ DB
             let lastCheckinStr = "";
             if (user.last_checkin) {
-                // Ép kiểu về ngày VN để so sánh chính xác
                 const lastDate = new Date(user.last_checkin);
                 const lastVnTime = new Date(lastDate.getTime() + (7 * 60 * 60 * 1000));
                 lastCheckinStr = lastVnTime.toISOString().split('T')[0];
             }
 
             if (lastCheckinStr === todayStr) {
-                global.diemdanhLock.delete(senderID);
-                return api.sendMessage(`🛑 Hôm nay bạn đã nhận quà rồi!\n👉 Hẹn bạn vào ngày mai.`, threadID, messageID);
+                return api.sendMessage(`🛑 Hôm nay bạn đã nhận quà ở thế giới nhóm này rồi!\n👉 Hẹn bạn vào ngày mai.`, threadID, messageID);
             }
 
-            // 3. THƯỞNG (Random 10k - 50k)
             let reward = Math.floor(Math.random() * (50000 - 10000 + 1)) + 10000;
             
-            // VIP x2 thuong
             if (hasVIP) {
                 reward = reward * 2;
             }
             
-            // Cập nhật ngay lập tức
             await execute(
-                'UPDATE messenger_users SET credits = credits + ?, last_checkin = ? WHERE psid = ?',
-                [reward, todayStr, senderID]
+                'UPDATE messenger_users SET credits = credits + ?, last_checkin = ? WHERE thread_id = ? AND psid = ?',
+                [reward, todayStr, stringThreadID, stringSenderID]
             );
 
             try {
-                recordAction(senderID, 'checkin', 1);
+                recordAction(stringSenderID, 'checkin', 1);
             } catch (_) {}
 
-            let msg = `📅 ĐIỂM DANH THÀNH CÔNG!\n━━━━━━━━━━━━━\n` +
-                `🎁 Quà tặng: +${reward.toLocaleString()} xu\n`;
+            let msg = `📅 ĐIỂM DANH THÀNH CÔNG (THẾ GIỚI NÀY)!\n━━━━━━━━━━━━━\n` +
+                `🎁 Quà tặng: +${reward.toLocaleString('vi-VN')} xu\n`;
             
-            if (hasVIP) msg += `👑 VIP Bonus: x2 thuong!\n`;
+            if (hasVIP) msg += `👑 VIP Bonus: x2 thưởng!\n`;
             
-            msg += `💰 Số dư mới: ${(parseInt(user.credits) + reward).toLocaleString()} xu\n` +
+            msg += `💰 Số dư mới: ${(parseInt(user.credits) + reward).toLocaleString('vi-VN')} xu\n` +
                 `✅ Chúc ${user.name} một ngày tốt lành!`;
 
-            api.sendMessage(msg, threadID, messageID);
+            return api.sendMessage(msg, threadID, messageID);
 
         } catch (e) {
             console.error(e);
-            api.sendMessage("❌ Lỗi hệ thống, vui lòng thử lại.", threadID);
+            return api.sendMessage("❌ Lỗi hệ thống, vui lòng thử lại.", threadID);
         } finally {
-            // Mở khóa cho người dùng sau khi xử lý xong
-            global.diemdanhLock.delete(senderID);
+            global.diemdanhLock.delete(lockKey);
         }
     }
 };

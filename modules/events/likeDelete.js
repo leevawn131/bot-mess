@@ -15,7 +15,8 @@ module.exports = {
   name: "likeDelete",
   eventType: ["message_reaction"],
 
-  execute: async ({ api, event }) => {
+  run: async function(Obj) { return this.execute(Obj); },
+    execute: async ({ api, event }) => {
     const threadID = String(event?.threadID || "");
     const reactorID = String(event?.userID || "");
     const messageOwnerID = String(event?.senderID || "");
@@ -27,6 +28,10 @@ module.exports = {
 
     const reaction = normalizeReaction(event.reaction || event.emoji || event.icon);
     if (reaction !== "like") return;
+
+    // Kiểm tra xem tin nhắn có cài đặt chống gỡ (nounsend) hay không
+    const { isNoUnsend } = require("../utils/noUnsendStorage");
+    if (isNoUnsend(event.messageID)) return;
 
     // Kiểm tra quyền theo mode hiện tại
     try {

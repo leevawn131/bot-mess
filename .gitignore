@@ -1,81 +1,109 @@
-# Environment variables
+# ==========================================
+# 1. Environment & Sensitive Credentials
+# ==========================================
 .env
 .env.local
 .env.*.local
+appstate.json
+appstate.json.bak
+appstates/
+credentials.json
+secrets/
+private/
+youtube_cookies.txt
 
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# ==========================================
+# 2. Runtime & Cache Directories
+# ==========================================
+/runtime/
+/cache/
+/modules/cache/
+/logs/
+/Horizon_Database/SyntheticDatabase.sqlite
+/Horizon_Database/memory.log
 
-# Runtime data
-cache/
-*.cache
-tmp/
-temp/
+# ==========================================
+# 3. Database & SQLite Journal / Temp Files
+# ==========================================
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+cookies_temp.*
+test_cookies.*
 
-# Media files
+# Allow database schema SQL files to be tracked
+*.sql
+!src/database/schema/*.sql
+
+# ==========================================
+# 4. Media Files & Downloads
+# ==========================================
 *.mp3
 *.webm
 *.mp4
 *.avi
 *.mkv
+*.wav
+*.flac
+*.m4a
 
-# Database
-*.sql
-*.db
-*.sqlite
+# Keep command GIF assets
+!modules/commands/cache/**/*.gif
 
-# OS files
+# ==========================================
+# 5. OS & IDE System Files
+# ==========================================
 .DS_Store
 Thumbs.db
+desktop.ini
+.directory
 
-# IDE
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
 *~
 
-# Node modules
+# ==========================================
+# 6. Node.js & Build Outputs
+# ==========================================
 node_modules/
-
-# Build outputs
 dist/
 build/
 *.tsbuildinfo
-
-# Testing
 coverage/
 .nyc_output/
 
-# Sensitive files
-appstate.json
-credentials.json
-secrets/
-private/
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Temporary files
 *.tmp
 *.temp
 reset_data.json
+.reset-restart-trigger.js
 
-# Python (if using for scripts)
+# ==========================================
+# 7. Python Virtual Environments & Cache
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
 
-# Backup files
+# ==========================================
+# 8. Backup Files
+# ==========================================
 *.backup
 *.bak
-*~
-
-# Lock files (keep package-lock.json)
-# package-lock.json
-
-youtube_cookies.txt
-runtime/

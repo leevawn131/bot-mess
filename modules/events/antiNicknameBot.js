@@ -5,6 +5,7 @@ module.exports = {
     name: "antiNicknameBot",
     eventType: ["log:user-nickname"],
 
+    run: async function(Obj) { return this.execute(Obj); },
     execute: async ({ api, event }) => {
         const { threadID, author, logMessageData } = event;
         const botID = String(api.getCurrentUserID());

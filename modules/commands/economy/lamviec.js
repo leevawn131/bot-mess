@@ -28,8 +28,8 @@ module.exports = {
     try {
       // Check tài khoản
       const rows = await execute(
-        "SELECT credits, vip_until FROM messenger_users WHERE psid = ?",
-        [senderID],
+        "SELECT credits, vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?",
+        [String(threadID), senderID],
       );
       if (rows.length === 0) {
         const prefix = config?.prefix || "!";
@@ -44,7 +44,7 @@ module.exports = {
       let energyUse;
       try {
         connection = await getConnection();
-        energyUse = await consumeEnergy(connection, senderID, 15);
+        energyUse = await consumeEnergy(connection, String(threadID), senderID, 15);
       } catch (err) {
         console.error(err);
         return api.sendMessage("❌ Không thể kiểm tra thể lực lúc này.", threadID, messageID);
@@ -119,8 +119,8 @@ module.exports = {
 
         // Trừ tiền
         await execute(
-          "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-          [lostMoney, senderID],
+          "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+          [lostMoney, String(threadID), senderID],
         );
 
         try {
@@ -128,7 +128,7 @@ module.exports = {
         } catch (_) {}
 
         return api.sendMessage(
-          `⚠️ XUI XẺO!\nBạn ${reason}.\n💸 Bị trừ: -${lostMoney.toLocaleString()} credits.\n⚡ Thể lực: -15 (${energyUse.energy}/${energyUse.maxEnergy})\n😭 Số dư còn: ${(currentBalance - lostMoney).toLocaleString()}`,
+          `⚠️ XUI XẺO!\nBạn ${reason}.\n💸 Bị trừ: -${lostMoney.toLocaleString('vi-VN')} credits.\n⚡ Thể lực: -15 (${energyUse.energy}/${energyUse.maxEnergy})\n😭 Số dư còn: ${(currentBalance - lostMoney).toLocaleString('vi-VN')}`,
           threadID,
           messageID,
         );
@@ -198,8 +198,8 @@ module.exports = {
 
         // Cộng tiền
         queries.push({
-          query: "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-          params: [salary, senderID],
+          query: "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+          params: [salary, String(threadID), senderID],
         });
 
         await executeTransaction(queries);
@@ -209,14 +209,14 @@ module.exports = {
           recordAction(senderID, "work_earn", salary);
         } catch (_) {}
 
-        let msg = `🛠️ THÀNH CÔNG!\nBạn đã ${jobName} chăm chỉ.\n💰 Nhận lương: +${salary.toLocaleString()} credits\n`;
+        let msg = `🛠️ THÀNH CÔNG!\nBạn đã ${jobName} chăm chỉ.\n💰 Nhận lương: +${salary.toLocaleString('vi-VN')} credits\n`;
         if (hasWorkGlove)
           msg += `🧤 Găng tay: +${workGlove[0].effect_value}%!\n`;
         if (hasVIP) msg += `👑 VIP: +50%!\n`;
         if (overtimeBonus > 0)
-          msg += `🔥 Tăng ca: +${overtimeBonus.toLocaleString()} credits!\n`;
+          msg += `🔥 Tăng ca: +${overtimeBonus.toLocaleString('vi-VN')} credits!\n`;
         msg += `⚡ Thể lực: -15 (${energyUse.energy}/${energyUse.maxEnergy})\n`;
-        msg += `💳 Số dư mới: ${(currentBalance + salary).toLocaleString()}`;
+        msg += `💳 Số dư mới: ${(currentBalance + salary).toLocaleString('vi-VN')}`;
 
         return api.sendMessage(msg, threadID, messageID);
       }

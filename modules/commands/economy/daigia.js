@@ -40,34 +40,18 @@ module.exports = {
                 return api.sendMessage("📊 Không thể lấy danh sách thành viên nhóm (hoặc nhóm chỉ có mình Boss).", threadID);
             }
 
-            // 3. Lấy top 10 người giàu nhất trong nhóm từ bảng messenger_user_credits
-            // Nếu bảng mới chưa có dữ liệu, fallback về bảng cũ
+            // 3. Lấy top 10 người giàu nhất trong nhóm từ bảng messenger_users (Thế giới này)
             let rows = [];
-            
-            // Thử query từ bảng mới (credits theo nhóm)
             try {
                 const placeholders = memberIDs.map(() => '?').join(',');
                 rows = await execute(
-                    `SELECT muc.psid, muc.credits, mu.name
-                     FROM messenger_user_credits muc
-                     LEFT JOIN messenger_users mu ON muc.psid = mu.psid
-                     WHERE muc.threadID = ? AND muc.psid IN (${placeholders})
-                     ORDER BY muc.credits DESC LIMIT 10`,
+                    `SELECT psid, credits, name FROM messenger_users
+                     WHERE thread_id = ? AND psid IN (${placeholders})
+                     ORDER BY credits DESC LIMIT 10`,
                     [String(threadID), ...memberIDs]
                 );
             } catch (e) {
-                // Nếu bảng mới chưa tồn tại hoặc lỗi, bỏ qua để fallback
-            }
-
-            // Nếu bảng mới chưa có dữ liệu, dùng bảng cũ (toàn hệ thống)
-            if (rows.length === 0) {
-                const placeholders = memberIDs.map(() => '?').join(',');
-                rows = await execute(
-                    `SELECT psid, credits, name FROM messenger_users
-                     WHERE psid IN (${placeholders})
-                     ORDER BY credits DESC LIMIT 10`,
-                    memberIDs
-                );
+                console.error("Lỗi truy vấn đại gia:", e);
             }
 
             if (rows.length === 0) {
@@ -93,7 +77,7 @@ module.exports = {
                 const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "🔹";
                 const rank = (i + 1).toString().padStart(2, " ");
 
-                msg += `${medal} ${rank}. ${userName}: ${credits.toLocaleString()} credits\n`;
+                msg += `${medal} ${rank}. ${userName}: ${credits.toLocaleString('vi-VN')} credits\n`;
             }
 
             msg += "\n━━━━━━━━━━━━━━━━━━━━━━━";

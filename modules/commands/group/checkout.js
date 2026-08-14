@@ -87,8 +87,9 @@ module.exports = {
                 return api.sendMessage(`📭 Chưa có ai rời nhóm trong ${labelMap[period]}.`, threadID, messageID);
             }
 
+            let lines = [];
             if (period === "day") {
-                const lines = [
+                lines = [
                     `📆 LỊCH SỬ RỜI NHÓM HÔM NAY (${entries.length})`,
                     "━━━━━━━━━━━━━"
                 ];
@@ -96,12 +97,8 @@ module.exports = {
                 entries.forEach((entry, index) => {
                     lines.push(`${index + 1}. ${entry.name} | ${formatTimestamp(entry.leftAt, { includeDate: false, includeSeconds: true })} | ${buildProfileLink(entry.uid)}`);
                 });
-
-                return sendChunks(api, threadID, messageID, lines);
-            }
-
-            if (period === "week") {
-                const lines = [
+            } else if (period === "week") {
+                lines = [
                     `📚 LỊCH SỬ RỜI NHÓM TUẦN NÀY (${entries.length})`,
                     "━━━━━━━━━━━━━"
                 ];
@@ -109,35 +106,34 @@ module.exports = {
                 entries.forEach((entry, index) => {
                     lines.push(`${index + 1}. ${entry.name} • ${formatTimestamp(entry.leftAt, { includeDate: true, includeSeconds: false })} • ${getActionLabel(entry.action)}`);
                 });
+            } else {
+                lines = [
+                    `🗓️ LỊCH SỬ RỜI NHÓM THÁNG NÀY (${entries.length})`,
+                    "━━━━━━━━━━━━━"
+                ];
 
-                lines.push("━━━━━━━━━━━━━");
-                lines.push("↩️ Reply STT (ví dụ: 1 hoặc 1 3 5) để nhận link Facebook.");
-
-                const sentMessages = await sendChunks(api, threadID, messageID, lines);
-                global.leaveHistoryReplyContexts = global.leaveHistoryReplyContexts || {};
-
-                sentMessages.forEach((info) => {
-                    if (info?.messageID) {
-                        global.leaveHistoryReplyContexts[info.messageID] = {
-                            author: String(senderID),
-                            threadID: String(threadID),
-                            entries
-                        };
-                    }
+                entries.forEach((entry, index) => {
+                    lines.push(`${index + 1}. ${entry.name} • ${formatTimestamp(entry.leftAt, { includeDate: true, includeSeconds: false })}`);
                 });
-                return;
             }
 
-            const lines = [
-                `🗓️ LỊCH SỬ RỜI NHÓM THÁNG NÀY (${entries.length})`,
-                "━━━━━━━━━━━━━"
-            ];
+            lines.push("━━━━━━━━━━━━━");
+            lines.push("👉 Reply STT (ví dụ: 1 hoặc 1 3) để nhận link Facebook.");
+            lines.push("👉 Reply 'cutvv STT' (ví dụ: cutvv 1 hoặc cutvv 1 3) để cấm vĩnh viễn.");
 
-            entries.forEach((entry, index) => {
-                lines.push(`${index + 1}. ${entry.name} • ${formatTimestamp(entry.leftAt, { includeDate: true, includeSeconds: false })}`);
+            const sentMessages = await sendChunks(api, threadID, messageID, lines);
+            global.leaveHistoryReplyContexts = global.leaveHistoryReplyContexts || {};
+
+            sentMessages.forEach((info) => {
+                if (info?.messageID) {
+                    global.leaveHistoryReplyContexts[info.messageID] = {
+                        author: String(senderID),
+                        threadID: String(threadID),
+                        entries
+                    };
+                }
             });
-
-            return sendChunks(api, threadID, messageID, lines);
+            return;
         } catch (e) {
             console.error("Lỗi lsroi:", e);
             return api.sendMessage("❌ Không thể lấy lịch sử rời nhóm lúc này.", threadID, messageID);
@@ -154,33 +150,77 @@ module.exports = {
             if (!context) return;
 
             if (String(context.threadID) !== String(threadID)) return;
-            if (String(context.author) !== String(senderID)) {
-                return api.sendMessage("⚠️ Chỉ người gọi lsroi mới được reply STT.", threadID, messageID);
-            }
 
             const input = String(body || "").trim();
-            const sttMatches = input.match(/\d+/g) || [];
-            const sttList = [...new Set(sttMatches.map(n => Number(n)).filter(Number.isInteger))];
+            const isCutvv = input.toLowerCase().startsWith("cutvv");
 
-            if (sttList.length === 0) {
-                return api.sendMessage("⚠️ STT không hợp lệ. Ví dụ: 1 hoặc 1 3 5", threadID, messageID);
+            if (isCutvv) {
+                // Kiểm tra quyền quản trị viên của người reply
+                const { getAdminBotUIDs, toAdminIdList } = require("../../utils/checkPermission");
+                const threadInfo = await getThreadInfoCached(api, threadID);
+                const adminIDs = toAdminIdList(threadInfo);
+                const isSenderAdmin = adminIDs.includes(String(senderID));
+                const adminBotUIDs = getAdminBotUIDs();
+                const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
+
+                if (!isSenderAdmin && !isSenderBotAdmin) {
+                    return api.sendMessage("⚠️ Chỉ QTV nhóm hoặc chủ bot mới có thể sử dụng tính năng cấm vĩnh viễn (cutvv)!", threadID, messageID);
+                }
+
+                const sttMatches = input.slice(5).match(/\d+/g) || [];
+                const sttList = [...new Set(sttMatches.map(n => Number(n)).filter(Number.isInteger))];
+
+                if (sttList.length === 0) {
+                    return api.sendMessage("⚠️ STT không hợp lệ. Ví dụ: cutvv 1 hoặc cutvv 1 3 5", threadID, messageID);
+                }
+
+                if (sttList.some(stt => stt < 1 || stt > context.entries.length)) {
+                    return api.sendMessage("⚠️ Có STT vượt ngoài danh sách rời nhóm.", threadID, messageID);
+                }
+
+                const { addBlock } = require("../../utils/cutvvStorage");
+                const successNames = [];
+                for (const stt of sttList) {
+                    const entry = context.entries[stt - 1];
+                    const added = await addBlock(threadID, entry.uid, entry.name, senderID);
+                    if (added) {
+                        successNames.push(`${entry.name} (${entry.uid})`);
+                    }
+                }
+
+                return api.sendMessage(
+                    `✅ Đã thêm thành công ${successNames.length} thành viên vào danh sách cấm vĩnh viễn (cutvv):\n${successNames.map(name => `• ${name}`).join("\n")}`,
+                    threadID,
+                    messageID
+                );
+            } else {
+                if (String(context.author) !== String(senderID)) {
+                    return api.sendMessage("⚠️ Chỉ người gọi checkout mới được reply STT.", threadID, messageID);
+                }
+
+                const sttMatches = input.match(/\d+/g) || [];
+                const sttList = [...new Set(sttMatches.map(n => Number(n)).filter(Number.isInteger))];
+
+                if (sttList.length === 0) {
+                    return api.sendMessage("⚠️ STT không hợp lệ. Ví dụ: 1 hoặc 1 3 5", threadID, messageID);
+                }
+
+                if (sttList.length > 10) {
+                    return api.sendMessage("⚠️ Mỗi lần chỉ lấy tối đa 10 STT.", threadID, messageID);
+                }
+
+                if (sttList.some(stt => stt < 1 || stt > context.entries.length)) {
+                    return api.sendMessage("⚠️ Có STT vượt ngoài danh sách rời nhóm.", threadID, messageID);
+                }
+
+                const lines = ["🔗 LINK FACEBOOK"];
+                sttList.forEach((stt) => {
+                    const entry = context.entries[stt - 1];
+                    lines.push(`${stt}. ${entry.name} • ${buildProfileLink(entry.uid)}`);
+                });
+
+                return api.sendMessage(lines.join("\n"), threadID, messageID);
             }
-
-            if (sttList.length > 10) {
-                return api.sendMessage("⚠️ Mỗi lần chỉ lấy tối đa 10 STT.", threadID, messageID);
-            }
-
-            if (sttList.some(stt => stt < 1 || stt > context.entries.length)) {
-                return api.sendMessage("⚠️ Có STT vượt ngoài danh sách tuần này.", threadID, messageID);
-            }
-
-            const lines = ["🔗 LINK FACEBOOK"];
-            sttList.forEach((stt) => {
-                const entry = context.entries[stt - 1];
-                lines.push(`${stt}. ${entry.name} • ${buildProfileLink(entry.uid)}`);
-            });
-
-            return api.sendMessage(lines.join("\n"), threadID, messageID);
         } catch (e) {
             console.error("Lỗi lsroi handleReply:", e);
         }

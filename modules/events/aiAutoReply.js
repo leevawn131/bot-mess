@@ -1,7 +1,7 @@
 const fs = require("fs");
 const { getMediaBuffer, getPreuploadedAttachment, refillPreuploadedPool } = require("../utils/autorepSettings");
 const stream = require("stream");
-const { findMatchingRule } = require("../utils/autorepSettings");
+const { findMatchingRule, removeAutorepRule } = require("../utils/autorepSettings");
 
 function buildAutorepPayload(rule, threadID) {
     const payload = {};
@@ -43,6 +43,7 @@ module.exports = {
     name: "autorep",
     eventType: ["message", "message_reply"],
 
+    run: async function(Obj) { return this.execute(Obj); },
     execute: async ({ api, event, config }) => {
         const body = String(event?.body || "").trim();
         const threadID = String(event?.threadID || "");
@@ -56,6 +57,28 @@ module.exports = {
 
         const rule = findMatchingRule(threadID, body);
         if (!rule) return;
+
+        if (rule.responseText) {
+            const threadSetting = global.data?.threadData?.get(threadID) || {};
+            const systemPrefix = global.config?.PREFIX || global.config?.prefix || prefix || "/";
+            const threadPrefix = threadSetting.PREFIX || systemPrefix;
+            const invalidPrefixes = [systemPrefix, threadPrefix];
+            const uniquePrefixes = [...new Set(invalidPrefixes)].filter(p => typeof p === "string" && p.trim().length > 0);
+            
+            const hasPrefix = uniquePrefixes.some(pref => rule.responseText.trim().startsWith(pref));
+            if (hasPrefix) {
+                try {
+                    removeAutorepRule(threadID, rule.keyword);
+                } catch (e) {
+                    console.error("[autorep] Không thể xóa tự động autorep không an toàn:", e);
+                }
+                return api.sendMessage(
+                    `⚠️ Cảnh báo bảo mật: Từ khóa autorep "${rule.keyword}" chứa nội dung phản hồi bắt đầu bằng prefix của bot (${uniquePrefixes.map(p => `"${p}"`).join(", ")}). Hệ thống đã tự động xóa autorep này để đảm bảo an toàn.`,
+                    threadID,
+                    event.messageID
+                );
+            }
+        }
 
         // Cooldown check to prevent users from spamming keywords and bot from spamming media
         const { checkCooldown } = require("../utils/cooldown");

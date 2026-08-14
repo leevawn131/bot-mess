@@ -719,22 +719,72 @@ function formatAttachment(attachments, attachmentIds, attachmentMap, shareMap) {
 }
 
 /**
- * @param {{ delta: { messageMetadata: any; data: { prng: string; }; body: string; attachments: any; participants: any; }; }} m
+ * @param {any} message
+ */
+function getMentions(message) {
+    if (!message) return {};
+    var body = message.body || "";
+    var mentions = {};
+
+    var mdata = [];
+    if (message.data && message.data.prng) {
+        try {
+            mdata = JSON.parse(message.data.prng);
+        } catch (e) {
+            mdata = [];
+        }
+    }
+    if (mdata && mdata.length > 0) {
+        for (var i = 0; i < mdata.length; i++) {
+            var id = mdata[i].i;
+            var o = parseInt(mdata[i].o, 10) || 0;
+            var l = parseInt(mdata[i].l, 10) || 0;
+            mentions[String(id)] = body.substring(o, o + l);
+        }
+        return mentions;
+    }
+
+    var md = message.messageMetadata;
+    if (md && md.data && md.data.data) {
+        var mdData = md.data.data;
+        var gbData = null;
+        for (var key in mdData) {
+            if (Object.prototype.hasOwnProperty.call(mdData, key)) {
+                if (mdData[key] && mdData[key].asMap && mdData[key].asMap.data) {
+                    gbData = mdData[key].asMap.data;
+                    break;
+                }
+            }
+        }
+        if (gbData) {
+            for (var k in gbData) {
+                if (Object.prototype.hasOwnProperty.call(gbData, k)) {
+                    var entry = gbData[k];
+                    if (entry && entry.asMap && entry.asMap.data) {
+                        var d = entry.asMap.data;
+                        var uid = d.id && d.id.asLong ? String(d.id.asLong) : null;
+                        var offset = parseInt(d.offset && d.offset.asLong ? d.offset.asLong : 0, 10);
+                        var len = parseInt(d.length && d.length.asLong ? d.length.asLong : 0, 10);
+                        if (uid != null) {
+                            mentions[uid] = body.substring(offset, offset + len);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return mentions;
+}
+
+/**
+ * @param {{ delta?: any; messageMetadata: any; data: { prng: string; }; body: string; attachments: any; participants: any; }} m
  */
 
 function formatDeltaMessage(m) {
     var md = m.messageMetadata;
-    var mdata =
-        m.data === undefined ? [] :
-        m.data.prng === undefined ? [] :
-        JSON.parse(m.data.prng);
-    var m_id = mdata.map((/** @type {{ i: any; }} */u) => u.i);
-    var m_offset = mdata.map((/** @type {{ o: any; }} */u) => u.o);
-    var m_length = mdata.map((/** @type {{ l: any; }} */u) => u.l);
-    var mentions = {};
+    var mentions = getMentions(m);
     var body = m.body || "";
     var args = body == "" ? [] : body.trim().split(/\s+/);
-    for (var i = 0; i < m_id.length; i++) mentions[m_id[i]] = m.body.substring(m_offset[i], m_offset[i] + m_length[i]);
 
     return {
         type: "message",
@@ -3072,6 +3122,6 @@ module.exports = {
     decodeClientPayload,
     getAppState,
     getAdminTextMessageType,
-    setProxy,
-    getFroms
+    getFroms,
+    getMentions
 };

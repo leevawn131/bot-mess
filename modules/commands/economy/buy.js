@@ -70,8 +70,8 @@ module.exports = {
 
       // Check tiền của người chơi
       const [users] = await connection.execute(
-        "SELECT credits, name FROM messenger_users WHERE psid = ?",
-        [senderID],
+        "SELECT credits, name FROM messenger_users WHERE thread_id = ? AND psid = ?",
+        [String(threadID), senderID],
       );
 
       if (users.length === 0) {
@@ -86,7 +86,7 @@ module.exports = {
 
       if (user.credits < totalPrice) {
         return api.sendMessage(
-          `💸 Không đủ tiền!\nGiá: ${totalPrice.toLocaleString()} xu\nBạn có: ${user.credits.toLocaleString()} xu`,
+          `💸 Không đủ tiền!\nGiá: ${totalPrice.toLocaleString('vi-VN')} xu\nBạn có: ${user.credits.toLocaleString('vi-VN')} xu`,
           threadID,
           messageID,
         );
@@ -99,15 +99,15 @@ module.exports = {
         if (item.type === "vip") {
           // Trừ tiền
           await connection.execute(
-            "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-            [totalPrice, senderID],
+            "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+            [totalPrice, String(threadID), senderID],
           );
 
           // Tính thời gian VIP
           const now = new Date();
           const [currentUser] = await connection.execute(
-            "SELECT vip_until FROM messenger_users WHERE psid = ?",
-            [senderID],
+            "SELECT vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?",
+            [String(threadID), senderID],
           );
 
           let vipUntil;
@@ -125,14 +125,14 @@ module.exports = {
           }
 
           await connection.execute(
-            "UPDATE messenger_users SET vip_until = ? WHERE psid = ?",
-            [vipUntil, senderID],
+            "UPDATE messenger_users SET vip_until = ? WHERE thread_id = ? AND psid = ?",
+            [vipUntil, String(threadID), senderID],
           );
 
           await connection.commit();
 
           return api.sendMessage(
-            `✅ MUA THÀNH CÔNG!\n${item.name} x${quantity}\n💰 Trừ: ${totalPrice.toLocaleString()} xu\n👑 VIP đến: ${vipUntil.toLocaleString("vi-VN")}\n💳 Còn lại: ${(user.credits - totalPrice).toLocaleString()} xu`,
+            `✅ MUA THÀNH CÔNG!\n${item.name} x${quantity}\n💰 Trừ: ${totalPrice.toLocaleString('vi-VN')} xu\n👑 VIP đến: ${vipUntil.toLocaleString("vi-VN")}\n💳 Còn lại: ${(user.credits - totalPrice).toLocaleString('vi-VN')} xu`,
             threadID,
             messageID,
           );
@@ -142,44 +142,44 @@ module.exports = {
         // Check item đã có trong inventory chưa (nếu stackable thì tăng uses_left)
         if (item.stackable) {
           const [existing] = await connection.execute(
-            "SELECT * FROM user_inventory WHERE psid = ? AND item_key = ?",
-            [senderID, itemKey],
+            "SELECT * FROM user_inventory WHERE thread_id = ? AND psid = ? AND item_key = ?",
+            [String(threadID), senderID, itemKey],
           );
 
           const totalUses = item.uses * quantity;
           if (existing.length > 0) {
             // Tăng uses_left
             await connection.execute(
-              "UPDATE user_inventory SET uses_left = uses_left + ? WHERE psid = ? AND item_key = ?",
-              [totalUses, senderID, itemKey],
+              "UPDATE user_inventory SET uses_left = uses_left + ? WHERE thread_id = ? AND psid = ? AND item_key = ?",
+              [totalUses, String(threadID), senderID, itemKey],
             );
           } else {
             // Thêm mới
             await connection.execute(
-              "INSERT INTO user_inventory (psid, item_key, uses_left) VALUES (?, ?, ?)",
-              [senderID, itemKey, totalUses],
+              "INSERT INTO user_inventory (thread_id, psid, item_key, uses_left) VALUES (?, ?, ?, ?)",
+              [String(threadID), senderID, itemKey, totalUses],
             );
           }
         } else {
           // Không stackable, thêm mới từng cái
           for (let i = 0; i < quantity; i++) {
             await connection.execute(
-              "INSERT INTO user_inventory (psid, item_key, uses_left) VALUES (?, ?, ?)",
-              [senderID, itemKey, item.uses],
+              "INSERT INTO user_inventory (thread_id, psid, item_key, uses_left) VALUES (?, ?, ?, ?)",
+              [String(threadID), senderID, itemKey, item.uses],
             );
           }
         }
 
         // Trừ tiền
         await connection.execute(
-          "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-          [totalPrice, senderID],
+          "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+          [totalPrice, String(threadID), senderID],
         );
 
         await connection.commit();
 
         return api.sendMessage(
-          `✅ MUA THÀNH CÔNG!\n${item.name} x${quantity}\n💰 Trừ: ${totalPrice.toLocaleString()} xu\n📦 Tổng lượng: ${item.uses * quantity}\n💳 Còn lại: ${(user.credits - totalPrice).toLocaleString()} xu`,
+          `✅ MUA THÀNH CÔNG!\n${item.name} x${quantity}\n💰 Trừ: ${totalPrice.toLocaleString('vi-VN')} xu\n📦 Tổng lượng: ${item.uses * quantity}\n💳 Còn lại: ${(user.credits - totalPrice).toLocaleString('vi-VN')} xu\nDùng ${prefix}inv để kiểm tra.`,
           threadID,
           messageID,
         );

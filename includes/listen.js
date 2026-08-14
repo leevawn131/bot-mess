@@ -12,6 +12,7 @@ module.exports = function ({ api, models }) {
   const axios = require("axios");
   const config = require("./../config.json");
   const { getThreadInfoCached } = require("../modules/utils/threadInfo");
+  const { checkAndRestoreOldMemberNickname } = require("../modules/utils/restoreNickname");
 /////////////////////////////////////////////////////////////////////////////
 
   var day = moment.tz("Asia/Ho_Chi_Minh").day();
@@ -384,12 +385,13 @@ logMessageData.leftParticipantFbId,
   }
   let name = event.senderID ? await Users.getNameUser(event.senderID) : "";
   if (isMessage && body.startsWith(prefix) && event.senderID != api.getCurrentUserID() && !global.config.NDH.includes(event.senderID) && !global.config.ADMINBOT.includes(event.senderID)) {
-     let thuebot;
-   try {
-        thuebot = JSON.parse(require('fs').readFileSync(process.cwd() + '/modules/commands/data/thuebot.json'));
-     } catch {
-        thuebot = [];
-     };
+      let thuebot;
+      try {
+         const pPath = require('path').resolve(__dirname, '../modules/commands/data/thuebot.json');
+         thuebot = JSON.parse(require('fs').readFileSync(pPath));
+      } catch {
+         thuebot = [];
+      };
      let find_thuebot = thuebot.find($ => $.t_id == event.threadID);
      if (((global.data.threadData.get(event.threadID)?.PREFIX || global.config.PREFIX) + 'callad') != event.args[0]) {
         if (!find_thuebot) return api.sendMessage(`\n❎ ${name} Nhóm đã thuê bot đéo đâu`, event.threadID, event.messageID);
@@ -410,6 +412,9 @@ switch (event.type) {
             case "message":
             case "message_reply":
             case "message_unsend":
+            if (event.senderID && event.threadID) {
+              checkAndRestoreOldMemberNickname(api, event.threadID, event.senderID);
+            }
             await handleCreateDatabase({ event });
             await handleCommand({ event });
             handleReply({ event });
@@ -434,7 +439,10 @@ switch (event.type) {
         case "message_reaction":
         var { iconUnsend } = global.config
         if(iconUnsend.status && event.senderID == api.getCurrentUserID() && event.reaction == iconUnsend.icon) {
-          api.unsendMessage(event.messageID)
+          const { isNoUnsend } = require("../modules/utils/noUnsendStorage");
+          if (!isNoUnsend(event.messageID)) {
+            api.unsendMessage(event.messageID);
+          }
         }
     handleReaction({ event });
             break;

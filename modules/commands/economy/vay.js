@@ -2,6 +2,7 @@ const { execute } = require('../../utils/database');
 const path = require('path');
 const fs = require('fs');
 const { checkCooldown } = require('../../utils/cooldown');
+const { parseMoneyAmount } = require('../../utils/parseMoney');
 const prefix = process.env.BOT_PREFIX;
 
 // ID CỦA BOSS (Cho vay tiền)
@@ -20,6 +21,10 @@ const MAX_LOAN = 5000000;
 
 // Lãi suất mỗi ngày
 const DAILY_INTEREST_RATE = 0.075; // 7.5%
+
+function formatMoney(amount) {
+    return Math.floor(Number(amount) || 0).toLocaleString('vi-VN');
+}
 
 function normalizeDate(value, fallback = new Date()) {
     const d = value ? new Date(value) : new Date(fallback);
@@ -55,14 +60,14 @@ function previewCompoundedPrincipal(loan, now = new Date()) {
     };
 }
 
-async function syncLoanWithCompoundInterest(loan, psid, now = new Date()) {
+async function syncLoanWithCompoundInterest(loan, psid, threadId, now = new Date()) {
     const preview = previewCompoundedPrincipal(loan, now);
     const currentPrincipal = Math.max(0, Math.floor(Number(loan?.principal) || 0));
 
     if (preview.daysElapsed > 0 || preview.principal !== currentPrincipal) {
         await execute(
-            'UPDATE bank_loans SET principal = ?, last_loan_check = ? WHERE psid = ?',
-            [preview.principal, now, psid]
+            'UPDATE bank_loans SET principal = ?, last_loan_check = ? WHERE thread_id = ? AND psid = ?',
+            [preview.principal, now, threadId, psid]
         );
     }
 
@@ -88,8 +93,8 @@ module.exports = {
         try {
             // Kiểm tra xem user có đang trong tù không
             const jailRows = await execute(
-                'SELECT * FROM user_jail WHERE psid = ? AND jail_until > NOW()',
-                [senderID]
+                'SELECT * FROM user_jail WHERE thread_id = ? AND psid = ? AND jail_until > datetime(\'now\', \'localtime\')',
+                [String(threadID), senderID]
             );
 
             if (jailRows.length > 0) {
@@ -110,7 +115,7 @@ module.exports = {
             }
 
             // Lấy thông tin user
-            const userRows = await execute('SELECT credits, name FROM messenger_users WHERE psid = ?', [senderID]);
+            const userRows = await execute('SELECT credits, name FROM messenger_users WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
             if (userRows.length === 0) {
                 return api.sendMessage(`❌ Bạn chưa có tài khoản. Gõ ${prefix}tien để tạo.`, threadID, undefined, messageID);
             }
@@ -127,8 +132,10 @@ module.exports = {
                     `SELECT bl.psid, bl.principal, bl.interest_rate, bl.taken_at, bl.last_loan_check, bl.due_days, bl.is_overdue,
                             mu.name
                      FROM bank_loans bl
-                     LEFT JOIN messenger_users mu ON mu.psid = bl.psid
-                     ORDER BY bl.taken_at ASC`
+                     LEFT JOIN messenger_users mu ON mu.psid = bl.psid AND mu.thread_id = bl.thread_id
+                     WHERE bl.thread_id = ?
+                     ORDER BY bl.taken_at ASC`,
+                    [String(threadID)]
                 );
 
                 if (loanRows.length === 0) {
@@ -157,8 +164,8 @@ module.exports = {
 
                     msg += `${idx + 1}. ${name}\n`;
                     msg += `🆔 ${loan.psid}\n`;
-                    msg += `💰 Gốc: ${principal.toLocaleString()}\n`;
-                    msg += `💵 Nợ: ${Math.floor(totalDebt).toLocaleString()}\n`;
+                    msg += `💰 Gốc: ${formatMoney(principal)}\n`;
+                    msg += `💵 Nợ: ${formatMoney(totalDebt)}\n`;
                     msg += `${status}\n`;
                     msg += `━━━━━━━━━━━━━\n`;
                 });
@@ -168,11 +175,11 @@ module.exports = {
 
             // === CHECK KHOẢN VAY ===
             if (["check", "info"].includes(command)) {
-                const loanRows = await execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+                const loanRows = await execute('SELECT * FROM bank_loans WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
                 
                 if (loanRows.length === 0) {
                     return api.sendMessage(
-                        `💳 THÔNG TIN VAY\n━━━━━━━━━━━━━\n👤 ${userName}\n📊 Không có khoản vay nào\n━━━━━━━━━━━━━\n💡 Vay tối đa: ${MAX_LOAN.toLocaleString()}\n💰 Lãi suất: 7.5%/ngày`,
+                        `💳 THÔNG TIN VAY\n━━━━━━━━━━━━━\n👤 ${userName}\n📊 Không có khoản vay nào\n━━━━━━━━━━━━━\n💡 Vay tối đa: ${formatMoney(MAX_LOAN)}\n💰 Lãi suất: 7.5%/ngày`,
                         threadID,
                         undefined,
                         messageID
@@ -185,7 +192,7 @@ module.exports = {
                 const now = new Date();
                 const dueDate = new Date(takenAt.getTime() + loan.due_days * 24 * 60 * 60 * 1000);
 
-                const syncedLoan = await syncLoanWithCompoundInterest(loan, senderID, now);
+                const syncedLoan = await syncLoanWithCompoundInterest(loan, senderID, String(threadID), now);
                 const principal = syncedLoan.principal;
                 const totalDebt = principal;
 
@@ -196,9 +203,9 @@ module.exports = {
                 const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
                 
                 let msg = `💳 THÔNG TIN KHOẢN VAY\n━━━━━━━━━━━━━\n👤 ${userName}\n`;
-                msg += `💰 Gốc hiện tại: ${principal.toLocaleString()}\n`;
+                msg += `💰 Gốc hiện tại: ${formatMoney(principal)}\n`;
                 msg += `📈 Lãi suất: ${(interestRate * 100).toFixed(1)}%/ngày\n`;
-                msg += `💵 Tổng nợ hiện tại: ${totalDebt.toLocaleString()}\n`;
+                msg += `💵 Tổng nợ hiện tại: ${formatMoney(totalDebt)}\n`;
                 msg += `━━━━━━━━━━━━━\n`;
                 
                 if (isOverdue) {
@@ -218,7 +225,7 @@ module.exports = {
 
             // === TRẢ NỢ ===
             else if (["tra", "pay", "repay"].includes(command)) {
-                const loanRows = await execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+                const loanRows = await execute('SELECT * FROM bank_loans WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
                 
                 if (loanRows.length === 0) {
                     return api.sendMessage("❌ Bạn không có khoản vay nào cần trả.", threadID, undefined, messageID);
@@ -248,12 +255,12 @@ module.exports = {
                     );
                 }
 
-                const syncedLoan = await syncLoanWithCompoundInterest(loan, senderID, now);
+                const syncedLoan = await syncLoanWithCompoundInterest(loan, senderID, String(threadID), now);
                 const totalDebt = syncedLoan.principal;
 
                 const userCredits = parseInt(userRows[0].credits);
 
-                const replyMsg = `💳 TRẢ NỢ\n━━━━━━━━━━━━━\n💰 Tổng nợ: ${totalDebt.toLocaleString()}\n💵 Tiền có: ${userCredits.toLocaleString()}\n━━━━━━━━━━━━━\nReply:\n1️⃣ - Trả toàn bộ\n2️⃣ - Trả một phần (gõ số tiền trực tiếp)`;
+                const replyMsg = `💳 TRẢ NỢ\n━━━━━━━━━━━━━\n💰 Tổng nợ: ${formatMoney(totalDebt)}\n💵 Tiền có: ${formatMoney(userCredits)}\n━━━━━━━━━━━━━\nReply:\n1️⃣ - Trả toàn bộ\n2️⃣ - Trả một phần (gõ số tiền trực tiếp)`;
                 const info = await api.sendMessage(replyMsg, threadID, undefined, messageID);
 
                 global.vayReplyContexts = global.vayReplyContexts || {};
@@ -274,7 +281,7 @@ module.exports = {
             // === VAY TIỀN ===
             else {
                 // Kiểm tra xem đã có khoản vay chưa
-                const loanRows = await execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+                const loanRows = await execute('SELECT * FROM bank_loans WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
                 
                 if (loanRows.length > 0) {
                     return api.sendMessage(
@@ -290,14 +297,14 @@ module.exports = {
 
                 if (!amountStr || !daysStr) {
                     return api.sendMessage(
-                        `💳 VAY TIỀN - HƯỚNG DẪN\n━━━━━━━━━━━━━\n📝 Cú pháp: ${prefix}vay [số_tiền] [số_ngày]\n💡 Ví dụ: ${prefix}vay 500000 7\n━━━━━━━━━━━━━\n💰 Hạn mức: ${MAX_LOAN.toLocaleString()}\n📈 Lãi suất: 7.5%/ngày\n⏰ Trả từ ngày mai (00:00 UTC+7)`,
+                        `💳 VAY TIỀN - HƯỚNG DẪN\n━━━━━━━━━━━━━\n📝 Cú pháp: ${prefix}vay [số_tiền] [số_ngày]\n💡 Ví dụ: ${prefix}vay 500000 7\n━━━━━━━━━━━━━\n💰 Hạn mức: ${formatMoney(MAX_LOAN)}\n📈 Lãi suất: 7.5%/ngày\n⏰ Trả từ ngày mai (00:00 UTC+7)`,
                         threadID,
                         undefined,
                         messageID
                     );
                 }
 
-                const amount = parseInt(amountStr);
+                const amount = parseMoneyAmount(amountStr);
                 const days = parseInt(daysStr);
 
                 if (isNaN(amount) || amount <= 0) {
@@ -306,7 +313,7 @@ module.exports = {
 
                 if (amount > MAX_LOAN) {
                     return api.sendMessage(
-                        `❌ VƯỢT HẠN MỨC VAY!\n━━━━━━━━━━━━━\n💰 Hạn mức tối đa: ${MAX_LOAN.toLocaleString()}\n📝 Bạn muốn vay: ${amount.toLocaleString()}`,
+                        `❌ VƯỢT HẠN MỨC VAY!\n━━━━━━━━━━━━━\n💰 Hạn mức tối đa: ${formatMoney(MAX_LOAN)}\n📝 Bạn muốn vay: ${formatMoney(amount)}`,
                         threadID,
                         undefined,
                         messageID
@@ -325,18 +332,18 @@ module.exports = {
 
                 // Tạo khoản vay
                 await execute(
-                    'INSERT INTO bank_loans (psid, principal, interest_rate, taken_at, last_loan_check, due_days, is_overdue) VALUES (?, ?, ?, ?, ?, ?, FALSE)',
-                    [senderID, amount, DAILY_INTEREST_RATE, now, now, days]
+                    'INSERT INTO bank_loans (thread_id, psid, principal, interest_rate, taken_at, last_loan_check, due_days, is_overdue) VALUES (?, ?, ?, ?, ?, ?, ?, FALSE)',
+                    [String(threadID), senderID, amount, DAILY_INTEREST_RATE, now, now, days]
                 );
 
                 // Cộng tiền cho user
-                await execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [amount, senderID]);
+                await execute('UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?', [amount, String(threadID), senderID]);
 
                 // Trừ tiền boss
-                await execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [amount, BOSS_ID]);
+                await execute('UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?', [amount, String(threadID), BOSS_ID]);
 
                 return api.sendMessage(
-                    `✅ VAY TIỀN THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số tiền vay: ${amount.toLocaleString()}\n📅 Thời hạn: ${days} ngày\n📈 Lãi suất: 7.5%/ngày (lãi kép)\n━━━━━━━━━━━━━\n💵 Dự kiến lãi: ~${Math.floor(estimatedInterest).toLocaleString()}\n💸 Dự kiến trả: ~${Math.floor(estimatedTotal).toLocaleString()}\n⏰ Trả từ ngày mai (00:00 UTC+7)\n━━━━━━━━━━━━━\n⚠️ Quá hạn 3 ngày = Vào tù!`,
+                    `✅ VAY TIỀN THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số tiền vay: ${formatMoney(amount)}\n📅 Thời hạn: ${days} ngày\n📈 Lãi suất: 7.5%/ngày (lãi kép)\n━━━━━━━━━━━━━\n💵 Dự kiến lãi: ~${formatMoney(estimatedInterest)}\n💸 Dự kiến trả: ~${formatMoney(estimatedTotal)}\n⏰ Trả từ ngày mai (00:00 UTC+7)\n━━━━━━━━━━━━━\n⚠️ Quá hạn 3 ngày = Vào tù!`,
                     threadID,
                     undefined,
                     messageID
@@ -344,8 +351,8 @@ module.exports = {
             }
 
         } catch (e) {
-            console.error("Lỗi Vay:", e);
-            return api.sendMessage("❌ Lỗi hệ thống vay tiền.", threadID, undefined, messageID);
+            console.log("Lỗi Vay:", e);
+            return api.sendMessage(`❌ Lỗi hệ thống vay tiền: ${e.message}`, threadID, undefined, messageID);
         }
     },
 
@@ -369,7 +376,7 @@ module.exports = {
 
         try {
             // Cập nhật lại credits hiện tại
-            const userRows = await execute('SELECT credits FROM messenger_users WHERE psid = ?', [senderID]);
+            const userRows = await execute('SELECT credits FROM messenger_users WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
             if (userRows.length === 0) {
                 delete replyContexts[event.messageReply?.messageID];
                 return api.sendMessage("❌ Bạn chưa có tài khoản.", threadID, undefined, messageID);
@@ -377,21 +384,21 @@ module.exports = {
 
             const currentCredits = parseInt(userRows[0].credits);
 
-            const loanRows = await execute('SELECT * FROM bank_loans WHERE psid = ?', [senderID]);
+            const loanRows = await execute('SELECT * FROM bank_loans WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
             if (loanRows.length === 0) {
                 delete replyContexts[event.messageReply?.messageID];
                 return api.sendMessage("✅ Khoản vay đã được tất toán trước đó.", threadID, undefined, messageID);
             }
 
             const now = new Date();
-            const syncedLoan = await syncLoanWithCompoundInterest(loanRows[0], senderID, now);
+            const syncedLoan = await syncLoanWithCompoundInterest(loanRows[0], senderID, String(threadID), now);
             const totalDebt = syncedLoan.principal;
 
             if (reply === "1") {
                 // Trả toàn bộ
                 if (currentCredits < totalDebt) {
                     return api.sendMessage(
-                        `💸 KHÔNG ĐỦ TIỀN!\n━━━━━━━━━━━━━\n💰 Cần: ${totalDebt.toLocaleString()}\n💵 Có: ${currentCredits.toLocaleString()}\n💔 Thiếu: ${(totalDebt - currentCredits).toLocaleString()}`,
+                        `💸 KHÔNG ĐỦ TIỀN!\n━━━━━━━━━━━━━\n💰 Cần: ${formatMoney(totalDebt)}\n💵 Có: ${formatMoney(currentCredits)}\n💔 Thiếu: ${formatMoney(totalDebt - currentCredits)}`,
                         threadID,
                         undefined,
                         messageID
@@ -399,56 +406,58 @@ module.exports = {
                 }
 
                 // Trừ tiền user
-                await execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [totalDebt, senderID]);
+                await execute('UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?', [totalDebt, String(threadID), senderID]);
 
                 // Cộng tiền cho boss
-                await execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [totalDebt, BOSS_ID]);
+                await execute('UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?', [totalDebt, String(threadID), BOSS_ID]);
 
                 // Xóa khoản vay
-                await execute('DELETE FROM bank_loans WHERE psid = ?', [senderID]);
+                await execute('DELETE FROM bank_loans WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
 
                 // Nếu đang trong tù vì nợ, thả ra
-                await execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
+                await execute('DELETE FROM user_jail WHERE thread_id = ? AND psid = ? AND reason = "Nợ quá hạn"', [String(threadID), senderID]);
 
                 delete replyContexts[event.messageReply?.messageID];
                 return api.sendMessage(
-                    `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${totalDebt.toLocaleString()}\n💵 Còn lại: ${(currentCredits - totalDebt).toLocaleString()}\n━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
+                    `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${formatMoney(totalDebt)}\n💵 Còn lại: ${formatMoney(currentCredits - totalDebt)}\n━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
                     threadID,
                     undefined,
                     messageID
                 );
             } else if (reply === "2") {
-                return api.sendMessage("💡 Gõ trực tiếp số tiền bạn muốn trả (ví dụ: 200000).", threadID, undefined, messageID);
-            } else if (!isNaN(reply)) {
-                // Trả một phần
-                const partialAmount = parseInt(reply);
+                return api.sendMessage("💡 Gõ trực tiếp số tiền bạn muốn trả (ví dụ: 200000 hoặc 200k).", threadID, undefined, messageID);
+            } else {
+                const partialAmount = parseMoneyAmount(reply);
+                if (isNaN(partialAmount)) {
+                    return api.sendMessage("⚠️ Reply không hợp lệ! Reply 1 hoặc gõ số tiền.", threadID, undefined, messageID);
+                }
 
                 if (partialAmount <= 0 || partialAmount > totalDebt) {
                     return api.sendMessage("⚠️ Số tiền không hợp lệ!", threadID, undefined, messageID);
                 }
 
                 if (currentCredits < partialAmount) {
-                    return api.sendMessage(`💸 Không đủ tiền! Có: ${currentCredits.toLocaleString()}`, threadID, undefined, messageID);
+                    return api.sendMessage(`💸 Không đủ tiền! Có: ${currentCredits.toLocaleString('vi-VN')}`, threadID, undefined, messageID);
                 }
 
                 // Trừ tiền user
-                await execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [partialAmount, senderID]);
+                await execute('UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?', [partialAmount, String(threadID), senderID]);
 
                 // Cộng tiền cho boss
-                await execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [partialAmount, BOSS_ID]);
+                await execute('UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?', [partialAmount, String(threadID), BOSS_ID]);
 
                 // Giảm gốc
                 const newPrincipal = totalDebt - partialAmount;
 
                 if (newPrincipal <= 0) {
                     // Trả hết
-                    await execute('DELETE FROM bank_loans WHERE psid = ?', [senderID]);
-                    await execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
+                    await execute('DELETE FROM bank_loans WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
+                    await execute('DELETE FROM user_jail WHERE thread_id = ? AND psid = ? AND reason = "Nợ quá hạn"', [String(threadID), senderID]);
 
                     delete replyContexts[event.messageReply?.messageID];
 
                     return api.sendMessage(
-                        `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Còn lại: ${(currentCredits - partialAmount).toLocaleString()}\n━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
+                        `✅ TRẢ NỢ THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${formatMoney(partialAmount)}\n💵 Còn lại: ${formatMoney(currentCredits - partialAmount)}\n━━━━━━━━━━━━━\n🎉 Hết nợ rồi!`,
                         threadID,
                         undefined,
                         messageID
@@ -457,12 +466,12 @@ module.exports = {
                     // Cập nhật gốc mới và reset last_loan_check
                     const now = new Date();
                     await execute(
-                        'UPDATE bank_loans SET principal = ?, last_loan_check = ?, is_overdue = FALSE WHERE psid = ?',
-                        [newPrincipal, now, senderID]
+                        'UPDATE bank_loans SET principal = ?, last_loan_check = ?, is_overdue = FALSE WHERE thread_id = ? AND psid = ?',
+                        [newPrincipal, now, String(threadID), senderID]
                     );
 
                     // Nếu đang trong tù vì nợ, thả ra
-                    await execute('DELETE FROM user_jail WHERE psid = ? AND reason = "Nợ quá hạn"', [senderID]);
+                    await execute('DELETE FROM user_jail WHERE thread_id = ? AND psid = ? AND reason = "Nợ quá hạn"', [String(threadID), senderID]);
 
                     if (event.messageReply?.messageID) {
                         replyContexts[event.messageReply.messageID] = {
@@ -473,14 +482,12 @@ module.exports = {
                     }
 
                     return api.sendMessage(
-                        `✅ TRẢ NỢ 1 PHẦN THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${partialAmount.toLocaleString()}\n💵 Nợ còn lại: ${newPrincipal.toLocaleString()}\n━━━━━━━━━━━━━\n💡 Dùng ${prefix}vay check để xem chi tiết`,
+                        `✅ TRẢ NỢ 1 PHẦN THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Đã trả: ${formatMoney(partialAmount)}\n💵 Nợ còn lại: ${formatMoney(newPrincipal)}\n━━━━━━━━━━━━━\n💡 Dùng ${prefix}vay check để xem chi tiết`,
                         threadID,
                         undefined,
                         messageID
                     );
                 }
-            } else {
-                return api.sendMessage("⚠️ Reply không hợp lệ! Reply 1 hoặc gõ số tiền.", threadID, undefined, messageID);
             }
 
         } catch (e) {

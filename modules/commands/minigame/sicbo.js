@@ -12,8 +12,8 @@ const prefix = process.env.BOT_PREFIX || "!";
 const TAX_RATE = 0.05;
 const AUTO_CLOSE_MS = 3 * 60 * 1000;
 const SOICAU_HISTORY_FILE = path.join(
-  process.cwd(),
-  "cache",
+  __dirname,
+  "../../cache",
   "sicbo_soicau_history.json",
 );
 const MAX_SOICAU_PER_THREAD = 30;
@@ -215,19 +215,22 @@ function checkBetResult(parsedBet, dice) {
 // Đọc cấu hình database
 function getDBConfig() {
   try {
-    const configPath = path.join(process.cwd(), "config.json");
-    if (!fs.existsSync(configPath)) return null;
+    let configPath = path.join(process.cwd(), "config.json");
+    if (!fs.existsSync(configPath)) {
+      configPath = path.join(__dirname, "../../config.json");
+    }
+    if (!fs.existsSync(configPath)) return { type: "sqlite" };
     const configFile = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    const db = configFile.database;
+    const db = configFile.database || {};
     return {
-      host: db.host,
-      port: db.port,
-      user: db.user,
-      password: db.password,
-      database: db.name,
+      host: db.host || "localhost",
+      port: db.port || 3306,
+      user: db.user || "root",
+      password: db.password || "",
+      database: db.name || "bot",
     };
   } catch (e) {
-    return null;
+    return { type: "sqlite" };
   }
 }
 
@@ -394,8 +397,8 @@ async function finalizeSicboSession({
     for (const p of players) {
       // Kiểm tra VIP
       const [userCheck] = await connection.execute(
-        "SELECT vip_until FROM messenger_users WHERE psid = ?",
-        [p.id],
+        "SELECT vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?",
+        [key, p.id],
       );
       const hasVIP =
         userCheck[0]?.vip_until &&
@@ -433,7 +436,7 @@ async function finalizeSicboSession({
           userTotalWinPayout += payout;
           userNetProfitChange += netProfit;
 
-          betDetailsMsg.push(`🟢 ${bet.parsedChoice.label}: +${netProfit.toLocaleString()}`);
+          betDetailsMsg.push(`🟢 ${bet.parsedChoice.label}: +${netProfit.toLocaleString('vi-VN')}`);
         } else {
           // Thua, VIP hoàn 5%
           let refund = 0;
@@ -445,8 +448,8 @@ async function finalizeSicboSession({
           }
           userNetProfitChange -= bet.amount;
 
-          let refundText = refund > 0 ? ` (VIP +${refund.toLocaleString()})` : "";
-          betDetailsMsg.push(`🔴 ${bet.parsedChoice.label}: -${bet.amount.toLocaleString()}${refundText}`);
+          let refundText = refund > 0 ? ` (VIP +${refund.toLocaleString('vi-VN')})` : "";
+          betDetailsMsg.push(`🔴 ${bet.parsedChoice.label}: -${bet.amount.toLocaleString('vi-VN')}${refundText}`);
         }
       }
 
@@ -456,8 +459,8 @@ async function finalizeSicboSession({
 
       if (finalPayout > 0) {
         await connection.execute(
-          "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-          [finalPayout, p.id],
+          "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+          [finalPayout, key, p.id],
         );
       }
 
@@ -472,7 +475,7 @@ async function finalizeSicboSession({
       if (hasLucky) extraInfo += " 🍀";
 
       const changeSign = userNetProfitChange >= 0 ? "+" : "";
-      msg += `👤 ${p.name}${extraInfo}:\n   ${betDetailsMsg.join("\n   ")}\n   👉 Tổng: ${changeSign}${userNetProfitChange.toLocaleString()}\n━━━━━━━━━━━━━\n`;
+      msg += `👤 ${p.name}${extraInfo}:\n   ${betDetailsMsg.join("\n   ")}\n   👉 Tổng: ${changeSign}${userNetProfitChange.toLocaleString('vi-VN')}\n━━━━━━━━━━━━━\n`;
     }
 
     // Xóa hiệu ứng lucky hết lượt
@@ -481,20 +484,20 @@ async function finalizeSicboSession({
     // Xử lý tiền Boss
     const netProfit = totalBet - totalPay;
     const [bossCheck] = await connection.execute(
-      "SELECT credits FROM messenger_users WHERE psid = ?",
-      [BOSS_ID],
+      "SELECT credits FROM messenger_users WHERE thread_id = ? AND psid = ?",
+      [key, BOSS_ID],
     );
 
     if (bossCheck.length === 0) {
       const initialMoney = 1000000000 + netProfit;
       await connection.execute(
-        "INSERT INTO messenger_users (psid, name, credits) VALUES (?, ?, ?)",
-        [BOSS_ID, "BOSS NHÀ CÁI", initialMoney],
+        "INSERT INTO messenger_users (thread_id, psid, name, credits) VALUES (?, ?, ?, ?)",
+        [key, BOSS_ID, "BOSS NHÀ CÁI", initialMoney],
       );
     } else {
       await connection.execute(
-        "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-        [netProfit, BOSS_ID],
+        "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+        [netProfit, key, BOSS_ID],
       );
     }
   } catch (e) {
@@ -593,14 +596,16 @@ module.exports = {
     if (!dbConfig)
       return api.sendMessage("❌ Lỗi cấu hình Database!", threadID);
 
+    const key = String(threadID);
+
     // 2. Chốt phiên
     if (command === "xoc" || command === "so") {
-      if (!global.sicboSessions[threadID])
-        return api.sendMessage("❌ Chưa mở phiên Sic Bo nào.", threadID);
+      if (!global.sicboSessions[key])
+        return api.sendMessage("❌ Chưa mở phiên Sic Bo nào.", key);
 
       return finalizeSicboSession({
         api,
-        threadID,
+        threadID: key,
         dbConfig,
         autoClose: false,
       });
@@ -608,10 +613,10 @@ module.exports = {
 
     // 3. Mở phiên mới
     else {
-      if (global.sicboSessions[threadID])
+      if (global.sicboSessions[key])
         return api.sendMessage(
           `⚠️ Đang có phiên rồi! Gõ ${prefix}sicbo xoc để chốt.`,
-          threadID,
+          key,
         );
 
       const sessionID = Math.floor(Math.random() * 9999);
@@ -649,24 +654,27 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
 
 ⏰ Tự xóc sau 3 phút. Gõ "${prefix}sicbo xoc" để lắc xúc xắc.`;
 
+      global.sicboSessions[key] = {
+        status: "open",
+        sessionID: sessionID,
+        author: senderID,
+        messageID: null,
+        players: {},
+      };
+
       try {
-        const info = await api.sendMessage(openMsg, threadID);
-
-        global.sicboSessions[threadID] = {
-          status: "open",
-          sessionID: sessionID,
-          author: senderID,
-          messageID: info.messageID,
-          players: {},
-        };
-
-        scheduleSicboAutoClose({ api, threadID, config });
+        const info = await api.sendMessage(openMsg, key);
+        if (info && info.messageID) {
+          global.sicboSessions[key].messageID = info.messageID;
+        }
+        scheduleSicboAutoClose({ api, threadID: key, config });
       } catch (e) {
         if (e.error === 1390008) {
+          delete global.sicboSessions[key];
           console.error("🔴 Bot bị chặn Spam (1390008).");
         } else {
           console.error("Lỗi gửi tin mở sòng Sic Bo:", e);
-          api.sendMessage("❌ Lỗi không thể mở sòng Sic Bo.", threadID);
+          scheduleSicboAutoClose({ api, threadID: key, config });
         }
       }
     }
@@ -678,10 +686,14 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
     if (!global.sicboSessions[threadID]) return;
     if (!messageReply) return;
 
-    if (messageReply.senderID != api.getCurrentUserID()) return;
-
     const session = global.sicboSessions[threadID];
     if (session.status !== "open") return;
+
+    const isSessionReply =
+      (session.messageID && String(messageReply.messageID) === String(session.messageID)) ||
+      (messageReply.body && messageReply.body.includes("SIC BO"));
+
+    if (!isSessionReply) return;
 
     if (senderID === BOSS_ID)
       return api.sendMessage("❌ Boss không được cược!", threadID, messageID);
@@ -732,8 +744,8 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
       connection = await getConnection();
 
       const [rows] = await connection.execute(
-        "SELECT credits, name, vip_until FROM messenger_users WHERE psid = ?",
-        [senderID],
+        "SELECT credits, name, vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?",
+        [String(threadID), senderID],
       );
       if (rows.length === 0)
         return api.sendMessage(
@@ -794,7 +806,7 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
 
         if (tempBalance < betAmount) {
           return api.sendMessage(
-            `💸 Không đủ tiền cược cửa "${parsedChoice.label}" (Cần thêm ${(betAmount - tempBalance).toLocaleString()} credits).`,
+            `💸 Không đủ tiền cược cửa "${parsedChoice.label}" (Cần thêm ${(betAmount - tempBalance).toLocaleString('vi-VN')} credits).`,
             threadID,
             messageID,
           );
@@ -835,7 +847,7 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
 
       // Chặn cược > 500k nếu đang trong tù
       const [jailRows] = await connection.execute(
-        "SELECT jail_until FROM user_jail WHERE psid = ? AND jail_until > NOW()",
+        "SELECT jail_until FROM user_jail WHERE thread_id = ? AND psid = ? AND jail_until > datetime('now', 'localtime')",
         [senderID],
       );
       if (jailRows.length > 0 && totalSessionBet > 500000) {
@@ -854,8 +866,8 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
 
       // Giới hạn cược 200k nếu nợ quá hạn
       const [loanRows] = await connection.execute(
-        "SELECT principal, taken_at, due_days FROM bank_loans WHERE psid = ?",
-        [senderID],
+        "SELECT principal, taken_at, due_days FROM bank_loans WHERE thread_id = ? AND psid = ?",
+        [String(threadID), senderID],
       );
       const now = new Date();
       if (loanRows.length > 0) {
@@ -870,7 +882,7 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
             (now - dueDate) / (1000 * 60 * 60 * 24),
           );
           return api.sendMessage(
-            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Tổng cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
+            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString('vi-VN')}\n📉 Tổng cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
             threadID,
             messageID,
           );
@@ -880,8 +892,8 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
       // Thực tế khấu trừ tiền cược
       const totalNewBetAmount = betsToPlace.reduce((sum, b) => sum + b.amount, 0);
       await connection.execute(
-        "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-        [totalNewBetAmount, senderID],
+        "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+        [totalNewBetAmount, String(threadID), senderID],
       );
 
       const minigameState = recordMinigameSuccess(senderID);
@@ -894,8 +906,8 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
       // Tăng games_played nếu tổng tiền cược ván này chạm mốc 50k
       if (totalNewBetAmount >= 50000) {
         await connection.execute(
-          "UPDATE messenger_users SET games_played = games_played + 1 WHERE psid = ?",
-          [senderID],
+          "UPDATE messenger_users SET games_played = games_played + 1 WHERE thread_id = ? AND psid = ?",
+          [String(threadID), senderID],
         );
       }
 
@@ -920,7 +932,7 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
 
       // Phản hồi tin nhắn liệt kê các cửa đã nhận cược thành công
       const listPlaced = betsToPlace
-        .map((b) => `• ${b.parsedChoice.label}: ${b.amount.toLocaleString()} credits`)
+        .map((b) => `• ${b.parsedChoice.label}: ${b.amount.toLocaleString('vi-VN')} credits`)
         .join("\n");
       api.sendMessage(
         `✅ ĐÃ NHẬN CƯỢC THÀNH CÔNG:\n━━━━━━━━━━━━━\n${listPlaced}`,

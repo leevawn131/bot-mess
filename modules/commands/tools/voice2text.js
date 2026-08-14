@@ -306,7 +306,7 @@ module.exports = {
     let energyConnection;
     try {
       energyConnection = await getConnection();
-      const energyUse = await consumeEnergy(energyConnection, senderID, 20);
+      const energyUse = await consumeEnergy(energyConnection, String(threadID), senderID, 20);
       if (!energyUse.ok) {
         if (energyUse.reason === "not_enough") {
           return api.sendMessage(energyUse.message, threadID, messageID);

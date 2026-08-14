@@ -4,6 +4,7 @@ const { syncBankPool } = require('../../utils/bankPool');
 const { getBotConfig } = require('../../utils/envConfig');
 const { info, warn, error } = require('../../utils/logger');
 const { getThreadInfoCached } = require('../../utils/threadInfo');
+const { parseMoneyAmount } = require('../../utils/parseMoney');
 const prefix = process.env.BOT_PREFIX;
 
 // ID CỦA BOSS (Trả tiền lãi cho người gửi tiết kiệm)
@@ -43,7 +44,7 @@ module.exports = {
             connection = await getConnection();
 
             // Lấy thông tin user
-            const [userRows] = await connection.execute('SELECT credits, name FROM messenger_users WHERE psid = ?', [senderID]);
+            const [userRows] = await connection.execute('SELECT credits, name FROM messenger_users WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
             if (userRows.length === 0) {
                 return api.sendMessage(`❌ Bạn chưa có tài khoản. Gõ ${prefix}tien để tạo.`, threadID, messageID);
             }
@@ -72,7 +73,7 @@ module.exports = {
 
                 const totalBalance = await syncBankPool(connection);
                 return api.sendMessage(
-                    `✅ ĐỒNG BỘ BANK_POOL THÀNH CÔNG!\n🏦 Tổng quỹ hiện tại: ${totalBalance.toLocaleString()} credits`,
+                    `✅ ĐỒNG BỘ BANK_POOL THÀNH CÔNG!\n🏦 Tổng quỹ hiện tại: ${totalBalance.toLocaleString('vi-VN')} credits`,
                     threadID,
                     messageID
                 );
@@ -84,7 +85,7 @@ module.exports = {
                 if (amountStr === "all") {
                     amount = userCredits;
                 } else {
-                    amount = parseInt(amountStr);
+                    amount = parseMoneyAmount(amountStr);
                 }
 
                 if (isNaN(amount) || amount <= 0) {
@@ -92,11 +93,11 @@ module.exports = {
                 }
 
                 if (userCredits < amount) {
-                    return api.sendMessage(`💸 Không đủ tiền! Có: ${userCredits.toLocaleString()}`, threadID, messageID);
+                    return api.sendMessage(`💸 Không đủ tiền! Có: ${userCredits.toLocaleString('vi-VN')}`, threadID, messageID);
                 }
 
                 // Check xem đã gửi trong ngày hôm nay chưa
-                const [bankRows] = await connection.execute('SELECT * FROM bank_accounts WHERE psid = ?', [senderID]);
+                const [bankRows] = await connection.execute('SELECT * FROM bank_accounts WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
                 if (bankRows.length > 0) {
                     const lastDeposit = new Date(bankRows[0].last_deposit);
                     const now = new Date();
@@ -123,21 +124,21 @@ module.exports = {
                 await connection.beginTransaction();
                 try {
                     // Trừ tiền ví
-                    await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE psid = ?', [amount, senderID]);
+                    await connection.execute('UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?', [amount, String(threadID), senderID]);
 
                     // Lấy hoặc tạo tài khoản bank
                     const now = new Date();
                     if (bankRows.length === 0) {
                         // Tạo tài khoản mới
                         await connection.execute(
-                            'INSERT INTO bank_accounts (psid, balance, last_bank_check, last_deposit) VALUES (?, ?, ?, ?)',
-                            [senderID, amount, now, now]
+                            'INSERT INTO bank_accounts (thread_id, psid, balance, last_bank_check, last_deposit) VALUES (?, ?, ?, ?, ?)',
+                            [String(threadID), senderID, amount, now, now]
                         );
                     } else {
                         // Cộng vào tài khoản có sẵn
                         await connection.execute(
-                            'UPDATE bank_accounts SET balance = balance + ?, last_deposit = ? WHERE psid = ?',
-                            [amount, now, senderID]
+                            'UPDATE bank_accounts SET balance = balance + ?, last_deposit = ? WHERE thread_id = ? AND psid = ?',
+                            [amount, now, String(threadID), senderID]
                         );
                     }
 
@@ -147,7 +148,7 @@ module.exports = {
                     await connection.commit();
 
                     return api.sendMessage(
-                        `✅ GỬI TIỀN THÀNH CÔNG!\n👤 ${userName}\n💰 Số tiền: ${amount.toLocaleString()}\n🏦 Lãi suất: 5%/ngày (lãi kép)\n━━━━━━━━━━━━━\n💡 Dùng ${prefix}bank check để cập nhật lãi\n⏳ Có thể rút sau 24h + check lãi`,
+                        `✅ GỬI TIỀN THÀNH CÔNG!\n👤 ${userName}\n💰 Số tiền: ${amount.toLocaleString('vi-VN')}\n🏦 Lãi suất: 5%/ngày (lãi kép)\n━━━━━━━━━━━━━\n💡 Dùng ${prefix}bank check để cập nhật lãi\n⏳ Có thể rút sau 24h + check lãi`,
                         threadID,
                         messageID
                     );
@@ -159,7 +160,7 @@ module.exports = {
 
             // === RÚT TIỀN TỪ BANK ===
             else if (["rut", "withdraw", "wd"].includes(command)) {
-                const [bankRows] = await connection.execute('SELECT * FROM bank_accounts WHERE psid = ?', [senderID]);
+                const [bankRows] = await connection.execute('SELECT * FROM bank_accounts WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
                 
                 if (bankRows.length === 0 || bankRows[0].balance <= 0) {
                     return api.sendMessage(`❌ Bạn chưa có tiền trong ngân hàng.\n💡 Dùng ${prefix}bank gui để gửi tiền.`, threadID, messageID);
@@ -202,7 +203,7 @@ module.exports = {
                 if (amountStr === "all") {
                     amount = bankBalance;
                 } else {
-                    amount = parseInt(amountStr);
+                    amount = parseMoneyAmount(amountStr);
                 }
 
                 if (isNaN(amount) || amount <= 0) {
@@ -211,7 +212,7 @@ module.exports = {
 
                 if (bankBalance < amount) {
                     return api.sendMessage(
-                        `💸 Số dư không đủ!\n🏦 Số dư bank: ${bankBalance.toLocaleString()}`,
+                        `💸 Số dư không đủ!\n🏦 Số dư bank: ${bankBalance.toLocaleString('vi-VN')}`,
                         threadID,
                         messageID
                     );
@@ -220,10 +221,10 @@ module.exports = {
                 await connection.beginTransaction();
                 try {
                     // Cộng tiền vào ví
-                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE psid = ?', [amount, senderID]);
+                    await connection.execute('UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?', [amount, String(threadID), senderID]);
 
                     // Trừ tiền từ bank
-                    await connection.execute('UPDATE bank_accounts SET balance = balance - ? WHERE psid = ?', [amount, senderID]);
+                    await connection.execute('UPDATE bank_accounts SET balance = balance - ? WHERE thread_id = ? AND psid = ?', [amount, String(threadID), senderID]);
 
                     // Đồng bộ bank pool theo tổng thực tế
                     await syncBankPool(connection);
@@ -232,7 +233,7 @@ module.exports = {
 
                     const remainingBank = bankBalance - amount;
                     return api.sendMessage(
-                        `✅ RÚT TIỀN THÀNH CÔNG!\n👤 ${userName}\n💰 Số tiền: ${amount.toLocaleString()}\n🏦 Còn lại trong bank: ${remainingBank.toLocaleString()}`,
+                        `✅ RÚT TIỀN THÀNH CÔNG!\n👤 ${userName}\n💰 Số tiền: ${amount.toLocaleString('vi-VN')}\n🏦 Còn lại trong bank: ${remainingBank.toLocaleString('vi-VN')}`,
                         threadID,
                         messageID
                     );
@@ -244,7 +245,7 @@ module.exports = {
 
             // === KIỂM TRA SỐ DƯ + CẬP NHẬT LÃI ===
             else if (["check", "balance", "bal"].includes(command)) {
-                const [bankRows] = await connection.execute('SELECT * FROM bank_accounts WHERE psid = ?', [senderID]);
+                const [bankRows] = await connection.execute('SELECT * FROM bank_accounts WHERE thread_id = ? AND psid = ?', [String(threadID), senderID]);
                 
                 if (bankRows.length === 0) {
                     return api.sendMessage(
@@ -281,8 +282,8 @@ module.exports = {
                         try {
                             // Cập nhật số dư mới
                             await connection.execute(
-                                'UPDATE bank_accounts SET balance = ?, last_bank_check = ? WHERE psid = ?',
-                                [newBalance, now, senderID]
+                                'UPDATE bank_accounts SET balance = ?, last_bank_check = ? WHERE thread_id = ? AND psid = ?',
+                                [newBalance, now, String(threadID), senderID]
                             );
 
                             // Đồng bộ bank pool theo tổng thực tế
@@ -290,14 +291,14 @@ module.exports = {
 
                             // Trừ tiền boss
                             await connection.execute(
-                                'UPDATE messenger_users SET credits = credits - ? WHERE psid = ?',
-                                [interestEarned, bossID]
+                                'UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?',
+                                [interestEarned, String(threadID), bossID]
                             );
 
                             await connection.commit();
 
                             return api.sendMessage(
-                                `🏦 CẬP NHẬT LÃI THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số dư cũ: ${balance.toLocaleString()}\n📈 Lãi ${daysPassed} ngày (5%/ngày): +${interestEarned.toLocaleString()}\n💵 Số dư mới: ${newBalance.toLocaleString()}\n━━━━━━━━━━━━━\n✅ Bây giờ có thể rút tiền!`,
+                                `🏦 CẬP NHẬT LÃI THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số dư cũ: ${balance.toLocaleString('vi-VN')}\n📈 Lãi ${daysPassed} ngày (5%/ngày): +${interestEarned.toLocaleString('vi-VN')}\n💵 Số dư mới: ${newBalance.toLocaleString('vi-VN')}\n━━━━━━━━━━━━━\n✅ Bây giờ có thể rút tiền!`,
                                 threadID,
                                 messageID
                             );
@@ -309,8 +310,8 @@ module.exports = {
                 } else {
                     // Chỉ cập nhật thời gian check (không có lãi)
                     await connection.execute(
-                        'UPDATE bank_accounts SET last_bank_check = ? WHERE psid = ?',
-                        [now, senderID]
+                        'UPDATE bank_accounts SET last_bank_check = ? WHERE thread_id = ? AND psid = ?',
+                        [now, String(threadID), senderID]
                     );
                 }
 
@@ -321,7 +322,7 @@ module.exports = {
                 const hoursUntilNextDay = Math.ceil((tomorrowStart - now) / (1000 * 60 * 60));
 
                 return api.sendMessage(
-                    `🏦 TÀI KHOẢN NGÂN HÀNG\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số dư: ${newBalance.toLocaleString()}\n📊 Lãi suất: 5%/ngày\n⏰ Lãi kế tiếp: ~${hoursUntilNextDay}h\n━━━━━━━━━━━━━\n💡 Dùng ${prefix}bank rut để rút tiền`,
+                    `🏦 TÀI KHOẢN NGÂN HÀNG\n━━━━━━━━━━━━━\n👤 ${userName}\n💰 Số dư: ${newBalance.toLocaleString('vi-VN')}\n📊 Lãi suất: 5%/ngày\n⏰ Lãi kế tiếp: ~${hoursUntilNextDay}h\n━━━━━━━━━━━━━\n💡 Dùng ${prefix}bank rut để rút tiền`,
                     threadID,
                     messageID
                 );

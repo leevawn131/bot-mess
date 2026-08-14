@@ -1,5 +1,29 @@
 {
   "1522471839589644": {
-    "bban": true
+    "bban": true,
+    "namebox": "Lốp AOV🛞",
+    "avtbox": true
+  },
+  "1676254946759359": {
+    "namebox": "🌸˚˖𓍢ִ໋🌷͙֒✧ᴅʀᴇᴀᴍᴍᴀᴋᴇʀs_AOV౨ৎ˚⋆🎀",
+    "avtbox": true,
+    "spam": true,
+    "spamb": true
+  },
+  "844251878447942": {
+    "spamb": true,
+    "spam_limit_text": 4,
+    "spam_limit_icon": 5,
+    "bietdanh": true,
+    "warn": {
+      "bietdanh": false
+    },
+    "spam": true
+  },
+  "1578329217187138": {
+    "namebox": "𝟏 - 𝙏𝙝𝙚 𝙚𝙣𝙩𝙧𝙖𝙡 💭"
+  },
+  "2029497701112234": {
+    "namebox": "𝟐 - 𝙏𝙝𝙚 𝙚𝙣𝙩𝙧𝙖𝙡 💭"
   }
 }

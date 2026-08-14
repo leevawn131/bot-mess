@@ -8,7 +8,8 @@ module.exports = {
   name: 'antiEvent',
   eventType: ["log:subscribe","log:thread-name","log:unsubscribe","log:thread-image","log:thread-admins","change_thread_image"],
 
-  execute: async ({ api, event, Threads }) => {
+  run: async function(Obj) { return this.execute(Obj); },
+    execute: async ({ api, event, Threads }) => {
     const antiDir = path.join('./modules/data/anti');
     const fileAnti = path.join(antiDir, 'antiFile.json');
     if (!fs.existsSync(antiDir)) fs.mkdirSync(antiDir, { recursive: true });
@@ -47,7 +48,10 @@ module.exports = {
         await fs.writeJson(fileAnti, DataAnti, { spaces: 2 });
       } else {
         await api.setTitle(DataAnti[threadID].namebox, threadID);
-        return api.sendMessage('⚠️ Bạn không có quyền đổi tên nhóm', threadID);
+        if (!DataAnti[threadID].warn || DataAnti[threadID].warn.namebox !== false) {
+          const { addWarning } = require('../utils/warningStorage');
+          await addWarning(api, threadID, event.author, "Tự ý đổi tên nhóm");
+        }
       }
     }
 
@@ -58,7 +62,10 @@ module.exports = {
         if (botIn) return;
         const memJoin = event.logMessageData.addedParticipants.map(info => info.userFbId);
         for (const idUser of memJoin) { await new Promise(r=>setTimeout(r,1000)); api.removeUserFromGroup(idUser, threadID); }
-        return api.sendMessage('⚠️ Thực thi anti: loại thành viên mới', threadID);
+        if (!DataAnti[threadID].warn || DataAnti[threadID].warn.join !== false) {
+          const { addWarning } = require('../utils/warningStorage');
+          await addWarning(api, threadID, event.author, "Tự ý thêm thành viên mới khi đang bật anti-join");
+        }
       }
     }
 
@@ -103,8 +110,11 @@ module.exports = {
         if (fs.existsSync(localPath)) {
           api.changeGroupImage(fs.createReadStream(localPath), threadID, (err) => {
             if (err) return api.sendMessage('⚠️ Có lỗi xảy ra khi khôi phục ảnh nhóm', threadID);
-            return api.sendMessage('⚠️ Bạn không có quyền đổi ảnh nhóm', threadID);
           });
+        }
+        if (!DataAnti[threadID].warn || DataAnti[threadID].warn.avtbox !== false) {
+          const { addWarning } = require('../utils/warningStorage');
+          await addWarning(api, threadID, event.author, "Tự ý đổi ảnh nhóm");
         }
       }
     }

@@ -128,7 +128,8 @@ module.exports = {
   name: "messageDeleted",
   eventType: ["message", "message_unsend"],
 
-  execute: async ({ api, event }) => {
+  run: async function(Obj) { return this.execute(Obj); },
+    execute: async ({ api, event }) => {
     if (!event.threadID) return;
 
     if (event.type === "message") {

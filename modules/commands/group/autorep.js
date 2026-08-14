@@ -58,7 +58,8 @@ function getExtensionFromAttachment(attachment) {
 }
 
 async function downloadAttachment(attachment, targetPath) {
-    const response = await axios.get(String(attachment.url || ""), {
+    const downloadUrl = attachment.largePreviewUrl || attachment.url || "";
+    const response = await axios.get(String(downloadUrl), {
         responseType: "stream",
         headers: {
             "User-Agent": "Mozilla/5.0",
@@ -160,11 +161,33 @@ module.exports = {
             const action = String(args[0] || "").trim().toLowerCase();
 
             if (["list", "ls", "show"].includes(action)) {
-                return api.sendMessage(
-                    `📋 DANH SÁCH AUTOREP\n\n${formatAutorepRules(threadID)}`,
-                    threadID,
-                    messageID,
-                );
+                const rules = listAutorepRules(threadID);
+                if (!rules.length) {
+                    return api.sendMessage("ℹ️ Nhóm chưa có autorep nào.", threadID, messageID);
+                }
+
+                if (!Array.isArray(global.client.handleReply)) {
+                    global.client.handleReply = [];
+                } else {
+                    global.client.handleReply = global.client.handleReply.filter(
+                        (h) => !(h.name === "autorep" && String(h.threadID) === String(threadID))
+                    );
+                }
+
+                const msgContent = `📋 DANH SÁCH AUTOREP (${rules.length})\n\n` +
+                    formatAutorepRules(threadID) +
+                    `\n\n💡 Reply (phản hồi) số thứ tự (ví dụ: 1 hoặc 1, 2, 3) để xóa autorep tương ứng.`;
+
+                const info = await api.sendMessage(msgContent, threadID, messageID);
+                if (info && info.messageID) {
+                    global.client.handleReply.push({
+                        name: "autorep",
+                        messageID: info.messageID,
+                        author: senderID,
+                        threadID: threadID,
+                    });
+                }
+                return;
             }
 
             if (["clear", "clr", "reset"].includes(action)) {
@@ -208,12 +231,48 @@ module.exports = {
             const replyAttachment = getThreadAttachment(event);
             const { keyword, responseText } = parseAutorepInput(args);
 
+            if (responseText) {
+                const threadSetting = global.data?.threadData?.get(threadID) || {};
+                const systemPrefix = global.config?.PREFIX || global.config?.prefix || config?.prefix || "/";
+                const threadPrefix = threadSetting.PREFIX || systemPrefix;
+                const invalidPrefixes = [systemPrefix, threadPrefix];
+                const uniquePrefixes = [...new Set(invalidPrefixes)].filter(p => typeof p === "string" && p.trim().length > 0);
+                
+                const hasPrefix = uniquePrefixes.some(pref => responseText.trim().startsWith(pref));
+                if (hasPrefix) {
+                    return api.sendMessage(
+                        `❌ Bảo mật: Nội dung phản hồi autorep không được bắt đầu bằng prefix của bot (${uniquePrefixes.map(p => `"${p}"`).join(", ")}) để tránh thực thi lệnh trái phép.`,
+                        threadID,
+                        messageID
+                    );
+                }
+            }
+
             if (!keyword || (!responseText && !replyAttachment)) {
-                return api.sendMessage(
-                    `⚠️ Cách dùng: ${prefix}autorep [cụm từ] | [nội dung autorep]\nVí dụ: ${prefix}autorep @Ngân Hà | Đúng rồi em\nHoặc: ${prefix}autorep @Ngân Hà | (reply ảnh/video để lưu chỉ media)\n\n${formatAutorepRules(threadID)}`,
-                    threadID,
-                    messageID,
-                );
+                const rules = listAutorepRules(threadID);
+                let msgContent = `⚠️ Cách dùng: ${prefix}autorep [cụm từ] | [nội dung autorep]\nVí dụ: ${prefix}autorep @Ngân Hà | Đúng rồi em\nHoặc: ${prefix}autorep @Ngân Hà | (reply ảnh/video để lưu chỉ media)\n\n${formatAutorepRules(threadID)}`;
+                
+                if (rules.length > 0) {
+                    msgContent += `\n\n💡 Reply (phản hồi) số thứ tự để xóa autorep tương ứng.`;
+                }
+
+                const info = await api.sendMessage(msgContent, threadID, messageID);
+                if (info && info.messageID && rules.length > 0) {
+                    if (!Array.isArray(global.client.handleReply)) {
+                        global.client.handleReply = [];
+                    } else {
+                        global.client.handleReply = global.client.handleReply.filter(
+                            (h) => !(h.name === "autorep" && String(h.threadID) === String(threadID))
+                        );
+                    }
+                    global.client.handleReply.push({
+                        name: "autorep",
+                        messageID: info.messageID,
+                        author: senderID,
+                        threadID: threadID,
+                    });
+                }
+                return;
             }
             let media = null;
 
@@ -225,30 +284,36 @@ module.exports = {
                 const isVideo = String(replyAttachment.type || "").toLowerCase().includes("video") || extension === ".mp4" || extension === ".mov" || extension === ".webm";
                 if (isVideo) {
                     try {
-                        const compressedPath = buildMediaPath(threadID, `${keyword}_compressed_${Date.now()}`, ".mp4");
-                        const ffmpeg = require("fluent-ffmpeg");
-                        const ffmpegPath = require("ffmpeg-static");
-                        ffmpeg.setFfmpegPath(ffmpegPath);
+                        const stats = fs.statSync(targetPath);
+                        const fileSizeInBytes = stats.size;
+                        const fileSizeInMegabytes = fileSizeInBytes / (1024 * 1024);
 
-                        await new Promise((resolve, reject) => {
-                            ffmpeg(targetPath)
-                                .outputOptions([
-                                    "-vcodec libx264",
-                                    "-crf 30",
-                                    "-preset veryfast",
-                                    "-acodec aac",
-                                    "-b:a 64k",
-                                    "-vf scale=-2:480"
-                                ])
-                                .on("end", () => resolve())
-                                .on("error", (err) => reject(err))
-                                .save(compressedPath);
-                        });
+                        if (fileSizeInMegabytes >= 25) {
+                            const compressedPath = buildMediaPath(threadID, `${keyword}_compressed_${Date.now()}`, ".mp4");
+                            const ffmpeg = require("fluent-ffmpeg");
+                            const ffmpegPath = require("ffmpeg-static");
+                            ffmpeg.setFfmpegPath(ffmpegPath);
 
-                        if (fs.existsSync(targetPath)) {
-                            fs.unlinkSync(targetPath);
+                            await new Promise((resolve, reject) => {
+                                ffmpeg(targetPath)
+                                    .outputOptions([
+                                        "-vcodec libx264",
+                                        "-crf 23",
+                                        "-preset veryfast",
+                                        "-acodec aac",
+                                        "-b:a 128k",
+                                        "-vf scale=-2:720"
+                                    ])
+                                    .on("end", () => resolve())
+                                    .on("error", (err) => reject(err))
+                                    .save(compressedPath);
+                            });
+
+                            if (fs.existsSync(targetPath)) {
+                                fs.unlinkSync(targetPath);
+                            }
+                            targetPath = compressedPath;
                         }
-                        targetPath = compressedPath;
                     } catch (compressError) {
                         console.error("⚠️ [autorep] Lỗi nén video, sử dụng video gốc:", compressError);
                     }
@@ -271,6 +336,99 @@ module.exports = {
         } catch (error) {
             console.error("❌ Lỗi autorep:", error);
             return api.sendMessage(`❌ Có lỗi xảy ra: ${error.message}`, threadID, messageID);
+        }
+    },
+
+    handleReply: async ({ api, event }) => {
+        const { threadID, senderID, messageID, body, messageReply } = event;
+        if (!messageReply) return;
+
+        const list = global.client && Array.isArray(global.client.handleReply) ? global.client.handleReply : [];
+        const handleReplyContext = list.find(
+            (h) => String(h.messageID) === String(messageReply.messageID) && h.name === "autorep"
+        );
+        if (!handleReplyContext) return;
+
+        if (String(handleReplyContext.threadID) !== String(threadID)) return;
+
+        try {
+            const threadInfo = await getThreadInfoCached(api, threadID);
+            const adminIDs = toAdminIdList(threadInfo);
+            const adminBotUIDs = getAdminBotUIDs();
+            const isSenderAdmin = adminIDs.includes(String(senderID));
+            const isSenderBotAdmin = Array.isArray(adminBotUIDs) ? adminBotUIDs.includes(String(senderID)) : false;
+            const isAuthor = String(handleReplyContext.author) === String(senderID);
+
+            if (!isAuthor && !isSenderAdmin && !isSenderBotAdmin) {
+                return api.sendMessage("⚠️ Chỉ người xem danh sách hoặc Quản trị viên mới được reply xóa autorep.", threadID, messageID);
+            }
+
+            const currentRules = listAutorepRules(threadID);
+            if (!currentRules.length) {
+                return api.sendMessage("ℹ️ Nhóm hiện tại không có autorep nào để xóa.", threadID, messageID);
+            }
+
+            const input = String(body || "").trim();
+            const numbers = [];
+            const parts = input.split(/[\s,]+/);
+            for (const part of parts) {
+                if (part.includes("-")) {
+                    const range = part.split("-");
+                    if (range.length === 2) {
+                        const start = parseInt(range[0], 10);
+                        const end = parseInt(range[1], 10);
+                        if (!isNaN(start) && !isNaN(end) && start <= end && start > 0) {
+                            for (let i = start; i <= end; i++) {
+                                numbers.push(i);
+                            }
+                            continue;
+                        }
+                    }
+                }
+                const num = parseInt(part, 10);
+                if (!isNaN(num) && num > 0) {
+                    numbers.push(num);
+                }
+            }
+
+            const selectedIndexes = [...new Set(numbers)];
+            if (selectedIndexes.length === 0) {
+                return api.sendMessage("⚠️ Vui lòng nhập số thứ tự hợp lệ (Ví dụ: 1 hoặc 1, 2, 3).", threadID, messageID);
+            }
+
+            const validIndexes = selectedIndexes.filter((idx) => idx >= 1 && idx <= currentRules.length);
+            if (validIndexes.length === 0) {
+                return api.sendMessage(`⚠️ Số thứ tự không hợp lệ. Danh sách hiện tại có ${currentRules.length} autorep.`, threadID, messageID);
+            }
+
+            const deleted = [];
+            for (const idx of validIndexes) {
+                const rule = currentRules[idx - 1];
+                if (rule) {
+                    const res = removeAutorepRule(threadID, rule.keyword);
+                    if (res) {
+                        deleted.push(res.keyword);
+                    }
+                }
+            }
+
+            if (deleted.length > 0) {
+                const idxInGlobal = list.findIndex((h) => String(h.messageID) === String(messageReply.messageID));
+                if (idxInGlobal !== -1) {
+                    list.splice(idxInGlobal, 1);
+                }
+
+                return api.sendMessage(
+                    `✅ Đã xóa ${deleted.length} autorep:\n${deleted.map((kw, i) => `${i + 1}. ${kw}`).join("\n")}`,
+                    threadID,
+                    messageID
+                );
+            } else {
+                return api.sendMessage("❌ Không thể xóa các autorep đã chọn.", threadID, messageID);
+            }
+        } catch (error) {
+            console.error("❌ Lỗi autorep handleReply:", error);
+            return api.sendMessage(`❌ Có lỗi xảy ra khi xóa autorep: ${error.message}`, threadID, messageID);
         }
     },
 };

@@ -2,6 +2,8 @@ const { addLeaveHistoryEntry } = require("../utils/leaveHistory");
 const { isAntioutEnabled } = require("../utils/antioutSettings");
 const { getThreadInfoCached, clearThreadInfoCache } = require("../utils/threadInfo");
 
+const suppressMap = global.suppressLeaveMap = global.suppressLeaveMap || {};
+
 async function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -42,7 +44,15 @@ async function tryReAddUser({ api, threadID, leftID, retries = 2 }) {
 module.exports = {
     name: "leave",
     eventType: ["log:unsubscribe"],
-    
+    config: {
+        name: "leave",
+        eventType: ["log:unsubscribe"]
+    },
+
+    run: async function (Obj) {
+        return this.execute(Obj);
+    },
+
     execute: async ({ api, event }) => {
         try {
             const { threadID, logMessageBody, logMessageData, author } = event;
@@ -61,9 +71,17 @@ module.exports = {
             const now = Date.now();
             const antioutEnabled = isAntioutEnabled(threadID);
 
-            if (!leftID || leftID == botID) return;
+            if (!leftID) return;
 
-            const suppressMap = global.leaveEventSuppressByThread || {};
+            // Nếu chính con Bot bị kick hoặc tự out, xóa phân công cụm của nhóm này để Cụm khác có thể join lại
+            if (leftID == botID) {
+                try {
+                    const { execute } = require("../utils/database");
+                    await execute(`DELETE FROM group_profile_bindings WHERE thread_id = ?`, [String(threadID)]).catch(() => {});
+                    console.log(`[🚪] Bot đã rời nhóm ${threadID}. Đã xóa phân công cụm cũ để sẵn sàng nhận luồng mới.`);
+                } catch (err) {}
+                return;
+            }
             const suppressUntil = Number(suppressMap[String(threadID)] || 0);
             const shouldSuppressMessage = suppressUntil && now < suppressUntil;
             if (suppressUntil && now >= suppressUntil) {
@@ -85,7 +103,6 @@ module.exports = {
                     
                     if (lastActionIndex !== -1) {
                         // Cắt từ sau chữ "đã xóa" đến trước chữ "khỏi nhóm"
-                        // logMessageBody.indexOf(endPhrase, lastActionIndex): Tìm chữ "khỏi nhóm" nằm SAU chữ "đã xóa" vừa tìm được
                         const startIndex = lastActionIndex + actionPhrase.length;
                         const endIndex = logMessageBody.indexOf(endPhrase, startIndex);
                         
@@ -96,7 +113,6 @@ module.exports = {
                 }
                 
                 // TRƯỜNG HỢP 2: TỰ OUT ("[TÊN] đã rời nhóm")
-                // Logic: Lấy toàn bộ phần trước chữ "đã rời nhóm" cuối cùng
                 else if (logMessageBody.includes("đã rời khỏi nhóm.")) {
                     const endPhrase = " đã rời khỏi nhóm.";
                     const lastEndIndex = logMessageBody.lastIndexOf(endPhrase);
@@ -122,6 +138,13 @@ module.exports = {
                 action: isSelfLeave ? "self" : "kick",
                 actorID: author
             });
+
+            // Nếu thành viên bị cấm vĩnh viễn (cutvv), không kéo lại (antiout) và không gửi tin tạm biệt
+            const { isBlocked } = require("../utils/cutvvStorage");
+            const blocked = await isBlocked(threadID, leftID);
+            if (blocked) {
+                return;
+            }
 
             if (antioutEnabled && isSelfLeave) {
                 let addBackOk = false;

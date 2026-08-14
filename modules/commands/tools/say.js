@@ -1,55 +1,76 @@
-const axios = require("axios");
+const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
+const LanguageDetect = require("languagedetect");
+const lngDetector = new LanguageDetect();
 const fs = require("fs");
 const path = require("path");
 const { execute, getConnection } = require("../../utils/database");
-let googleTTS = null;
-try {
-  const loaded = require("google-tts-api");
-  googleTTS = loaded?.default || loaded;
-} catch (e) {
-  // Keep command alive and show a clear runtime message instead of crashing on require.
-  googleTTS = null;
-}
 const { checkCooldown } = require("../../utils/cooldown");
 const {
   consumeEnergy,
   getDBConfigFromRuntime,
 } = require("../../utils/energySystem");
 
-const MAX_INPUT_CHARS = 20000;
-const MAX_TTS_CHARS_PER_CHUNK = 420;
+const MAX_INPUT_CHARS = 10000;
 
-function splitTextIntoChunks(text, maxLen = MAX_TTS_CHARS_PER_CHUNK) {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (!normalized) return [];
+const VOICE_MAP = {
+  vietnamese: { voice: "vi-VN-HoaiMyNeural", name: "Tiếng Việt (Hoài My)" },
+  english: { voice: "en-US-AvaNeural", name: "Tiếng Anh (Ava)" },
+  japanese: { voice: "ja-JP-NanamiNeural", name: "Tiếng Nhật (Nanami)" },
+  korean: { voice: "ko-KR-SunHiNeural", name: "Tiếng Hàn (Sun-Hi)" },
+  chinese: { voice: "zh-CN-XiaoxiaoNeural", name: "Tiếng Trung (Xiaoxiao)" },
+  french: { voice: "fr-FR-DeniseNeural", name: "Tiếng Pháp (Denise)" },
+  german: { voice: "de-DE-KatjaNeural", name: "Tiếng Đức (Katja)" },
+  spanish: { voice: "es-ES-ElviraNeural", name: "Tiếng Tây Ban Nha (Elvira)" },
+  thai: { voice: "th-TH-PremwadeeNeural", name: "Tiếng Thái (Premwadee)" },
+  russian: { voice: "ru-RU-SvetlanaNeural", name: "Tiếng Nga (Svetlana)" },
+};
 
-  const chunks = [];
-  let remaining = normalized;
+function detectVoiceInfo(text) {
+  if (!text) return VOICE_MAP.vietnamese;
 
-  while (remaining.length > maxLen) {
-    let cut = remaining.lastIndexOf(". ", maxLen);
-    if (cut < Math.floor(maxLen * 0.5))
-      cut = remaining.lastIndexOf(", ", maxLen);
-    if (cut < Math.floor(maxLen * 0.5))
-      cut = remaining.lastIndexOf(" ", maxLen);
-    if (cut < Math.floor(maxLen * 0.5)) cut = maxLen;
+  // 1. Kiểm tra Unicode đặc thù cho các ngôn ngữ hệ chữ riêng
+  if (/[\u3040-\u30ff]/.test(text)) return VOICE_MAP.japanese;
+  if (/[\uac00-\ud7af]/.test(text)) return VOICE_MAP.korean;
+  if (/[\u4e00-\u9faf]/.test(text)) return VOICE_MAP.chinese;
+  if (/[\u0e00-\u0e7f]/.test(text)) return VOICE_MAP.thai;
+  if (/[\u0400-\u04ff]/.test(text)) return VOICE_MAP.russian;
 
-    const part = remaining.slice(0, cut).trim();
-    if (part) chunks.push(part);
-    remaining = remaining.slice(cut).trim();
+  // 2. Kiểm tra dấu thanh tiếng Việt
+  const viRegex = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+  if (viRegex.test(text)) return VOICE_MAP.vietnamese;
+
+  // 3. Phân tích ngữ cảnh bộ chữ Latin
+  try {
+    const detected = lngDetector.detect(text, 3);
+    if (Array.isArray(detected) && detected.length > 0) {
+      for (const [langName] of detected) {
+        const lower = langName.toLowerCase();
+        if (lower.includes("english")) return VOICE_MAP.english;
+        if (lower.includes("french")) return VOICE_MAP.french;
+        if (lower.includes("german")) return VOICE_MAP.german;
+        if (lower.includes("spanish")) return VOICE_MAP.spanish;
+      }
+    }
+  } catch (e) {
+    // Thư viện phát hiện lỗi -> bỏ qua
   }
 
-  if (remaining) chunks.push(remaining);
-  return chunks;
+  // 4. Kiểm tra từ tiếng Anh thông dụng
+  if (/\b(hello|hi|hey|thanks|thank you|welcome|good morning|good night|bot|please|yes|no)\b/i.test(text)) {
+    return VOICE_MAP.english;
+  }
+
+  // Mặc định là Tiếng Việt
+  return VOICE_MAP.vietnamese;
 }
 
 module.exports = {
   name: "say",
-  description: "Chuyển tin nhắn được reply thành voice (giọng nói)",
-  usage: "\n!say (reply tin nhắn) → Chuyển nội dung được reply thành giọng nói\n━━━━━━━━━━━━━\n🎙️ Reply tin nhắn bất kỳ rồi gõ !say\n⚡ Tốn năng lượng mỗi lần dùng\n📌 Hỗ trợ tiếng Việt, tối đa 20,000 ký tự",
+  description: "Chuyển tin nhắn được reply thành voice (giọng nói) chất lượng cao Microsoft Edge TTS & Tự động nhận diện ngôn ngữ",
+  usage: "\n!say (reply tin nhắn) → Chuyển nội dung reply thành giọng nói Neural\n━━━━━━━━━━━━━\n🎙️ Reply tin nhắn bất kỳ rồi gõ !say\n⚡ Tốn 20 năng lượng mỗi lần dùng\n🌐 Tự động nhận diện ngôn ngữ (Việt, Anh, Nhật, Hàn, Trung, Pháp, Đức...)",
   execute: async ({ api, event, config }) => {
     const { messageID, messageReply, senderID } = event;
-    const threadID = String(event.threadID); // Ép kiểu chuỗi
+    const threadID = String(event.threadID);
 
     // Cooldown 20s
     const cooldown = checkCooldown({
@@ -66,15 +87,7 @@ module.exports = {
     }
 
     try {
-      if (!googleTTS || typeof googleTTS.getAudioUrl !== "function") {
-        return api.sendMessage(
-          "❌ Thiếu thư viện google-tts-api. Hãy cài: npm install google-tts-api",
-          threadID,
-          messageID,
-        );
-      }
-
-      // Kiểm tra xem có reply tin nhắn không
+      // Kiểm tra reply tin nhắn
       if (!messageReply || !messageReply.body) {
         return api.sendMessage(
           "⚠️ Vui lòng reply tin nhắn cần chuyển thành giọng nói!",
@@ -96,7 +109,7 @@ module.exports = {
       let connection;
       try {
         connection = await getConnection();
-        energyUse = await consumeEnergy(connection, senderID, 20);
+        energyUse = await consumeEnergy(connection, String(threadID), senderID, 20);
         if (!energyUse.ok) {
           if (energyUse.reason === "not_enough") {
             return api.sendMessage(energyUse.message, threadID, messageID);
@@ -116,7 +129,6 @@ module.exports = {
 
       const text = messageReply.body.trim();
 
-      // Kiểm tra độ dài text
       if (!text || text.length === 0) {
         return api.sendMessage(
           "⚠️ Tin nhắn được reply trống!",
@@ -127,37 +139,14 @@ module.exports = {
 
       if (text.length > MAX_INPUT_CHARS) {
         return api.sendMessage(
-          `⚠️ Tin nhắn quá dài (tối đa ${MAX_INPUT_CHARS.toLocaleString()} ký tự).`,
+          `⚠️ Tin nhắn quá dài (tối đa ${MAX_INPUT_CHARS.toLocaleString("vi-VN")} ký tự).`,
           threadID,
           messageID,
         );
       }
 
-      // Tách đoạn dài hơn mặc định để giảm số phần voice
-      const ttsParts = splitTextIntoChunks(text);
-
-      if (!Array.isArray(ttsParts) || ttsParts.length === 0) {
-        return api.sendMessage(
-          "❌ Không thể tạo voice từ nội dung này.",
-          threadID,
-          messageID,
-        );
-      }
-
-      // Giới hạn số phần gửi để tránh spam quá mức
-      if (ttsParts.length > 60) {
-        return api.sendMessage(
-          "⚠️ Nội dung quá dài để gửi voice. Hãy rút gọn bớt nhé.",
-          threadID,
-          messageID,
-        );
-      }
-
-      // Gửi thông báo đang xử lý
-      api.sendMessage(
-        `🎤 Đang chuyển text thành giọng nói (ít nhất ${ttsParts.length} phần)...\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`,
-        threadID,
-      );
+      // Phát hiện ngôn ngữ và chọn giọng phù hợp
+      const voiceInfo = detectVoiceInfo(text);
 
       // Đảm bảo thư mục cache tồn tại
       const cacheDir = path.join(__dirname, "../../cache");
@@ -165,82 +154,55 @@ module.exports = {
         fs.mkdirSync(cacheDir, { recursive: true });
       }
 
+      const audioPath = path.join(cacheDir, `say_${Date.now()}_${senderID}.mp3`);
+
       try {
-        const queue = [...ttsParts];
-        const sentParts = [];
+        const tts = new MsEdgeTTS();
+        await tts.setMetadata(voiceInfo.voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
 
-        while (queue.length > 0) {
-          const partText = queue.shift();
+        const { audioStream } = tts.toStream(text);
+        const writeStream = fs.createWriteStream(audioPath);
 
-          let ttsUrl;
-          try {
-            ttsUrl = googleTTS.getAudioUrl(partText, {
-              lang: "vi",
-              slow: false,
-              host: "https://translate.google.com",
-            });
-          } catch (buildErr) {
-            // Nếu đoạn quá dài gây lỗi, tự chia nhỏ thêm
-            if (partText.length > 100) {
-              const mid = Math.floor(partText.length / 2);
-              const splitAt =
-                partText.lastIndexOf(" ", mid) > 0
-                  ? partText.lastIndexOf(" ", mid)
-                  : mid;
-              const left = partText.slice(0, splitAt).trim();
-              const right = partText.slice(splitAt).trim();
-              if (right) queue.unshift(right);
-              if (left) queue.unshift(left);
-              continue;
-            }
-            throw buildErr;
-          }
+        audioStream.pipe(writeStream);
 
-          const response = await axios.get(ttsUrl, {
-            responseType: "arraybuffer",
-            headers: {
-              "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            },
-          });
+        await new Promise((resolve, reject) => {
+          writeStream.on("finish", resolve);
+          writeStream.on("error", reject);
+          audioStream.on("error", reject);
+        });
 
-          const index = sentParts.length;
-          const audioPath = path.join(
-            cacheDir,
-            `say_${Date.now()}_${index}.mp3`,
-          );
-          fs.writeFileSync(audioPath, Buffer.from(response.data));
-
-          sentParts.push(audioPath);
-
-          await api.sendMessage(
-            {
-              body: `🎤 Voice của bạn (phần ${index + 1})`,
-              attachment: [fs.createReadStream(audioPath)],
-            },
-            threadID,
-          );
-
-          setTimeout(() => {
-            try {
-              if (fs.existsSync(audioPath)) {
-                fs.unlinkSync(audioPath);
-              }
-            } catch (e) {
-              console.error("Lỗi xóa file tạm:", e);
-            }
-          }, 15000);
-        }
-      } catch (ttsError) {
-        console.error("Lỗi TTS:", ttsError);
-        api.sendMessage(
-          "❌ Không thể chuyển text thành giọng nói. Vui lòng thử lại sau!",
+        await api.sendMessage(
+          {
+            body: `🎤 Voice (${voiceInfo.name})\n⚡ Thể lực: -20 (${energyUse.energy}/${energyUse.maxEnergy})`,
+            attachment: [fs.createReadStream(audioPath)],
+          },
           threadID,
+          messageID,
         );
+      } catch (ttsError) {
+        console.error("Lỗi Edge TTS:", ttsError);
+        api.sendMessage(
+          "❌ Không thể tạo giọng nói từ Microsoft Edge TTS. Vui lòng thử lại sau!",
+          threadID,
+          messageID,
+        );
+      } finally {
+        // Xóa file tạm sau 15 giây
+        setTimeout(() => {
+          try {
+            if (fs.existsSync(audioPath)) {
+              fs.unlinkSync(audioPath);
+            }
+          } catch (e) {
+            console.error("Lỗi xóa file tạm say:", e);
+          }
+        }, 15000);
       }
     } catch (e) {
       console.error("Lỗi say command:", e);
-      api.sendMessage("❌ Lỗi hệ thống khi xử lý lệnh say.", threadID);
+      api.sendMessage("❌ Lỗi hệ thống khi xử lý lệnh say.", threadID, messageID);
     }
   },
 };
+
+

@@ -9,6 +9,11 @@ const STATS_PATH = path.join(__dirname, '..', 'message_stats.json');
 const THREAD_INFO_TTL = 5 * 60 * 1000;
 const _threadInfoCache = new Map();
 
+try {
+  const npmlog = require('../includes/f/node_modules/npmlog');
+  npmlog.error = () => {};
+} catch (e) {}
+
 async function _quietGetThreadInfo(api, key) {
   const _origErr = console.error;
   console.error = () => {};
@@ -33,14 +38,61 @@ async function getThreadInfoCached(api, threadID) {
   }
 }
 
+const getClusterGroupSet = async (clusterId) => {
+  if (!clusterId) return null;
+  try {
+    const clusterGroupTracker = require('../src/managers/clusterGroupTracker');
+    if (typeof clusterGroupTracker.syncAndBalanceClusterGroups === 'function') {
+      await clusterGroupTracker.syncAndBalanceClusterGroups().catch(() => {});
+    }
+  } catch (e) {}
+
+  try {
+    const { execute } = require('../modules/utils/database');
+    const rows = await execute(
+      `SELECT thread_id FROM group_profile_bindings WHERE cluster_id = ?`,
+      [clusterId]
+    );
+    if (rows && Array.isArray(rows)) {
+      return new Set(rows.map((r) => String(r.thread_id)));
+    }
+  } catch (e) {
+    console.error(`❌ Lỗi đọc danh sách nhóm thuộc Cụm ${clusterId}:`, e.message);
+  }
+  return new Set();
+};
+
 const normalizeEntry = (raw) => {
-  if (typeof raw === 'number') return { total: Number(raw) || 0, daily: {}, weekly: {}, monthly: {} };
-  if (!raw || typeof raw !== 'object') return { total: 0, daily: {}, weekly: {}, monthly: {} };
+  if (typeof raw === 'number') {
+    return {
+      total: Number(raw) || 0,
+      daily: {},
+      weekly: {},
+      monthly: {},
+      streak: { current: 0, lastDate: null, lastTime: 0, longest: 0, brokenCount: 0 }
+    };
+  }
+  if (!raw || typeof raw !== 'object') {
+    return {
+      total: 0,
+      daily: {},
+      weekly: {},
+      monthly: {},
+      streak: { current: 0, lastDate: null, lastTime: 0, longest: 0, brokenCount: 0 }
+    };
+  }
   return {
     total: Number(raw.total) || 0,
     daily: raw.daily && typeof raw.daily === 'object' ? raw.daily : {},
     weekly: raw.weekly && typeof raw.weekly === 'object' ? raw.weekly : {},
     monthly: raw.monthly && typeof raw.monthly === 'object' ? raw.monthly : {},
+    streak: {
+      current: Number(raw.streak?.current) || 0,
+      lastDate: raw.streak?.lastDate || null,
+      lastTime: Number(raw.streak?.lastTime) || 0,
+      longest: Number(raw.streak?.longest) || 0,
+      brokenCount: Number(raw.streak?.brokenCount) || 0
+    }
   };
 };
 
@@ -58,20 +110,22 @@ const formatMonthLabel = (monthKey) => {
 
 const getTimeKeys = (now = new Date()) => {
   const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-  const year = vnTime.getFullYear();
-  const month = String(vnTime.getMonth() + 1).padStart(2, '0');
-  const day = String(vnTime.getDate()).padStart(2, '0');
+  const year = vnTime.getUTCFullYear();
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(vnTime.getUTCDate()).padStart(2, '0');
   const dayKey = `${year}-${month}-${day}`;
   const monthKey = `${year}-${month}`;
 
-  const weekDate = new Date(year, vnTime.getMonth(), day);
-  const weekDay = (weekDate.getDay() + 6) % 7;
-  weekDate.setDate(weekDate.getDate() - weekDay + 3);
-  const firstThursday = new Date(weekDate.getFullYear(), 0, 4);
-  const firstWeekDay = (firstThursday.getDay() + 6) % 7;
-  firstThursday.setDate(firstThursday.getDate() - firstWeekDay + 3);
+  const weekDate = new Date(Date.UTC(year, vnTime.getUTCMonth(), vnTime.getUTCDate()));
+  const weekDay = (weekDate.getUTCDay() + 6) % 7;
+  weekDate.setUTCDate(weekDate.getUTCDate() - weekDay + 3);
+
+  const firstThursday = new Date(Date.UTC(weekDate.getUTCFullYear(), 0, 4));
+  const firstWeekDay = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstWeekDay + 3);
+
   const weekNumber = 1 + Math.round((weekDate - firstThursday) / (7 * 24 * 60 * 60 * 1000));
-  const weekKey = `${weekDate.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
+  const weekKey = `${weekDate.getUTCFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
 
   return { dayKey, weekKey, monthKey };
 };
@@ -102,15 +156,59 @@ const writeState = (filePath, state) => {
   } catch (e) {}
 };
 
-const sendDailyTop10ToAllGroups = async (api, force = false) => {
+async function getUserNames(api, uids, threadInfo) {
+  const userMap = new Map();
+  if (threadInfo?.userInfo && Array.isArray(threadInfo.userInfo)) {
+    for (const u of threadInfo.userInfo) {
+      if (u && u.id && u.name) userMap.set(String(u.id), u.name);
+    }
+  }
+  const missingUids = uids.filter((id) => !userMap.has(String(id)));
+  if (missingUids.length > 0 && typeof api?.getUserInfo === 'function') {
+    try {
+      const info = await new Promise((resolve) => {
+        api.getUserInfo(missingUids, (err, data) => {
+          if (err || !data) return resolve(null);
+          resolve(data);
+        });
+      });
+      if (info && typeof info === 'object') {
+        if (Array.isArray(info)) {
+          for (const item of info) {
+            if (item && typeof item === 'object') {
+              for (const [id, u] of Object.entries(item)) {
+                if (u && u.name) userMap.set(String(id), u.name);
+              }
+            }
+          }
+        } else {
+          for (const [id, u] of Object.entries(info)) {
+            if (u && u.name) userMap.set(String(id), u.name);
+          }
+        }
+      }
+    } catch (e) {}
+  }
+  return userMap;
+}
+
+const sendDailyTop10ToAllGroups = async (api, force = false, clusterFilter = null) => {
   try {
     const stats = {};
     if (fs.existsSync(STATS_PATH)) Object.assign(stats, JSON.parse(fs.readFileSync(STATS_PATH, 'utf8')));
 
     const yesterdayKey = getPreviousDayKey();
+    const todayKey = getTimeKeys().dayKey;
     const state = readState(DAILY_TOP_STATE_PATH);
 
+    let clusterSet = null;
+    if (clusterFilter) {
+      clusterSet = await getClusterGroupSet(clusterFilter);
+      console.log(`🎯 Lọc theo Cụm ${clusterFilter}: Có ${clusterSet ? clusterSet.size : 0} nhóm thuộc Cụm ${clusterFilter}.`);
+    }
+
     for (const threadID of Object.keys(stats)) {
+      if (clusterSet && !clusterSet.has(String(threadID))) continue;
       if (!force && state[threadID] === yesterdayKey) continue;
 
       const threadStats = stats[threadID];
@@ -118,7 +216,20 @@ const sendDailyTop10ToAllGroups = async (api, force = false) => {
         .filter(([uid]) => /^\d+$/.test(String(uid)))
         .map(([uid, raw]) => {
           const entry = normalizeEntry(raw);
-          return { uid: String(uid), count: Number(entry.daily?.[yesterdayKey] || 0), total: Number(entry.total || 0) };
+          let yesterdayStreak = 0;
+          if (entry.streak) {
+            if (entry.streak.lastDate === todayKey) {
+              yesterdayStreak = entry.streak.current > 1 ? entry.streak.current - 1 : 0;
+            } else if (entry.streak.lastDate === yesterdayKey) {
+              yesterdayStreak = entry.streak.current;
+            }
+          }
+          return {
+            uid: String(uid),
+            count: Number(entry.daily?.[yesterdayKey] || 0),
+            total: Number(entry.total || 0),
+            streakValue: yesterdayStreak
+          };
         })
         .filter((item) => item.count > 0)
         .sort((a, b) => {
@@ -127,28 +238,124 @@ const sendDailyTop10ToAllGroups = async (api, force = false) => {
           return b.total - a.total;
         });
 
-      if (ranked.length === 0) continue;
+      if (ranked.length === 0) {
+        state[threadID] = yesterdayKey;
+        writeState(DAILY_TOP_STATE_PATH, state);
+        continue;
+      }
 
       try {
-        const threadInfo = await getThreadInfoCached(api, threadID);
-        if (!threadInfo?.isGroup) continue;
+        const { checkRentalStatus } = require('../modules/utils/rental');
+        const isRented = await checkRentalStatus(threadID);
+        if (!isRented) {
+          state[threadID] = yesterdayKey;
+          writeState(DAILY_TOP_STATE_PATH, state);
+          continue;
+        }
 
-        const userMap = new Map((threadInfo.userInfo || []).map((u) => [String(u.id), u.name]));
+        let threadInfo = await getThreadInfoCached(api, threadID);
+        if (!threadInfo) {
+          console.warn(`[sendDailyTop10] Không lấy được threadInfo cho nhóm ${threadID} (có thể bị rate-limit), dùng fallback.`);
+          threadInfo = { isGroup: true, userInfo: [] };
+        }
+        if (threadInfo.isGroup === false) continue;
+
+        const top10 = ranked.slice(0, 10);
+        const userMap = await getUserNames(api, top10.map(item => item.uid), threadInfo);
+
+        // Chuẩn bị danh sách đứt chuỗi
+        let lostUsers = state[threadID + "_lostUsers"];
+        if (!Array.isArray(lostUsers)) {
+          lostUsers = [];
+          const participantIDs = Array.isArray(threadInfo?.participantIDs)
+            ? threadInfo.participantIDs.map((id) => String(id))
+            : [];
+          const participantSet = new Set(participantIDs);
+
+          for (const uid of Object.keys(threadStats)) {
+            if (!/^\d+$/.test(uid)) continue;
+            if (participantSet.size > 0 && !participantSet.has(uid)) continue;
+
+            const entry = normalizeEntry(threadStats[uid]);
+            if (entry.streak.current > 0) {
+              const yesterdayMsgCount = Number(entry.daily?.[yesterdayKey] || 0);
+              if (yesterdayMsgCount === 0) {
+                lostUsers.push({
+                  uid,
+                  name: userMap.get(uid) || `User ${uid.slice(-6)}`,
+                  lostStreak: entry.streak.current,
+                });
+
+                entry.streak.brokenCount = (entry.streak.brokenCount || 0) + 1;
+                entry.streak.current = 0;
+
+                stats[threadID][uid] = entry;
+              }
+            }
+          }
+          fs.writeFileSync(STATS_PATH, JSON.stringify(stats, null, 2));
+        }
+
         const lines = [
           `📊 TOP 10 TƯƠNG TÁC NGÀY ${formatDayLabel(yesterdayKey)}`,
           '━'.repeat(13),
-          ...ranked.slice(0, 10).map((item, idx) => {
+          ...top10.map((item, idx) => {
             const name = userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
-            return `${idx + 1}. ${name} — ${item.count}`;
+            const currentStreak = item.streakValue || 0;
+            return `${idx + 1}. ${name} - ${item.count} tin | ${currentStreak} ngày 🔥`;
           }),
         ];
 
-        await api.sendMessage(lines.join('\n'), threadID);
+        const totalMessages = ranked.reduce((acc, item) => acc + item.count, 0);
+        lines.push('━'.repeat(13));
+        lines.push(`💬 Tổng tin nhắn trong ngày: ${totalMessages}`);
+
+        if (Array.isArray(lostUsers) && lostUsers.length > 0) {
+          lines.push("");
+          lines.push("❄️ THÀNH VIÊN ĐÃ MẤT CHUỖI");
+          lines.push("━".repeat(13));
+          lostUsers.forEach((user) => {
+            lines.push(`- ${user.name} (đứt chuỗi ${user.lostStreak} ngày)`);
+          });
+          delete state[threadID + "_lostUsers"];
+        }
+
+        await new Promise((resolve, reject) => {
+          const bodyMsg = lines.join('\n');
+          const sendFallback = () => {
+            api.sendMessage(bodyMsg, threadID, (err, info) => {
+              if (err) return reject(err);
+              resolve(info);
+            });
+          };
+
+          if (typeof api.sendMessageEffect === 'function') {
+            try {
+              const effects = ["LOVE", "GIFTWRAP", "CELEBRATION", "FIRE"];
+              const randomEffect = effects[Math.floor(Math.random() * effects.length)];
+              api.sendMessageEffect({ body: bodyMsg, effect: randomEffect }, threadID, (err, info) => {
+                if (err) return sendFallback();
+                resolve(info);
+              });
+            } catch (e) {
+              sendFallback();
+            }
+          } else {
+            sendFallback();
+          }
+        });
+
         state[threadID] = yesterdayKey;
+        writeState(DAILY_TOP_STATE_PATH, state);
         console.log(`✅ Đã gửi TOP 10 tương tác ngày cho nhóm ${threadID}`);
         await new Promise((r) => setTimeout(r, 2000));
       } catch (e) {
-        console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}:`, e && e.message ? e.message : e);
+        const errMsg = e && typeof e === 'object' && e.message ? e.message : String(e || '');
+        if (errMsg.includes("1545012")) {
+          console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}: Không thể gửi tin nhắn (bot có thể đã bị rời/kick khỏi nhóm hoặc nhóm bị khóa).`);
+        } else {
+          console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}:`, errMsg);
+        }
       }
     }
 
@@ -158,7 +365,7 @@ const sendDailyTop10ToAllGroups = async (api, force = false) => {
   }
 };
 
-const sendMonthlyTop10ToAllGroups = async (api, force = false) => {
+const sendMonthlyTop10ToAllGroups = async (api, force = false, clusterFilter = null) => {
   try {
     const stats = {};
     if (fs.existsSync(STATS_PATH)) Object.assign(stats, JSON.parse(fs.readFileSync(STATS_PATH, 'utf8')));
@@ -166,7 +373,14 @@ const sendMonthlyTop10ToAllGroups = async (api, force = false) => {
     const previousMonthKey = getPreviousMonthKey();
     const state = readState(MONTHLY_TOP_STATE_PATH);
 
+    let clusterSet = null;
+    if (clusterFilter) {
+      clusterSet = await getClusterGroupSet(clusterFilter);
+      console.log(`🎯 Lọc theo Cụm ${clusterFilter}: Có ${clusterSet ? clusterSet.size : 0} nhóm thuộc Cụm ${clusterFilter}.`);
+    }
+
     for (const threadID of Object.keys(stats)) {
+      if (clusterSet && !clusterSet.has(String(threadID))) continue;
       if (!force && state[threadID] === previousMonthKey) continue;
 
       const threadStats = stats[threadID];
@@ -174,7 +388,12 @@ const sendMonthlyTop10ToAllGroups = async (api, force = false) => {
         .filter(([uid]) => /^\d+$/.test(String(uid)))
         .map(([uid, raw]) => {
           const entry = normalizeEntry(raw);
-          return { uid: String(uid), count: Number(entry.monthly?.[previousMonthKey] || 0), total: Number(entry.total || 0) };
+          return {
+            uid: String(uid),
+            count: Number(entry.monthly?.[previousMonthKey] || 0),
+            total: Number(entry.total || 0),
+            streak: entry.streak
+          };
         })
         .filter((item) => item.count > 0)
         .sort((a, b) => {
@@ -183,43 +402,166 @@ const sendMonthlyTop10ToAllGroups = async (api, force = false) => {
           return b.total - a.total;
         });
 
-      if (ranked.length === 0) continue;
+      if (ranked.length === 0) {
+        state[threadID] = previousMonthKey;
+        writeState(MONTHLY_TOP_STATE_PATH, state);
+        continue;
+      }
+
+      // Top 10 longest streaks
+      const rankedStreaks = Object.entries(threadStats)
+        .filter(([uid]) => /^\d+$/.test(String(uid)))
+        .map(([uid, raw]) => {
+          const entry = normalizeEntry(raw);
+          return {
+            uid: String(uid),
+            longest: Number(entry.streak?.longest || 0)
+          };
+        })
+        .filter((item) => item.longest > 0)
+        .sort((a, b) => b.longest - a.longest);
 
       try {
-        const threadInfo = await getThreadInfoCached(api, threadID);
-        if (!threadInfo?.isGroup) continue;
+        const { checkRentalStatus } = require('../modules/utils/rental');
+        const isRented = await checkRentalStatus(threadID);
+        if (!isRented) {
+          state[threadID] = previousMonthKey;
+          writeState(MONTHLY_TOP_STATE_PATH, state);
+          continue;
+        }
 
-        const userMap = new Map((threadInfo.userInfo || []).map((u) => [String(u.id), u.name]));
+        let threadInfo = await getThreadInfoCached(api, threadID);
+        if (!threadInfo) {
+          console.warn(`[sendMonthlyTop10] Không lấy được threadInfo cho nhóm ${threadID} (có thể bị rate-limit), dùng fallback.`);
+          threadInfo = { isGroup: true, userInfo: [] };
+        }
+        if (threadInfo.isGroup === false) continue;
+
+        const top10 = ranked.slice(0, 10);
+        const userMap = await getUserNames(api, top10.map(item => item.uid), threadInfo);
+
         const lines = [
           `📊 TOP 10 TƯƠNG TÁC THÁNG ${formatMonthLabel(previousMonthKey)}`,
           '━'.repeat(13),
-          ...ranked.slice(0, 10).map((item, idx) => {
+          ...top10.map((item, idx) => {
             const name = userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
-            return `${idx + 1}. ${name} — ${item.count}`;
+            const longest = item.streak?.longest || 0;
+            const broken = item.streak?.brokenCount || 0;
+            const streakText = longest > 0 ? ` (Kỷ lục: ${longest} ngày${broken > 0 ? `, đứt chuỗi: ${broken} lần` : ""})` : "";
+            return `${idx + 1}. ${name} — ${item.count}${streakText}`;
           }),
         ];
 
-        await api.sendMessage(lines.join('\n'), threadID);
+        const totalMessages = ranked.reduce((acc, item) => acc + item.count, 0);
+        lines.push('━'.repeat(13));
+        lines.push(`💬 Tổng tin nhắn trong tháng: ${totalMessages}`);
+
+        if (rankedStreaks.length > 0) {
+          lines.push("");
+          lines.push("🔥 TOP 10 GIỮ CHUỖI TƯƠNG TÁC LÂU NHẤT THÁNG");
+          lines.push("━".repeat(13));
+          rankedStreaks.slice(0, 10).forEach((item, idx) => {
+            const name = userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
+            lines.push(`${idx + 1}. ${name} — ${item.longest} ngày`);
+          });
+        }
+
+        await new Promise((resolve, reject) => {
+          const bodyMsg = lines.join('\n');
+          const sendFallback = () => {
+            api.sendMessage(bodyMsg, threadID, (err, info) => {
+              if (err) return reject(err);
+              resolve(info);
+            });
+          };
+
+          if (typeof api.sendMessageEffect === 'function') {
+            try {
+              const effects = ["LOVE", "GIFTWRAP", "CELEBRATION", "FIRE"];
+              const randomEffect = effects[Math.floor(Math.random() * effects.length)];
+              api.sendMessageEffect({ body: bodyMsg, effect: randomEffect }, threadID, (err, info) => {
+                if (err) return sendFallback();
+                resolve(info);
+              });
+            } catch (e) {
+              sendFallback();
+            }
+          } else {
+            sendFallback();
+          }
+        });
+
+        // Reset brokenCount cho toàn bộ thành viên nhóm sau khi báo cáo tháng
+        for (const uid of Object.keys(threadStats)) {
+          if (/^\d+$/.test(uid)) {
+            if (stats[threadID][uid] && stats[threadID][uid].streak) {
+              stats[threadID][uid].streak.brokenCount = 0;
+            }
+          }
+        }
+
         state[threadID] = previousMonthKey;
+        writeState(MONTHLY_TOP_STATE_PATH, state);
         console.log(`✅ Đã gửi TOP 10 tương tác tháng cho nhóm ${threadID}`);
         await new Promise((r) => setTimeout(r, 2000));
       } catch (e) {
-        console.error(`❌ Lỗi gửi TOP 10 tháng cho nhóm ${threadID}:`, e && e.message ? e.message : e);
+        const errMsg = e && typeof e === 'object' && e.message ? e.message : String(e || '');
+        if (errMsg.includes("1545012")) {
+          console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}: Không thể gửi tin nhắn (bot có thể đã bị rời/kick khỏi nhóm hoặc nhóm bị khóa).`);
+        } else {
+          console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}:`, errMsg);
+        }
       }
     }
 
+    fs.writeFileSync(STATS_PATH, JSON.stringify(stats, null, 2));
     writeState(MONTHLY_TOP_STATE_PATH, state);
   } catch (e) {
     console.error('❌ Lỗi gửi TOP 10 tương tác tháng cho tất cả nhóm:', e);
   }
 };
 
-const loadAppState = () => {
+const loadAppStateForCluster = (clusterId = null) => {
+  if (clusterId) {
+    try {
+      const configPath = path.join(__dirname, '..', 'runtime', 'account_profiles.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const cluster = (config.clusters || []).find((c) => c.cluster_id === clusterId);
+        if (cluster) {
+          const profilesToTry = [
+            cluster.active_profile,
+            ...(cluster.profiles || []).filter((p) => p !== cluster.active_profile),
+          ];
+
+          for (const pName of profilesToTry) {
+            if (!pName) continue;
+            const appstateFile = path.join(__dirname, '..', 'runtime', 'appstates', `appstate_${pName}.json`);
+            if (fs.existsSync(appstateFile)) {
+              console.log(`🔑 Tự động nạp AppState cho Profile "${pName}" của Cụm ${clusterId}...`);
+              return {
+                profileName: pName,
+                appState: JSON.parse(fs.readFileSync(appstateFile, 'utf8')),
+              };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`❌ Lỗi khi tìm AppState cho Cụm ${clusterId}:`, e.message);
+    }
+  }
+
+  // Fallback to default appstate.json
   const runtimePath = path.join(__dirname, '..', 'runtime', 'appstate.json');
   const legacyPath = path.join(__dirname, '..', 'appstate.json');
   try {
     const p = fs.existsSync(runtimePath) ? runtimePath : legacyPath;
-    return { appState: JSON.parse(fs.readFileSync(p, 'utf8')) };
+    console.log(`🔑 Nạp AppState mặc định (${p})...`);
+    return {
+      profileName: 'Default',
+      appState: JSON.parse(fs.readFileSync(p, 'utf8')),
+    };
   } catch (e) {
     return null;
   }
@@ -227,47 +569,55 @@ const loadAppState = () => {
 
 const main = async () => {
   const args = process.argv.slice(2);
-  const mode = (args.find(a => !a.startsWith('-')) || 'daily').toLowerCase();
-  const force = args.some(a => a === '--force' || a === '-f');
+  let mode = 'daily';
+  let clusterFilter = null;
+  let force = false;
 
-  const creds = loadAppState();
-  if (!creds) {
-    console.error('❌ Không tìm thấy appstate.json.');
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--force' || a === '-f') {
+      force = true;
+    } else if (a === '--cluster' || a === '-c') {
+      if (args[i + 1] && !isNaN(parseInt(args[i + 1]))) {
+        clusterFilter = parseInt(args[i + 1]);
+        i++;
+      }
+    } else if (a.startsWith('--cluster=') || a.startsWith('-c=')) {
+      clusterFilter = parseInt(a.split('=')[1]);
+    } else if (a.toLowerCase() === 'daily' || a.toLowerCase() === 'monthly') {
+      mode = a.toLowerCase();
+    } else if (!isNaN(parseInt(a))) {
+      clusterFilter = parseInt(a);
+    }
+  }
+
+  const creds = loadAppStateForCluster(clusterFilter);
+  if (!creds || !creds.appState) {
+    console.error(`❌ Không tìm thấy AppState phù hợp cho Cụm ${clusterFilter || 'mặc định'}.`);
     process.exit(1);
   }
 
-  login(creds, async (err, api) => {
+  login({ appState: creds.appState }, async (err, api) => {
     if (err) {
       console.error('❌ Đăng nhập thất bại. Có thể do cookie/appstate đã hết hạn hoặc bị lỗi.');
-      console.error('👉 Hãy cập nhật appstate.json hoặc chạy lệnh sau để làm mới:');
-      console.error('   node refresh-appstate.js <email> <password>');
       console.error('Chi tiết lỗi đăng nhập:', err.message || err);
       process.exit(1);
     }
 
-    // Save fresh appstate to file
     try {
-      const appState = JSON.stringify(api.getAppState(), null, 2);
-      const runtimePath = path.join(__dirname, '..', 'runtime', 'appstate.json');
-      const legacyPath = path.join(__dirname, '..', 'appstate.json');
-      fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
-      fs.writeFileSync(runtimePath, appState);
-      fs.writeFileSync(legacyPath, appState);
-    } catch (e) {}
-
-    try {
+      const clusterMsg = clusterFilter ? ` (Cụm ${clusterFilter})` : '';
+      const forceMsg = force ? ' [FORCE]' : '';
       if (mode === 'monthly') {
-        console.log(`🕗 Gửi TOP 10 tương tác tháng (bằng tay)${force ? ' [FORCE]' : ''}...`);
-        await sendMonthlyTop10ToAllGroups(api, force);
+        console.log(`... Gửi TOP 10 tương tác tháng (bằng tay)${clusterMsg}${forceMsg}...`);
+        await sendMonthlyTop10ToAllGroups(api, force, clusterFilter);
       } else {
-        console.log(`🕗 Gửi TOP 10 tương tác ngày (bằng tay)${force ? ' [FORCE]' : ''}...`);
-        await sendDailyTop10ToAllGroups(api, force);
+        console.log(`... Gửi TOP 10 tương tác ngày (bằng tay)${clusterMsg}${forceMsg}...`);
+        await sendDailyTop10ToAllGroups(api, force, clusterFilter);
       }
     } catch (e) {
       console.error('❌ Lỗi khi gửi TOP:', e);
     }
 
-    try { await api.logout(); } catch {};
     process.exit(0);
   });
 };

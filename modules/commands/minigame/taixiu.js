@@ -7,13 +7,14 @@ const {
   recordMinigameSuccess,
 } = require("../../utils/minigameLimiter");
 const { recordAction } = require("../../utils/questSystem");
+const { parseMoneyAmount } = require("../../utils/parseMoney");
 const prefix = process.env.BOT_PREFIX;
 
 const TAX_RATE = 0.05;
 const AUTO_CLOSE_MS = 3 * 60 * 1000;
 const SOICAU_HISTORY_FILE = path.join(
-  process.cwd(),
-  "cache",
+  __dirname,
+  "../../cache",
   "taixiu_soicau_history.json",
 );
 const MAX_SOICAU_PER_THREAD = 30;
@@ -38,19 +39,22 @@ function normalizeChoice(str) {
 // Hàm đọc config thủ công an toàn
 function getDBConfig() {
   try {
-    const configPath = path.join(process.cwd(), "config.json");
-    if (!fs.existsSync(configPath)) return null;
+    let configPath = path.join(process.cwd(), "config.json");
+    if (!fs.existsSync(configPath)) {
+      configPath = path.join(__dirname, "../../config.json");
+    }
+    if (!fs.existsSync(configPath)) return { type: "sqlite" };
     const configFile = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    const db = configFile.database;
+    const db = configFile.database || {};
     return {
-      host: db.host,
-      port: db.port,
-      user: db.user,
-      password: db.password,
-      database: db.name,
+      host: db.host || "localhost",
+      port: db.port || 3306,
+      user: db.user || "root",
+      password: db.password || "",
+      database: db.name || "bot",
     };
   } catch (e) {
-    return null;
+    return { type: "sqlite" };
   }
 }
 
@@ -114,7 +118,7 @@ function formatSoiCauLine(index, item) {
   const round = `#${index.toString().padStart(2, "0")}`;
   const result = String(item.result || "").toLowerCase();
   const resultLabel =
-    result === "tai" ? "TAI" : result === "xiu" ? "XIU" : "KHAC";
+    result === "tai" ? "TAI" : result === "xiu" ? "XIU" : result === "bao" ? "BAO" : "KHAC";
   const d1 = Number(item.dice1) || 0;
   const d2 = Number(item.dice2) || 0;
   const d3 = Number(item.dice3) || 0;
@@ -177,8 +181,11 @@ async function finalizeTaixiuSession({
   const diceIcons = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
   const resultIcon = `${diceIcons[d1 - 1]} ${diceIcons[d2 - 1]} ${diceIcons[d3 - 1]}`;
 
+  const isBao = d1 === d2 && d2 === d3;
   let resultText = "thua";
-  if (total >= 4 && total <= 10) {
+  if (isBao) {
+    resultText = "bao";
+  } else if (total >= 4 && total <= 10) {
     resultText = "xiu";
   } else if (total >= 11 && total <= 17) {
     resultText = "tai";
@@ -198,7 +205,16 @@ async function finalizeTaixiuSession({
   let totalBet = 0;
   let totalPay = 0;
   const autoCloseText = autoClose ? "⏰ Hết 3 phút, bot tự xóc.\n" : "";
-  let msg = `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcon}\nTổng: ${total} - ${resultText.toUpperCase()}\n━━━━━━━━━━━━━\n`;
+  let msg = "";
+  if (isBao) {
+    msg += `💥💥💥 BÃO !!! BÃO TO CẬN CẢNH !!! 💥💥💥\n`;
+    msg += `🎰 KẾT QUẢ (Phiên #${session.sessionID}): [ ${resultIcon} ]\n`;
+    msg += `🎲 Cả 3 xúc xắc đều ra mặt: ${d1} (Tổng: ${total})\n`;
+    msg += `🔥 TẤT CẢ CÁC CỬA TÀI & XỈU ĐỀU BỊ NHÀ CÁI NUỐT SẠCH! 🔥\n`;
+  } else {
+    msg += `${autoCloseText}🎰 KẾT QUẢ (Phiên #${session.sessionID}): ${resultIcon}\nTổng: ${total} - ${resultText.toUpperCase()}\n`;
+  }
+  msg += `━━━━━━━━━━━━━\n`;
 
   let connection;
   try {
@@ -209,8 +225,8 @@ async function finalizeTaixiuSession({
 
       // Check VIP va lucky cua nguoi choi
       const [userCheck] = await connection.execute(
-        "SELECT vip_until FROM messenger_users WHERE psid = ?",
-        [p.id],
+        "SELECT vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?",
+        [key, p.id],
       );
       const hasVIP =
         userCheck[0]?.vip_until &&
@@ -224,7 +240,7 @@ async function finalizeTaixiuSession({
 
       const isWin = p.choice === resultText;
       let statusIcon = "🔴";
-      let changeText = `-${p.amount.toLocaleString()}`;
+      let changeText = `-${p.amount.toLocaleString('vi-VN')}`;
 
       if (isWin) {
         statusIcon = "🟢";
@@ -233,12 +249,12 @@ async function finalizeTaixiuSession({
         const taxAmount = Math.floor(winProfit * TAX_RATE);
         const payout = grossPayout - taxAmount;
         const netProfit = Math.max(0, winProfit - taxAmount);
-        changeText = `+${netProfit.toLocaleString()}`;
+        changeText = `+${netProfit.toLocaleString('vi-VN')}`;
         totalPay += payout;
 
         await connection.execute(
-          "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-          [payout, p.id],
+          "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+          [payout, key, p.id],
         );
 
         // Tru lucky uses
@@ -256,8 +272,8 @@ async function finalizeTaixiuSession({
           const refundTax = Math.floor(grossRefund * TAX_RATE);
           refund = Math.max(0, grossRefund - refundTax);
           await connection.execute(
-            "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-            [refund, p.id],
+            "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+            [refund, key, p.id],
           );
           totalPay += refund;
         }
@@ -277,7 +293,7 @@ async function finalizeTaixiuSession({
         const grossRefund = Math.floor(p.amount * 0.05);
         const refundTax = Math.floor(grossRefund * TAX_RATE);
         const netRefund = Math.max(0, grossRefund - refundTax);
-        extraInfo += ` (+${netRefund.toLocaleString()})`;
+        extraInfo += ` (+${netRefund.toLocaleString('vi-VN')})`;
       }
 
       msg += `${statusIcon} ${p.name}: ${p.choice.toUpperCase()} (${changeText})${extraInfo}\n`;
@@ -290,20 +306,20 @@ async function finalizeTaixiuSession({
     const netProfit = totalBet - totalPay;
 
     const [bossCheck] = await connection.execute(
-      "SELECT credits FROM messenger_users WHERE psid = ?",
-      [BOSS_ID],
+      "SELECT credits FROM messenger_users WHERE thread_id = ? AND psid = ?",
+      [key, BOSS_ID],
     );
 
     if (bossCheck.length === 0) {
       const initialMoney = 1000000000 + netProfit;
       await connection.execute(
-        "INSERT INTO messenger_users (psid, name, credits) VALUES (?, ?, ?)",
-        [BOSS_ID, "BOSS NHÀ CÁI", initialMoney],
+        "INSERT INTO messenger_users (thread_id, psid, name, credits) VALUES (?, ?, ?, ?)",
+        [key, BOSS_ID, "BOSS NHÀ CÁI", initialMoney],
       );
     } else {
       await connection.execute(
-        "UPDATE messenger_users SET credits = credits + ? WHERE psid = ?",
-        [netProfit, BOSS_ID],
+        "UPDATE messenger_users SET credits = credits + ? WHERE thread_id = ? AND psid = ?",
+        [netProfit, key, BOSS_ID],
       );
     }
   } catch (e) {
@@ -315,6 +331,9 @@ async function finalizeTaixiuSession({
 
   clearTaixiuTimer(key);
   delete global.taixiuSessions[key];
+  if (typeof api.sendMessageEffect === "function") {
+    return api.sendMessageEffect({ body: msg, effect: "GIFTWRAP" }, key);
+  }
   return api.sendMessage(msg, key);
 }
 
@@ -404,14 +423,16 @@ module.exports = {
     if (!dbConfig)
       return api.sendMessage("❌ Lỗi cấu hình Database!", threadID);
 
+    const key = String(threadID);
+
     // --- LỆNH: !taixiu xoc (CHỐT PHIÊN) ---
     if (command === "xoc" || command === "so") {
-      if (!global.taixiuSessions[threadID])
-        return api.sendMessage("❌ Chưa mở phiên nào.", threadID);
+      if (!global.taixiuSessions[key])
+        return api.sendMessage("❌ Chưa mở phiên nào.", key);
 
       return finalizeTaixiuSession({
         api,
-        threadID,
+        threadID: key,
         dbConfig,
         autoClose: false,
       });
@@ -419,34 +440,38 @@ module.exports = {
 
     // --- LỆNH: !taixiu (MỞ PHIÊN) ---
     else {
-      if (global.taixiuSessions[threadID])
+      if (global.taixiuSessions[key])
         return api.sendMessage(
           `⚠️ Đang có phiên rồi! Gõ ${prefix}taixiu xoc để chốt.`,
-          threadID,
+          key,
         );
 
       // ANTI-SPAM: Tạo ID phiên ngẫu nhiên
       const sessionID = Math.floor(Math.random() * 9999);
       const openMsg = `🎲 SÒNG BẠC ONLINE! (Phiên #${sessionID})\n👑 Nhà cái: LeVan\n\nCách chơi: Reply (Trả lời) tin nhắn này:\n[Tai/Xiu] [Số tiền]\n${prefix}taixiu xoc để xóc\n⏰ Tự xóc sau 3 phút nếu chưa ai chốt.`;
 
+      // Tạo session ngay lập tức để tránh mất session nếu api.sendMessage gặp lỗi nhẹ hay trả về undefined info
+      global.taixiuSessions[key] = {
+        status: "open",
+        sessionID: sessionID,
+        author: senderID,
+        messageID: null,
+        players: {},
+      };
+
       try {
-        const info = await api.sendMessage(openMsg, threadID);
-
-        global.taixiuSessions[threadID] = {
-          status: "open",
-          sessionID: sessionID, // Lưu ID phiên để dùng lúc chốt
-          author: senderID,
-          messageID: info.messageID,
-          players: {},
-        };
-
-        scheduleTaixiuAutoClose({ api, threadID, config });
+        const info = await api.sendMessage(openMsg, key);
+        if (info && info.messageID) {
+          global.taixiuSessions[key].messageID = info.messageID;
+        }
+        scheduleTaixiuAutoClose({ api, threadID: key, config });
       } catch (e) {
         if (e.error === 1390008) {
+          delete global.taixiuSessions[key];
           console.error("🔴 Bot bị chặn Spam (1390008). Hãy nghỉ ngơi.");
         } else {
           console.error("Lỗi gửi tin nhắn mở sòng:", e);
-          api.sendMessage("❌ Lỗi không thể mở sòng.", threadID);
+          scheduleTaixiuAutoClose({ api, threadID: key, config });
         }
       }
     }
@@ -456,14 +481,19 @@ module.exports = {
   handleReply: async ({ api, event, config }) => {
     const prefix = config?.prefix || "!";
     const { threadID, senderID, body, messageReply, messageID } = event;
+    const key = String(threadID);
 
-    if (!global.taixiuSessions[threadID]) return;
+    if (!global.taixiuSessions[key]) return;
     if (!messageReply) return;
 
-    if (messageReply.senderID != api.getCurrentUserID()) return;
-
-    const session = global.taixiuSessions[threadID];
+    const session = global.taixiuSessions[key];
     if (session.status !== "open") return;
+
+    const isSessionReply =
+      (session.messageID && String(messageReply.messageID) === String(session.messageID)) ||
+      (messageReply.body && messageReply.body.includes("SÒNG BẠC ONLINE"));
+
+    if (!isSessionReply) return;
 
     if (senderID === BOSS_ID)
       return api.sendMessage("❌ Boss không được cược!", threadID, messageID);
@@ -473,12 +503,15 @@ module.exports = {
       return api.sendMessage(limitCheck.message, threadID, messageID);
     }
 
-    const args = body.trim().split(/\s+/);
-    const choice = args[0]?.toLowerCase();
-    let amountStr = args[1];
+    let cleanBody = (body || "").trim();
+    // Strip leading prefix and command name if user included them in reply (e.g. /taixiu tai 5000, !taixiu tài 50k)
+    cleanBody = cleanBody.replace(/^[\/!.]?(taixiu|tx)\s+/i, "");
 
+    const args = cleanBody.split(/\s+/);
     const normalizedChoice = normalizeChoice(args[0] || "");
     if (!["tai", "xiu"].includes(normalizedChoice)) return;
+
+    let amountStr = args[1];
 
     const dbConfig = getDBConfig();
     if (!dbConfig) return;
@@ -488,8 +521,8 @@ module.exports = {
       connection = await getConnection();
 
       const [rows] = await connection.execute(
-        "SELECT credits, name, vip_until FROM messenger_users WHERE psid = ?",
-        [senderID],
+        "SELECT credits, name, vip_until FROM messenger_users WHERE thread_id = ? AND psid = ?",
+        [String(threadID), senderID],
       );
       if (rows.length === 0)
         return api.sendMessage(
@@ -524,11 +557,11 @@ module.exports = {
           return api.sendMessage("⚠️ Phần trăm cược không hợp lệ (phải từ 1% đến 100%).", threadID, messageID);
         }
       } else {
-        betAmount = parseInt(amountStr);
+        betAmount = parseMoneyAmount(amountStr);
       }
 
       if (isNaN(betAmount) || betAmount <= 0)
-        return api.sendMessage("⚠️ Tiền cược sai.", threadID, messageID);
+        return api.sendMessage("⚠️ Tiền cược không hợp lệ. Ví dụ reply tin nhắn sòng: tai 5000 hoặc xiu 50k", threadID, messageID);
       if (userBalance < betAmount)
         return api.sendMessage(`💸 Không đủ tiền!`, threadID, messageID);
       if (session.players[senderID])
@@ -536,8 +569,8 @@ module.exports = {
 
       // Chặn cược > 500k nếu đang trong tù
       const [jailRows] = await connection.execute(
-        "SELECT jail_until FROM user_jail WHERE psid = ? AND jail_until > NOW()",
-        [senderID],
+        "SELECT jail_until FROM user_jail WHERE thread_id = ? AND psid = ? AND jail_until > datetime('now', 'localtime')",
+        [String(threadID), senderID],
       );
       if (jailRows.length > 0 && betAmount > 500000) {
         const remainingMs = new Date(jailRows[0].jail_until) - new Date();
@@ -555,8 +588,8 @@ module.exports = {
 
       // Giới hạn cược 200k nếu nợ quá hạn
       const [loanRows] = await connection.execute(
-        "SELECT principal, taken_at, due_days FROM bank_loans WHERE psid = ?",
-        [senderID],
+        "SELECT principal, taken_at, due_days FROM bank_loans WHERE thread_id = ? AND psid = ?",
+        [String(threadID), senderID],
       );
       const now = new Date();
       if (loanRows.length > 0) {
@@ -571,7 +604,7 @@ module.exports = {
             (now - dueDate) / (1000 * 60 * 60 * 24),
           );
           return api.sendMessage(
-            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString()}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
+            `⚠️ BẠN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n Nợ quá hạn: ${daysOverdue} ngày\n💰 Số tiền vay: ${parseInt(loan.principal).toLocaleString('vi-VN')}\n📉 Cược tối đa: 200k (phục vụ trả nợ)\n━━━━━━━━━━━━━\n💡 Trả nợ để cược bình thường!`,
             threadID,
             messageID,
           );
@@ -580,8 +613,8 @@ module.exports = {
 
       // Trừ tiền
       await connection.execute(
-        "UPDATE messenger_users SET credits = credits - ? WHERE psid = ?",
-        [betAmount, senderID],
+        "UPDATE messenger_users SET credits = credits - ? WHERE thread_id = ? AND psid = ?",
+        [betAmount, String(threadID), senderID],
       );
 
       const minigameState = recordMinigameSuccess(senderID);
@@ -594,8 +627,8 @@ module.exports = {
       // Tăng games_played nếu cược >= 50k
       if (betAmount >= 50000) {
         await connection.execute(
-          "UPDATE messenger_users SET games_played = games_played + 1 WHERE psid = ?",
-          [senderID],
+          "UPDATE messenger_users SET games_played = games_played + 1 WHERE thread_id = ? AND psid = ?",
+          [String(threadID), senderID],
         );
       }
 

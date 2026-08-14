@@ -1,6 +1,6 @@
 const { checkCooldown } = require("../../utils/cooldown");
 const { execute: executeQuery } = require("../../utils/database");
-const { getAiSettings } = require("../../utils/aiAssistant");
+const { toAdminIdList } = require("../../utils/checkPermission");
 const axios = require("axios");
 const prefix = process.env.BOT_PREFIX;
 
@@ -47,84 +47,172 @@ function parseJsonFromText(text) {
     }
 }
 
-// Gọi Ollama AI để tạo từ tiếp theo cho Bot
-async function generateWordWithAI(prevWord) {
-    const settings = getAiSettings();
-    const url = `${String(settings.ollamaHost).replace(/\/$/, "")}/api/chat`;
-    const lastSyllable = prevWord.trim().split(/\s+/).pop();
-
-    const prompt = `Bạn là người chơi trong trò chơi Nối từ tiếng Việt. Từ trước đó là "${prevWord}". Âm tiết cuối cùng là "${lastSyllable}".
-Nhiệm vụ của bạn: Hãy tìm một từ ghép hoặc từ láy tiếng Việt gồm đúng 2 âm tiết, bắt đầu bằng từ "${lastSyllable}". Từ này phải là từ có nghĩa thực sự trong tiếng Việt.
-Hãy trả về một đối tượng JSON có định dạng như sau:
-{
-  "word": "từ nối tiếp theo viết thường",
-  "meaning": "ý nghĩa ngắn gọn của từ đó"
-}
-Đảm bảo kết quả trả về chỉ gồm mã JSON hợp lệ, không thêm bất kỳ văn bản nào khác.`;
-
-    try {
-        const res = await axios.post(url, {
-            model: settings.model,
-            messages: [{ role: "user", content: prompt }],
-            stream: false,
-            options: {
-                temperature: 0.3
-            }
-        }, {
-            timeout: 10000
-        });
-
-        const content = res.data?.message?.content || res.data?.response || "";
-        const json = parseJsonFromText(content);
-        if (json && json.word) {
-            return json.word.trim().toLowerCase();
-        }
-        return null;
-    } catch (err) {
-        console.error("generateWordWithAI error:", err.message);
+// Gọi Groq AI để tạo từ tiếp theo cho Bot
+async function generateWordWithAI(prevWord, usedWords = []) {
+    const apiKey = (process.env.GROQ_APIKEY || process.env.GROQ_API_KEY || "").trim();
+    if (!apiKey) {
+        console.error("generateWordWithAI error: GROQ_APIKEY chưa được thiết lập trong .env");
         return null;
     }
+
+    const rawLastSyllable = prevWord.trim().split(/\s+/).pop();
+    const targetSyllable = normalizeVietnamese(rawLastSyllable);
+    const prevSyllables = normalizeVietnamese(prevWord).split(/\s+/).filter(Boolean);
+    const normalizedUsed = (usedWords || []).map(w => normalizeVietnamese(w));
+
+    let messages = [
+        {
+            role: "system",
+            content: `Bạn là người chơi trong trò chơi Nối từ tiếng Việt. Bạn phải đưa ra một từ ghép hoặc từ láy tiếng Việt gồm đúng 2 âm tiết (2 tiếng) có nghĩa thực sự trong từ điển tiếng Việt, bắt đầu bằng âm tiết được yêu cầu.
+CÁC ĐIỀU CẤM TUYỆT ĐỐI:
+1. KHÔNG được đổi dấu thanh hoặc sửa ký tự của âm tiết bắt đầu. Giữ nguyên 100% âm tiết bắt đầu.
+2. TUYỆT ĐỐI CẤM lặp 2 âm tiết giống nhau (Ví dụ: CẤM 'biếc biếc', 'học học', 'nghĩ nghĩ').
+3. TUYỆT ĐỐI CẤM đảo ngược từ liền trước (Ví dụ: từ trước là 'nghỉ ngơi' thì CẤM 'ngơi nghỉ', 'liệu dược' thì CẤM 'dược liệu').
+4. TUYỆT ĐỐI CẤM bịa từ vô nghĩa, từ ghép gượng ép hoặc chèn tiếng Anh.
+5. Chỉ trả về một đối tượng JSON duy nhất có cấu trúc: {"word": "từ ghép 2 tiếng", "meaning": "ý nghĩa ngắn gọn"}`
+        },
+        {
+            role: "user",
+            content: `Từ trước đó là: "${prevWord}". Âm tiết bắt đầu của từ tiếp theo PHẢI là: "${rawLastSyllable}". Hãy tìm từ nối tiếng Việt hợp lệ.`
+        }
+    ];
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const res = await axios.post("https://api.groq.com/openai/v1/chat/completions", {
+                model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+                messages: messages,
+                temperature: 0.2 + (attempt - 1) * 0.15,
+                response_format: { type: "json_object" }
+            }, {
+                headers: {
+                    "Authorization": `Bearer ${apiKey}`,
+                    "Content-Type": "application/json"
+                },
+                timeout: 10000
+            });
+
+            const content = res.data?.choices?.[0]?.message?.content || "";
+            const json = parseJsonFromText(content);
+            if (!json || !json.word) {
+                messages.push({ role: "assistant", content: content || "{}" });
+                messages.push({ role: "user", content: "Lỗi: Không tìm thấy trường 'word' trong JSON. Hãy trả về JSON hợp lệ." });
+                continue;
+            }
+
+            const candidate = normalizeVietnamese(json.word.trim());
+            const syllables = candidate.split(/\s+/).filter(Boolean);
+
+            // 1. Kiểm tra số lượng âm tiết
+            if (syllables.length !== 2) {
+                messages.push({ role: "assistant", content });
+                messages.push({ role: "user", content: `Lỗi: Từ "${candidate}" không có đúng 2 âm tiết. Hãy tìm một từ khác gồm đúng 2 âm tiết bắt đầu bằng "${rawLastSyllable}".` });
+                continue;
+            }
+
+            // 2. Kiểm tra âm tiết đầu
+            if (syllables[0] !== targetSyllable) {
+                messages.push({ role: "assistant", content });
+                messages.push({ role: "user", content: `Lỗi: Từ "${candidate}" bắt đầu bằng "${syllables[0]}", không khớp với "${rawLastSyllable}". Phải bắt đầu chính xác bằng "${rawLastSyllable}".` });
+                continue;
+            }
+
+            // 3. Chặn lặp 2 âm tiết giống nhau (A A)
+            if (syllables[0] === syllables[1]) {
+                messages.push({ role: "assistant", content });
+                messages.push({ role: "user", content: `Lỗi: Từ "${candidate}" lặp lại 2 âm tiết giống nhau. Luật chơi cấm lặp từ. Hãy tìm từ khác có 2 âm tiết phân biệt.` });
+                continue;
+            }
+
+            // 4. Chặn đảo chữ của từ liền trước (A B -> B A)
+            if (prevSyllables.length === 2 && syllables[0] === prevSyllables[1] && syllables[1] === prevSyllables[0]) {
+                messages.push({ role: "assistant", content });
+                messages.push({ role: "user", content: `Lỗi: Từ "${candidate}" là từ đảo ngược của "${prevWord}". Luật chơi cấm đảo ngược chữ. Hãy tìm từ khác.` });
+                continue;
+            }
+
+            // 5. Kiểm tra từ đã dùng
+            if (normalizedUsed.includes(candidate)) {
+                messages.push({ role: "assistant", content });
+                messages.push({ role: "user", content: `Lỗi: Từ "${candidate}" đã được sử dụng trước đó trong ván này. Hãy chọn một từ mới.` });
+                continue;
+            }
+
+            // 6. Thẩm định nghĩa từ qua giám khảo AI
+            const check = await verifyWordWithAI(candidate);
+            if (!check.valid) {
+                messages.push({ role: "assistant", content });
+                messages.push({ role: "user", content: `Lỗi: Từ "${candidate}" không được công nhận: ${check.reason}. Hãy tìm một từ ghép/từ láy tiếng Việt phổ biến, có nghĩa rõ ràng trong từ điển.` });
+                continue;
+            }
+
+            // Từ hoàn toàn hợp lệ
+            return candidate;
+        } catch (err) {
+            console.error(`generateWordWithAI attempt ${attempt} error:`, err?.response?.data || err.message);
+        }
+    }
+
+    return null;
 }
 
-// Gọi Ollama AI để kiểm tra nghĩa của từ
+// Gọi Groq AI để kiểm tra nghĩa của từ
 async function verifyWordWithAI(word) {
-    const settings = getAiSettings();
-    const url = `${String(settings.ollamaHost).replace(/\/$/, "")}/api/chat`;
+    const apiKey = (process.env.GROQ_APIKEY || process.env.GROQ_API_KEY || "").trim();
+    if (!apiKey) {
+        console.error("verifyWordWithAI error: GROQ_APIKEY chưa được thiết lập trong .env");
+        return { valid: true, reason: "Xác nhận ngoại tuyến (Thiếu GROQ_APIKEY trong .env)" };
+    }
 
-    const prompt = `Bạn là trọng tài của trò chơi Nối từ tiếng Việt. Hãy kiểm tra từ "${word}" có phải là một từ ghép hoặc từ láy tiếng Việt có nghĩa và hợp lệ trong tiếng Việt hay không.
-Hãy trả về một đối tượng JSON có định dạng như sau:
+    const syllables = normalizeVietnamese(word).split(/\s+/).filter(Boolean);
+    if (syllables.length !== 2) {
+        return { valid: false, reason: "Từ phải gồm đúng 2 âm tiết tiếng Việt" };
+    }
+    if (syllables[0] === syllables[1]) {
+        return { valid: false, reason: "Không được lặp lại 2 âm tiết giống nhau" };
+    }
+
+    const url = "https://api.groq.com/openai/v1/chat/completions";
+
+    const prompt = `Bạn là giám khảo khắt khe trong trò chơi Nối từ tiếng Việt. Hãy kiểm tra từ "${word}".
+Tiêu chuẩn thẩm định:
+1. Từ này có phải là một TỪ GHÉP hoặc TỪ LÁY có nghĩa thực sự và được công nhận trong từ điển tiếng Việt hay không?
+2. TUYỆT ĐỐI KHÔNG CHẤP NHẬN các từ tự ghép bừa bãi không tự nhiên, từ chế, từ vô nghĩa (ví dụ: 'biếc biếc', 'biếc màu', 'biếc chìm', 'nước chạy', 'tóc đỏ', 'nghỉ đi').
+3. Hãy trả về một đối tượng JSON có định dạng như sau:
 {
   "valid": true,
-  "reason": "Giải thích ngắn gọn"
+  "reason": "Giải thích ngắn gọn ý nghĩa của từ"
 }
 Hoặc nếu không hợp lệ:
 {
   "valid": false,
-  "reason": "Lý do không hợp lệ"
+  "reason": "Lý do từ không có nghĩa hoặc không hợp lệ"
 }
 Đảm bảo kết quả trả về chỉ gồm mã JSON hợp lệ, không thêm bất kỳ văn bản nào khác.`;
 
     try {
         const res = await axios.post(url, {
-            model: settings.model,
+            model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
             messages: [{ role: "user", content: prompt }],
-            stream: false,
-            options: {
-                temperature: 0.1
-            }
+            temperature: 0.1,
+            response_format: { type: "json_object" }
         }, {
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+            },
             timeout: 10000
         });
 
-        const content = res.data?.message?.content || res.data?.response || "";
+        const content = res.data?.choices?.[0]?.message?.content || "";
         const json = parseJsonFromText(content);
         if (json && typeof json.valid === "boolean") {
             return json;
         }
         return { valid: false, reason: "Lỗi phân tích kết quả AI" };
     } catch (err) {
-        console.error("verifyWordWithAI error:", err.message);
-        // Fallback offline: cho phép từ nếu có mạng nội bộ lỗi nhưng cú pháp đúng
+        console.error("verifyWordWithAI error:", err?.response?.data || err.message);
+        // Fallback offline: cho phép từ nếu có mạng/API lỗi nhưng cú pháp đúng
         return { valid: true, reason: "Xác nhận ngoại tuyến (Lỗi kết nối AI)" };
     }
 }
@@ -220,7 +308,7 @@ async function handleNextTurn(api, threadID) {
 
         let botWord = null;
         try {
-            botWord = await generateWordWithAI(session.lastWord);
+            botWord = await generateWordWithAI(session.lastWord, session.usedWords);
         } catch (err) {
             console.error("Lỗi bot tạo từ:", err);
         }
@@ -348,7 +436,7 @@ module.exports = {
             let isGroupAdmin = false;
             try {
                 const threadInfo = await api.getThreadInfo(threadID);
-                const adminIDs = (threadInfo.adminIDs || []).map(a => String(a.id));
+                const adminIDs = toAdminIdList(threadInfo);
                 isGroupAdmin = adminIDs.includes(String(senderID));
             } catch (_) {}
 
@@ -398,7 +486,7 @@ module.exports = {
             let isGroupAdmin = false;
             try {
                 const threadInfo = await api.getThreadInfo(threadID);
-                const adminIDs = (threadInfo.adminIDs || []).map(a => String(a.id));
+                const adminIDs = toAdminIdList(threadInfo);
                 isGroupAdmin = adminIDs.includes(String(senderID));
             } catch (_) {}
 
@@ -475,17 +563,17 @@ module.exports = {
             const playerIndex = session.players.findIndex(p => String(p.id) === String(senderID));
             const playerName = session.players[playerIndex]?.name || `Người chơi ${senderID}`;
 
-            // Cú pháp: 2 từ/âm tiết
-            const syllables = word.split(/\s+/);
+            // 1. Cú pháp: 2 từ/âm tiết
+            const syllables = word.split(/\s+/).filter(Boolean);
             if (syllables.length !== 2) {
                 api.setMessageReaction("❌", messageID, () => {}, true);
-                await api.sendMessage(`❌ **${playerName}** trả lời sai cú pháp (từ phải có đúng 2 từ). Bạn đã bị LOẠI!`, threadID, messageID);
+                await api.sendMessage(`❌ **${playerName}** trả lời sai cú pháp (từ phải có đúng 2 từ/tiếng). Bạn đã bị LOẠI!`, threadID, messageID);
                 return eliminatePlayer(api, threadID, senderID);
             }
 
-            // Kiểm tra chữ đầu của từ mới khớp với chữ cuối của từ cũ
+            // 2. Kiểm tra chữ đầu của từ mới khớp với chữ cuối của từ cũ
             const prevWord = session.lastWord;
-            const prevSyllables = prevWord.trim().split(/\s+/);
+            const prevSyllables = prevWord.trim().split(/\s+/).filter(Boolean);
             const lastSyllableOfPrev = normalizeVietnamese(prevSyllables[prevSyllables.length - 1]);
 
             if (syllables[0] !== lastSyllableOfPrev) {
@@ -494,20 +582,34 @@ module.exports = {
                 return eliminatePlayer(api, threadID, senderID);
             }
 
-            // Kiểm tra từ đã dùng
-            if (session.usedWords.includes(word)) {
+            // 3. Chặn lặp 2 âm tiết giống nhau (A A)
+            if (syllables[0] === syllables[1]) {
                 api.setMessageReaction("❌", messageID, () => {}, true);
-                await api.sendMessage(`❌ **${playerName}** trả lời từ đã được sử dụng trước đó trong trận. Bạn đã bị LOẠI!`, threadID, messageID);
+                await api.sendMessage(`❌ **${playerName}** trả lời từ lặp âm tiết (**"${word}"**). Luật chơi cấm lặp lại 2 âm tiết giống nhau, bạn đã bị LOẠI!`, threadID, messageID);
                 return eliminatePlayer(api, threadID, senderID);
             }
 
-            // Kiểm tra nghĩa bằng AI
+            // 4. Chặn đảo ngược từ liền trước (A B -> B A)
+            if (prevSyllables.length === 2 && syllables[0] === prevSyllables[1] && syllables[1] === prevSyllables[0]) {
+                api.setMessageReaction("❌", messageID, () => {}, true);
+                await api.sendMessage(`❌ **${playerName}** chơi đảo ngược chữ của từ liền trước (**"${prevWord}"** ➔ **"${word}"**). Luật chơi cấm đảo chữ, bạn đã bị LOẠI!`, threadID, messageID);
+                return eliminatePlayer(api, threadID, senderID);
+            }
+
+            // 5. Kiểm tra từ đã dùng
+            if (session.usedWords.includes(word)) {
+                api.setMessageReaction("❌", messageID, () => {}, true);
+                await api.sendMessage(`❌ **${playerName}** trả lời từ đã được sử dụng trước đó trong trận (**"${word}"**). Bạn đã bị LOẠI!`, threadID, messageID);
+                return eliminatePlayer(api, threadID, senderID);
+            }
+
+            // 6. Kiểm tra nghĩa bằng AI
             api.setMessageReaction("🔄", messageID, () => {}, true);
             const check = await verifyWordWithAI(word);
 
             if (!check.valid) {
                 api.setMessageReaction("❌", messageID, () => {}, true);
-                await api.sendMessage(`❌ **${playerName}** trả lời từ không có nghĩa hoặc không hợp lệ: **${check.reason || "Từ không có nghĩa"}**. Bạn đã bị LOẠI!`, threadID, messageID);
+                await api.sendMessage(`❌ **${playerName}** trả lời từ không có nghĩa hoặc không hợp lệ: **${check.reason || "Từ không có nghĩa trong từ điển"}**. Bạn đã bị LOẠI!`, threadID, messageID);
                 return eliminatePlayer(api, threadID, senderID);
             }
 
@@ -526,7 +628,7 @@ module.exports = {
 
             // Cộng +1 credit trong database (parameterized query)
             try {
-                await executeQuery("UPDATE messenger_users SET credits = credits + 1 WHERE psid = ?", [senderID]);
+                await executeQuery("UPDATE messenger_users SET credits = credits + 1 WHERE thread_id = ? AND psid = ?", [String(threadID), senderID]);
             } catch (err) {
                 console.error("Lỗi cập nhật database credits:", err);
             }

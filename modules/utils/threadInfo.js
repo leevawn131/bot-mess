@@ -1,3 +1,5 @@
+const { saveAllNicknames } = require("./nicknameStorage");
+
 const _threadInfoCache = new Map();
 const THREAD_INFO_TTL = 5 * 60 * 1000; // 5 phút
 
@@ -22,6 +24,11 @@ async function getThreadInfoCached(api, threadID) {
     const info = await _quietGetThreadInfo(api, key);
     if (info) {
       _threadInfoCache.set(key, { data: info, ts: Date.now() });
+      if (info.nicknames && typeof info.nicknames === "object") {
+        saveAllNicknames(key, info.nicknames).catch(err => {
+          console.error("❌ Lỗi tự động lưu danh sách biệt danh:", err);
+        });
+      }
     }
     return info;
   } catch (err) {

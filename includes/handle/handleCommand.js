@@ -6,6 +6,7 @@ module.exports = function ({ api, models, Users, Threads, Currencies }) {
    const request = require('request');
    const fs = require('fs');
    const path = require('path');
+   const { getThreadInfoCached } = require("../../modules/utils/threadInfo");
    const moment = require("moment-timezone");
    return async function ({ event }) {
    const dateNow = Date.now()
@@ -42,8 +43,8 @@ const name = await Users.getNameUser(event.senderID);
    }
 
     const dataAdbox = require('./../../modules/commands/data/dataAdbox.json');
-    var threadInf = (threadInfo.get(threadID) || await Threads.getInfo(threadID));
-    const findd = threadInf && threadInf.adminIDs ? threadInf.adminIDs.find(el => el.id == senderID) : null;
+    var threadInf = await getThreadInfoCached(api, threadID) || (threadInfo.get(threadID) || await Threads.getInfo(threadID));
+    const findd = threadInf && threadInf.adminIDs ? threadInf.adminIDs.find(el => el.id == senderID || el.userID == senderID) : null;
     if(typeof body === 'string' && body.startsWith(PREFIX) && dataAdbox.adminbox.hasOwnProperty(threadID) && dataAdbox.adminbox[threadID] == true && !ADMINBOT.includes(senderID) && !findd && event.isGroup == true ) return api.sendMessage(`[ QTV ONLY ]\n────────────────────\n👤 Người dùng: ${name}\n⚠️ Chỉ Qtv nhóm mới có thể sử dụng bot\n────────────────────\n⏳ Uptime: ${H+$+M+$+S}\n⏰ Time: ${Tm}`, event.threadID, event.messageID);
 
        if (userBanned.has(senderID) || threadBanned.has(threadID) || allowInbox == ![] && senderID == threadID) {
@@ -153,7 +154,7 @@ if(command) {
      }
   };
 }
-     const _kJe82Q = process.cwd()+'/modules/commands/data/disable-command.json';
+     const _kJe82Q = require('path').resolve(__dirname, '../../modules/commands/data/disable-command.json');
      if (fs.existsSync(_kJe82Q))if (!ADMINBOT.includes(senderID) && JSON.parse(fs.readFileSync(_kJe82Q))[threadID]?.[command.config.commandCategory] == true)return api.sendMessage(`[ DISABLE COMMAND ]\n────────────────────\n⚠️ Box không được phép sử dụng các lệnh thuộc nhóm " ${command.config.commandCategory} "\n👤 Liên hệ với admin để được hỗ trợ\n────────────────────\n⏳ Uptime: ${H+$+M+$+S}\n⏰ Time: ${Tm}`, threadID);
 
   if (commandBanned.get(threadID) || commandBanned.get(senderID)) {
@@ -188,8 +189,8 @@ if(command) {
        const ten = await Users.getNameUser(event.senderID)
      let uid1 = event.senderID;
          var permssion = 0;
-var threadInfoo = (threadInfo.get(threadID) || await Threads.getInfo(threadID));
-    const find = threadInfoo && threadInfoo.adminIDs ? threadInfoo.adminIDs.find(el => el.id == senderID) : null;
+ var threadInfoo = await getThreadInfoCached(api, threadID) || (threadInfo.get(threadID) || await Threads.getInfo(threadID));
+     const find = threadInfoo && threadInfoo.adminIDs ? threadInfoo.adminIDs.find(el => el.id == senderID || el.userID == senderID) : null;
     if (NDH.includes(senderID.toString())) permssion = 3;
     else if (ADMINBOT.includes(senderID.toString())) permssion = 2;
     else if (!ADMINBOT.includes(senderID) && find) permssion = 1;
