@@ -236,14 +236,14 @@ module.exports = {
 
         const settings = await readModeSettings();
         const schedules = await readSchedules();
-        const currentMode = normalizeMode(settings[threadIDStr] || "adminbot");
+        const currentMode = normalizeMode(settings[threadIDStr] || "qtv");
 
         const newMode = normalizeMode(args[0]?.toLowerCase());
         const secondArg = args[1]?.toLowerCase();
 
         // === KIỂM TRA QUYỀN ===
         const adminBotUIDs = getAdminBotUIDs();
-        let isBotAdmin = adminBotUIDs.includes(senderID);
+        const isBotAdmin = adminBotUIDs.includes(senderID);
 
         let isAdmin = false;
         try {
@@ -260,28 +260,18 @@ module.exports = {
         const renterID = await getRenterID(threadIDStr);
         const isRenter = renterID && String(senderID) === String(renterID);
 
-        // Nếu nhóm thuê gói admin, QTV nhóm hoặc Người thuê bot có quyền sử dụng lệnh mode như Bot Admin
-        if (isAdminRental && (isAdmin || isRenter)) {
-            isBotAdmin = true;
-        }
+        // Quy tắc phân quyền lệnh mode:
+        // 1. Admin Bot luôn luôn được dùng.
+        // 2. Quản trị viên / Người thuê bot trong nhóm thuê gói Admin được dùng.
+        // 3. Quản trị viên trong nhóm thuê gói Thường (kể cả người thuê gói thường) KHÔNG ĐƯỢC DÙNG LỆNH MODE.
+        const canUseMode = isBotAdmin || (isAdminRental && (isAdmin || isRenter));
 
-        if (!newMode) {
-            if (!isAdmin && !isBotAdmin && !isRenter) {
-                return api.sendMessage(
-                    "❌ chỉ QTV nhóm, người thuê bot hoặc chủ bot mới được xem mode!",
-                    threadID,
-                    messageID
-                );
-            }
-        } else {
-            // Changing mode: chỉ CHỦ BOT (hoặc QTV/người thuê bot nếu nhóm thuê gói admin) mới được thực hiện
-            if (!isBotAdmin) {
-                return api.sendMessage(
-                    "❌ Chỉ chủ bot hoặc người thuê gói admin mới được dùng lệnh mode để đổi mode!",
-                    threadID,
-                    messageID
-                );
-            }
+        if (!canUseMode) {
+            return api.sendMessage(
+                "❌ Lệnh mode chỉ dành cho Admin Bot hoặc Quản trị viên của nhóm thuê gói Admin!",
+                threadID,
+                messageID
+            );
         }
 
         // === KHÔNG CÓ ARG: XEM MODE HIỆN TẠI ===
@@ -311,7 +301,15 @@ module.exports = {
 
             if (currentMode === "adminbot" && !isBotAdmin) {
                 return api.sendMessage(
-                    "❌ Nhóm đang ở ADMINBOT: chỉ chủ bot mới được hẹn giờ đổi mode.",
+                    "❌ Nhóm đang ở mode ADMINBOT. Chỉ Admin Bot mới có quyền đổi mode!",
+                    threadID,
+                    messageID
+                );
+            }
+
+            if (targetMode === "adminbot" && !isBotAdmin) {
+                return api.sendMessage(
+                    "❌ Quản trị viên nhóm không thể hẹn giờ sang mode ADMINBOT. Mode này chỉ dành riêng cho Admin Bot!",
                     threadID,
                     messageID
                 );
@@ -319,7 +317,7 @@ module.exports = {
 
             if (!durationArg || !targetMode) {
                 return api.sendMessage(
-                    `⚠️ Thiếu tham số!\n💡 Dùng: ${prefix}mode in <HH:MM> <user|qtv|adminbot>`,
+                    `⚠️ Thiếu tham số!\n💡 Dùng: ${prefix}mode in <HH:MM> <user|qtv>`,
                     threadID,
                     messageID
                 );
@@ -336,7 +334,7 @@ module.exports = {
 
             if (!VALID_MODES.includes(targetMode)) {
                 return api.sendMessage(
-                    "⚠️ Mode không hợp lệ!\n💡 Hợp lệ: user, qtv, adminbot",
+                    "⚠️ Mode không hợp lệ!\n💡 Hợp lệ: user, qtv",
                     threadID,
                     messageID
                 );
@@ -391,7 +389,7 @@ module.exports = {
 
             if (currentMode === "adminbot" && !isBotAdmin) {
                 return api.sendMessage(
-                    "❌ Nhóm đang ở ADMINBOT: chỉ chủ bot mới được tắt lịch mode.",
+                    "❌ Nhóm đang ở mode ADMINBOT. Chỉ Admin Bot mới có quyền tắt lịch mode!",
                     threadID,
                     messageID
                 );
@@ -419,7 +417,7 @@ module.exports = {
                 nextInTask = null;
             } else {
                 return api.sendMessage(
-                    `⚠️ Cú pháp xóa lịch không hợp lệ!\n💡 Dùng: ${prefix}mode off <user|qtv|adminbot|HH:MM|in>`,
+                    `⚠️ Cú pháp xóa lịch không hợp lệ!\n💡 Dùng: ${prefix}mode off <user|qtv|HH:MM|in>`,
                     threadID,
                     messageID
                 );
@@ -458,27 +456,28 @@ module.exports = {
         }
 
         // === ĐỔI MODE ===
-        if (currentMode === "adminbot" && !isBotAdmin) {
-            return api.sendMessage(
-                "❌ Nhóm đang ở ADMINBOT: chỉ chủ bot mới được đổi mode.",
-                threadID,
-                messageID
-            );
-        }
-
-        // Kiểm tra quyền
-        if (!isAdmin && !isBotAdmin) {
-            return api.sendMessage(
-                "❌ chỉ QTV nhóm hoặc chủ bot mới được đổi mode!",
-                threadID,
-                messageID
-            );
-        }
-
         // Kiểm tra mode hợp lệ
         if (!VALID_MODES.includes(newMode)) {
             return api.sendMessage(
                 `⚠️ Mode không hợp lệ!\n━━━━━━━━━━━━━\n💡 Hợp lệ: user, qtv, adminbot\n💡 Ví dụ: ${prefix}mode qtv`,
+                threadID,
+                messageID
+            );
+        }
+
+        // Đang ở adminbot: Chỉ Admin Bot mới đổi được
+        if (currentMode === "adminbot" && !isBotAdmin) {
+            return api.sendMessage(
+                "❌ Nhóm đang ở mode ADMINBOT. Chỉ Admin Bot mới có quyền đổi mode!",
+                threadID,
+                messageID
+            );
+        }
+
+        // Quy tắc 4: Không cho Quản trị viên nhóm thuê gói Admin chuyển sang mode ADMINBOT (Chỉ Admin Bot mới được)
+        if (newMode === "adminbot" && !isBotAdmin) {
+            return api.sendMessage(
+                "❌ Quản trị viên nhóm không thể chuyển sang mode ADMINBOT. Mode này chỉ dành riêng cho Admin Bot!",
                 threadID,
                 messageID
             );

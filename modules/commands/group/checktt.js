@@ -163,7 +163,7 @@ function buildRankList({ threadInfo, threadStats, threshold }) {
 
   const list = Array.from(allIDs).map((uid) => {
     const user = memberMap.get(uid);
-    const name = user?.name || `User ${uid.slice(-6)}`;
+    const name = user?.name || global.data?.userName?.get(String(uid)) || `User ${uid.slice(-6)}`;
     const normalized = normalizeStatEntry(threadStats?.[uid]);
     const count = Number(normalized.total || 0);
     const dayCount = Number(normalized.daily?.[dayKey] || 0);

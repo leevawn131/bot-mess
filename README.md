@@ -266,7 +266,6 @@ Hệ thống hỗ trợ nhiều Provider linh hoạt:
 | `music` | `!music <tên bài hát / link>` | Tìm kiếm, phát nhạc YouTube chất lượng cao |
 | `vidgai` | `!vidgai` | Xem video gái xinh ngẫu nhiên |
 | `say` | `!say <văn bản>` | Chuyển văn bản thành giọng nói (Google / Edge TTS) |
-| `voice2text` | `!voice2text (reply audio)` | Chuyển tin nhắn thoại / voice note thành văn bản |
 | `dich` | `!dich <văn bản>` | Dịch thuật đa ngôn ngữ sang Tiếng Việt |
 | `taoanh` | `!taoanh <prompt>` | Tạo ảnh AI từ văn bản |
 | `tiktok` | `!tiktok <link>` | Tải video TikTok không logo |

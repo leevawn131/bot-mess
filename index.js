@@ -1051,31 +1051,22 @@ const attemptLogin = () => {
               } catch (e) {}
             }
 
-            // Kiểm tra xem có nhóm nào chưa gửi top ngày cho ngày hôm qua không
-            const hasPendingDaily = Object.keys(stats).some(
-              (tid) => dailyState[tid] !== yesterdayKey
-            );
-
-            // Kiểm tra gửi top ngày từ 6:00 sáng trở đi nếu còn ít nhất 1 nhóm chưa nhận
+            // Kiểm tra gửi top ngày lúc 6:00 sáng (chỉ gửi 1 lần mỗi ngày)
             if (
               (hours > 6 || (hours === 6 && minutes >= 0)) &&
-              (lastDailyCheckDate !== currentDate || hasPendingDaily)
+              lastDailyCheckDate !== currentDate
             ) {
               console.log("dt Đang gửi TOP 10 tương tác ngày cho tất cả nhóm chưa nhận...");
-              lastDailyCheckDate = currentDate; // Đánh dấu trước để tránh gọi lại nếu hàm chạy lâu
+              lastDailyCheckDate = currentDate; // Đánh dấu trước để tránh gọi lặp lại
               writeLastTopCheckState(currentDate, undefined, undefined);
               await sendDailyTop10ToAllGroups(api);
             }
 
-            // Kiểm tra xem có nhóm nào chưa gửi top tháng cho tháng trước không
-            const hasPendingMonthly = Object.keys(stats).some(
-              (tid) => monthlyState[tid] !== previousMonthKey
-            );
-
-            // Kiểm tra gửi top tháng từ 6:00 sáng trở đi nếu còn ít nhất 1 nhóm chưa nhận
+            // Kiểm tra gửi top tháng lúc 6:00 sáng vào NGÀY MÙNG 1 ĐẦU THÁNG (chỉ gửi 1 lần mỗi tháng)
             if (
+              currentDay === 1 &&
               (hours > 6 || (hours === 6 && minutes >= 0)) &&
-              (lastMonthlyCheckDate !== currentDate || hasPendingMonthly)
+              lastMonthlyCheckDate !== currentDate
             ) {
               console.log("dt Đang gửi TOP 10 tương tác tháng cho tất cả nhóm chưa nhận...");
               lastMonthlyCheckDate = currentDate;
@@ -1436,6 +1427,8 @@ const attemptLogin = () => {
                   await new Promise((r) => setTimeout(r, 2000));
                 } catch (e) {
                   console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}:`, e.message);
+                  state[threadID] = yesterdayKey;
+                  writeDailyTopState(state);
                 }
               }
 
@@ -1592,6 +1585,8 @@ const attemptLogin = () => {
                     `❌ Lỗi gửi TOP 10 tháng cho nhóm ${threadID}:`,
                     e.message,
                   );
+                  state[threadID] = previousMonthKey;
+                  writeMonthlyTopState(state);
                 }
               }
 

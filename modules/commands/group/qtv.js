@@ -1,6 +1,6 @@
 const { checkCooldown } = require('../../utils/cooldown');
 const { toAdminIdList, getAdminBotUIDs } = require('../../utils/checkPermission');
-const { getThreadInfoCached, clearThreadInfoCache } = require('../../utils/threadInfo');
+const { getThreadInfoCached, clearThreadInfoCache, syncThreadAdminRealtime } = require('../../utils/threadInfo');
 const { ensureMentionsFromHistory } = require('../../utils/mentionResolver');
 const prefix = process.env.BOT_PREFIX;
 
@@ -18,7 +18,7 @@ module.exports = {
         }
 
         try {
-            // 1. Lấy thông tin nhóm
+            // 1. Lấy thông tin nhóm (Tự động sync 1 lần từ FB khi bot mới restart, các lần sau đọc siêu tốc từ Database)
             const threadInfo = await getThreadInfoCached(api, threadID);
             
             if (!threadInfo || typeof threadInfo !== 'object' || !threadInfo.isGroup) {
@@ -35,7 +35,7 @@ module.exports = {
                 
                 adminIDs.forEach((id, index) => {
                     const user = memberInfo.find(u => String(u.id) === id);
-                    const name = user ? user.name : "Thành viên ẩn danh";
+                    const name = user?.name || global.data?.userName?.get(id) || `ID: ${id}`;
                     msg += `${index + 1}. ${name}\n`;
                 });
 
@@ -133,12 +133,14 @@ module.exports = {
             try {
                 await api.changeAdminStatus(threadID, filterIDs, isAdminStatus);
                 
-                // Clear cache để cập nhật thông tin nhóm mới nhất
-                clearThreadInfoCache(threadID);
+                // Cập nhật ngay lập tức vào SQLite Database và RAM cache
+                for (const id of filterIDs) {
+                    syncThreadAdminRealtime(threadID, id, isAdminStatus ? "add_admin" : "remove_admin").catch(() => {});
+                }
                 
                 const updatedNames = filterIDs.map(id => {
                     const u = (threadInfo.userInfo || []).find(user => String(user.id) === id);
-                    return u ? u.name : id;
+                    return u ? u.name : (global.data?.userName?.get(id) || id);
                 });
 
                 return api.sendMessage(

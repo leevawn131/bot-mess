@@ -2,6 +2,7 @@ const fs = require("fs");
 const { removeLeaveHistoryEntries } = require("../utils/leaveHistory");
 const { getJoinGreeting } = require("../utils/joinGreetingSettings");
 const { getNickname, hasInteraction } = require("../utils/nicknameStorage");
+const { checkAndRestoreOldMemberNickname } = require("../utils/restoreNickname");
 
 function buildMentionChunk(participants) {
     const rows = Array.isArray(participants) ? participants : [];
@@ -94,14 +95,13 @@ function formatGreeting(template, newParticipants) {
 
 module.exports = {
     name: "welcome",
-    eventType: ["log:subscribe"], // Sự kiện thêm người vào nhóm
-
+    eventType: ["log:subscribe"],
     run: async function(Obj) { return this.execute(Obj); },
     execute: async ({ api, event }) => {
         const { threadID } = event;
 
         // 1. Nếu người được thêm là chính con BOT
-        if (event.logMessageData.addedParticipants.some(i => i.userFbId == api.getCurrentUserID())) {
+        if (event.logMessageData?.addedParticipants?.some(i => i.userFbId == api.getCurrentUserID())) {
             let prefix = "!";
             try {
                 const config = require("../../config.json");
@@ -117,8 +117,8 @@ module.exports = {
 
         try {
             // 2. Lấy danh sách toàn bộ người mới và lọc những ai bị cấm vĩnh viễn (cutvv)
-            const rawParticipants = event.logMessageData.addedParticipants || [];
-            const newParticipants = [];
+            const rawParticipants = event.logMessageData?.addedParticipants || [];
+            const allowedParticipants = [];
             const botID = String(api.getCurrentUserID());
 
             const { isBlocked } = require("../utils/cutvvStorage");
@@ -169,20 +169,52 @@ module.exports = {
                         );
                     }
                 } else {
-                    newParticipants.push(user);
+                    allowedParticipants.push(user);
                 }
             }
 
-            if (newParticipants.length === 0) return;
+            if (allowedParticipants.length === 0) return;
 
-            const joinedUIDs = newParticipants.map(user => String(user.userFbId || "").trim()).filter(Boolean);
+            // Xóa lịch sử rời nhóm
+            const joinedUIDs = allowedParticipants.map(user => String(user.userFbId || "").trim()).filter(Boolean);
             if (joinedUIDs.length > 0) removeLeaveHistoryEntries(threadID, joinedUIDs);
 
-            if (newParticipants.length > 0) {
+            // 3. Phân loại Thành viên Cũ quay lại vs Thành viên Mới
+            const oldMembers = [];
+            const brandNewMembers = [];
+
+            for (const user of allowedParticipants) {
+                const userID = String(user.userFbId || "").trim();
+                const savedNickname = await getNickname(threadID, userID);
+                const hasInteracted = await hasInteraction(threadID, userID);
+
+                if (hasInteracted || (savedNickname && savedNickname.trim() !== "")) {
+                    oldMembers.push({ ...user, savedNickname });
+                } else {
+                    brandNewMembers.push(user);
+                }
+            }
+
+            // 4. Xử lý Thành viên Cũ quay lại: Tự động khôi phục biệt danh
+            for (const user of oldMembers) {
+                const userID = String(user.userFbId || "").trim();
+                const userName = user.fullName || "Thành viên cũ";
+                const savedNickname = user.savedNickname || await getNickname(threadID, userID);
+
+                if (savedNickname && savedNickname.trim() !== "") {
+                    checkAndRestoreOldMemberNickname(api, threadID, userID, userName);
+                } else {
+                    api.sendMessage(`[ THÀNH VIÊN CŨ ]\n🔎 Phát hiện thành viên cũ quay lại: ${userName}! Chào mừng bạn trở lại nhóm nhé 🎉`, threadID);
+                }
+            }
+
+            // 5. Xử lý Lời Chào Mừng (Chào thành viên mới hoặc Lời chào Custom)
+            const targetWelcomeList = brandNewMembers.length > 0 ? brandNewMembers : (oldMembers.length === 0 ? allowedParticipants : []);
+            if (targetWelcomeList.length > 0) {
                 const customGreeting = getJoinGreeting(threadID);
 
                 if (!customGreeting || customGreeting.text !== "off") {
-                    const namesArray = newParticipants.map((user) => String(user?.fullName || "").trim()).filter(Boolean);
+                    const namesArray = targetWelcomeList.map((user) => String(user?.fullName || "").trim()).filter(Boolean);
                     const listNames = namesArray.join(", ");
 
                     if (customGreeting && (customGreeting.text || customGreeting.media)) {
@@ -190,7 +222,7 @@ module.exports = {
                         let mentions = [];
 
                         if (customGreeting.text) {
-                            const formatted = formatGreeting(customGreeting.text, newParticipants);
+                            const formatted = formatGreeting(customGreeting.text, targetWelcomeList);
                             body = formatted.body;
                             mentions = formatted.mentions;
                         }
@@ -222,23 +254,8 @@ module.exports = {
                 }
             }
 
-            for (const user of oldParticipants) {
-                const userID = String(user.userFbId || "").trim();
-                const userName = user.fullName || "Thành viên cũ";
-                try {
-                    const savedNickname = await getNickname(threadID, userID);
-                    if (savedNickname && savedNickname.trim() !== "") {
-                        setTimeout(() => {
-                            checkAndRestoreOldMemberNickname(api, threadID, userID, userName);
-                        }, 5000);
-                    }
-                } catch (err) {
-                    console.error("Lỗi khi đăng ký khôi phục biệt danh cho thành viên cũ:", err);
-                }
-            }
-
         } catch (e) {
-            console.log("Lỗi tại event welcome: ", e);
+            console.error("Lỗi tại event welcome: ", e);
         }
     }
 };

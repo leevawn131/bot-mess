@@ -30,21 +30,12 @@ function writeRestoreState(state) {
  * @param {string} [userName] - Tên hiển thị người dùng (optional)
  */
 async function checkAndRestoreOldMemberNickname(api, threadID, userID, userName = null) {
-    if (!threadID || !userID) return false;
+    if (!threadID || !userID || !api) return false;
     const botID = String(api.getCurrentUserID());
     if (String(userID) === botID) return false;
 
     const restoreKey = `${threadID}_${userID}`;
     if (activeRestores.has(restoreKey)) return false;
-
-    const restoreState = readRestoreState();
-    if (restoreState[restoreKey]?.status === "success") {
-        return false; // Đã khôi phục thành công trước đó
-    }
-
-    // Kiểm tra xem user có phải thành viên cũ (đã từng tương tác) hay không
-    const hasInteracted = await hasInteraction(threadID, userID);
-    if (!hasInteracted) return false;
 
     // Lấy biệt danh đã lưu
     const savedNickname = await getNickname(threadID, userID);
@@ -55,63 +46,36 @@ async function checkAndRestoreOldMemberNickname(api, threadID, userID, userName 
     const attemptRestore = (retriesLeft) => {
         console.log(`[JOIN RESTORE] Đang khôi phục biệt danh cho ${userID} tại thread ${threadID}: ${savedNickname}. Lượt thử còn lại: ${retriesLeft}`);
 
-        const tempNickname = `🌸 Đang khôi phục biệt danh...`;
-        api.changeNickname(tempNickname, threadID, userID, (err) => {
+        api.changeNickname(savedNickname, threadID, userID, (err) => {
             if (err) {
+                console.error(`[JOIN RESTORE] Lỗi đặt biệt danh cho ${userID}:`, err?.message || err);
                 if (retriesLeft > 0) {
-                    setTimeout(() => attemptRestore(retriesLeft - 1), 15000);
+                    setTimeout(() => attemptRestore(retriesLeft - 1), 8000);
                 } else {
                     activeRestores.delete(restoreKey);
                 }
             } else {
-                setTimeout(() => {
-                    api.changeNickname(savedNickname, threadID, userID, (err2) => {
-                        if (err2) {
-                            if (retriesLeft > 0) {
-                                setTimeout(() => attemptRestore(retriesLeft - 1), 15000);
-                            } else {
-                                activeRestores.delete(restoreKey);
-                            }
-                        } else {
-                            setTimeout(() => {
-                                api.getThreadInfo(threadID, (infoErr, info) => {
-                                    if (infoErr) {
-                                        if (retriesLeft > 0) {
-                                            setTimeout(() => attemptRestore(retriesLeft - 1), 15000);
-                                        } else {
-                                            activeRestores.delete(restoreKey);
-                                        }
-                                        return;
-                                    }
+                console.log(`[JOIN RESTORE] Khôi phục thành công biệt danh của ${userID}: ${savedNickname}`);
+                const restoreState = readRestoreState();
+                restoreState[restoreKey] = {
+                    status: "success",
+                    nickname: savedNickname,
+                    restoredAt: new Date().toISOString()
+                };
+                writeRestoreState(restoreState);
+                activeRestores.delete(restoreKey);
 
-                                    const currentNickname = info.nicknames ? info.nicknames[userID] : null;
-                                    if (currentNickname === savedNickname) {
-                                        console.log(`[JOIN RESTORE] Xác minh thành công biệt danh của ${userID} đã cập nhật trên Facebook.`);
-                                        restoreState[restoreKey] = {
-                                            status: "success",
-                                            nickname: savedNickname,
-                                            restoredAt: new Date().toISOString()
-                                        };
-                                        writeRestoreState(restoreState);
-                                        activeRestores.delete(restoreKey);
-
-                                        const nameToShow = userName || info.userInfo?.find(u => String(u.id) === String(userID))?.name || `User ${userID.slice(-6)}`;
-                                        api.sendMessage(`[ THÀNH VIÊN CŨ ]\n🔎 Phát hiện thành viên cũ quay lại: ${nameToShow}\n🌸 Đã tự động khôi phục biệt danh cũ cho bạn: ${savedNickname}`, threadID);
-                                    } else if (retriesLeft > 0) {
-                                        setTimeout(() => attemptRestore(retriesLeft - 1), 15000);
-                                    } else {
-                                        activeRestores.delete(restoreKey);
-                                    }
-                                });
-                            }, 4000);
-                        }
-                    });
-                }, 4000);
+                const nameToShow = userName || `User ${userID.slice(-6)}`;
+                api.sendMessage(`[ THÀNH VIÊN CŨ ]\n🔎 Phát hiện thành viên cũ quay lại: ${nameToShow}\n🌸 Đã tự động khôi phục biệt danh cũ cho bạn: ${savedNickname}`, threadID);
             }
         });
     };
 
-    attemptRestore(4);
+    // Đợi 2 giây để Facebook hoàn tất thêm user vào nhóm trước khi đổi biệt danh
+    setTimeout(() => {
+        attemptRestore(3);
+    }, 2000);
+
     return true;
 }
 

@@ -80,7 +80,7 @@ flowchart TD
 │   │   ├── group/               # Lệnh tương tác nhóm (checktt, toplv, autorep, kiss, dam...)
 │   │   ├── minigame/            # Minigame giải trí (taixiu, baucua, noitu, bongda, sicbo...)
 │   │   ├── qtv/                 # Lệnh Quản trị viên (add, kick, anti, canhbao, cutvv, setprefix...)
-│   │   └── tools/               # Lệnh công cụ (ai, music, vidgai, say, autosend, voice2text...)
+│   │   └── tools/               # Lệnh công cụ (ai, music, vidgai, say, autosend, taoanh...)
 │   ├── events/                  # Sự kiện tự động (aiAutoReply, anti, autotiktok, join, leave...)
 │   └── utils/                   # Bộ công cụ chung (database, LevelSystem, checkPermission, logger...)
 │

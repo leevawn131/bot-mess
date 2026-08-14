@@ -11,7 +11,14 @@ module.exports = function ({ api, models }) {
   const moment = require('moment-timezone');
   const axios = require("axios");
   const config = require("./../config.json");
-  const { getThreadInfoCached } = require("../modules/utils/threadInfo");
+  const {
+    getThreadInfoCached,
+    syncThreadAdminRealtime,
+    syncThreadNameRealtime,
+    syncThreadNicknameRealtime,
+    syncThreadParticipantRealtime,
+    syncThreadImageRealtime
+  } = require("../modules/utils/threadInfo");
   const { checkAndRestoreOldMemberNickname } = require("../modules/utils/restoreNickname");
 /////////////////////////////////////////////////////////////////////////////
 
@@ -278,6 +285,9 @@ return async (event) => {
     s=Math.floor(tm % 60),S=s<10?'0'+s:s,$=':'
    var data_anti = JSON.parse(fs.readFileSync(global.anti, "utf8"));
     if (type == "change_thread_image") {
+      if (image?.link || image?.url) {
+        syncThreadImageRealtime(threadID, image.link || image.url).catch(() => {});
+      }
       const { ADMINBOT } = global.config;
       const botID = api.getCurrentUserID();
       var threadInf = await getThreadInfoCached(api, threadID);
@@ -302,7 +312,17 @@ return async (event) => {
         }
       }
     }
+    if (logMessageType === "log:thread-admins" && logMessageData) {
+      const adminEvent = logMessageData.ADMIN_EVENT;
+      const targetID = logMessageData.TARGET_ID;
+      if (adminEvent && targetID) {
+        syncThreadAdminRealtime(threadID, targetID, adminEvent).catch(() => {});
+      }
+    }
     if (logMessageType === "log:thread-name") {
+      if (logMessageData?.name) {
+        syncThreadNameRealtime(threadID, logMessageData.name).catch(() => {});
+      }
       const botID = api.getCurrentUserID();
       var threadInf = await getThreadInfoCached(api, threadID);
       const findAd = threadInf?.adminIDs ? threadInf.adminIDs.find((el) => el.id === author) : null;
@@ -326,6 +346,9 @@ return async (event) => {
       }
     }
     if (logMessageType === "log:user-nickname") {
+      if (logMessageData?.participant_id && logMessageData?.nickname !== undefined) {
+        syncThreadNicknameRealtime(threadID, logMessageData.participant_id, logMessageData.nickname).catch(() => {});
+      }
       const botID = api.getCurrentUserID();
       var threadInf = await getThreadInfoCached(api, threadID);
       const findAd = threadInf?.adminIDs ? threadInf.adminIDs.find((el) => el.id === author) : null;
@@ -352,7 +375,13 @@ return async (event) => {
         }
       }
     }
+    if (logMessageType === "log:subscribe" && logMessageData?.addedParticipants) {
+      syncThreadParticipantRealtime(threadID, logMessageData.addedParticipants, "add").catch(() => {});
+    }
     if (logMessageType === "log:unsubscribe") {
+      if (logMessageData?.leftParticipantFbId) {
+        syncThreadParticipantRealtime(threadID, logMessageData.leftParticipantFbId, "remove").catch(() => {});
+      }
       const botID = api.getCurrentUserID();
       var threadInf = await getThreadInfoCached(api, threadID);
       const findAd = threadInf?.adminIDs ? threadInf.adminIDs.find((el) => el.id === author) : null;

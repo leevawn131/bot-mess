@@ -269,7 +269,7 @@ class AccountProfilesManager {
 
     console.log(`[🔄] Đang trích xuất appstate mới từ Brave cho acc dự phòng nội bộ cụm: "${newActiveProfile}"...`);
     try {
-      const res = spawnSync("node", [path.join(__dirname, "../../export-appstate.js"), "--no-restart"], { stdio: "inherit" });
+      const res = spawnSync("node", [path.join(__dirname, "../../export-appstate.js"), newActiveProfile, "--no-restart"], { stdio: "inherit" });
       if (res.status === 0 && fs.existsSync(APPSTATE_PATH)) {
         console.log(`[✅] Đã kích hoạt thành công acc dự phòng "${newActiveProfile}" cho Cụm ${clusterId}.`);
         return newActiveProfile;

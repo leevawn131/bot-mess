@@ -183,42 +183,37 @@ function getCredentialsForProfile(profileName = "", profileIndex = 0) {
     let twoFactorSecret = "";
     let gmailPassVal = "";
 
-    // 1. Chuẩn hóa tên Profile key (ví dụ: "Profile 2" -> "2", "Default" -> "DEFAULT")
     let rawName = String(profileName || "").trim();
-    let cleanKey = rawName.replace(/\s+/g, "_").toUpperCase();
-    if (cleanKey.startsWith("PROFILE_")) {
-        cleanKey = cleanKey.replace(/^PROFILE_/, "");
+    let numMatch = rawName.match(/(\d+)/);
+    let pNum = numMatch ? parseInt(numMatch[1], 10) : null;
+    let isDefault = /default/i.test(rawName) || (pNum === null && rawName === "");
+
+    // 1. Danh sách key chính xác cho Profile này trong .env
+    const specificKeys = [];
+    if (isDefault) {
+        specificKeys.push("PROFILE_DEFAULT", "PROFILE_0");
+    } else if (pNum !== null) {
+        specificKeys.push(`PROFILE_${pNum}`);
     }
 
-    const keysToTry = [];
-    if (cleanKey) {
-        keysToTry.push(`PROFILE_${cleanKey}`);
-    }
-
-    // Mapping fallback nếu trùng tên số: "2" -> "PROFILE_2"
-    for (const key of keysToTry) {
+    for (const key of specificKeys) {
         if (!emailVal) emailVal = process.env[`${key}_EMAIL`] || process.env[`${key}_USER`] || process.env[`${key}_USERNAME`] || "";
         if (!passVal) passVal = process.env[`${key}_PASS`] || process.env[`${key}_PASSWORD`] || "";
         if (!twoFactorSecret) twoFactorSecret = process.env[`${key}_2FA`] || process.env[`${key}_2FA_SECRET`] || process.env[`${key}_SECRET`] || "";
         if (!gmailPassVal) gmailPassVal = process.env[`${key}_GMAIL_PASS`] || process.env[`${key}_GOOGLE_PASS`] || "";
     }
 
-    // Fallback theo index nếu không khớp key tên
-    if (!emailVal) {
-        const fallbackKey = "PROFILE_" + (profileIndex === 0 ? "DEFAULT" : profileIndex);
-        emailVal = process.env[`${fallbackKey}_EMAIL`] || process.env[`${fallbackKey}_USER`] || "";
-        passVal = process.env[`${fallbackKey}_PASS`] || process.env[`${fallbackKey}_PASSWORD`] || "";
-        twoFactorSecret = process.env[`${fallbackKey}_2FA`] || process.env[`${fallbackKey}_2FA_SECRET`] || "";
-        gmailPassVal = process.env[`${fallbackKey}_GMAIL_PASS`] || "";
-    }
-
+    // 2. Chỉ fallback theo danh sách FB_EMAIL, FB_PASSWORD, FB_2FA nếu tồn tại đúng vị trí index của profile đó
+    const listIndex = isDefault ? 0 : (pNum !== null ? pNum : profileIndex);
     const emails = (process.env.FB_EMAIL || "").split(',').map(s => s.trim()).filter(Boolean);
     const passwords = (process.env.FB_PASSWORD || "").split(',').map(s => s.trim()).filter(Boolean);
     const twoFactorSecrets = (process.env.FB_2FA || "").split(',').map(s => s.trim()).filter(Boolean);
 
-    if (!emailVal) emailVal = emails[profileIndex] || emails[0] || "";
-    if (!passVal) passVal = passwords[profileIndex] || passwords[0] || "";
-    if (!twoFactorSecret) twoFactorSecret = twoFactorSecrets[profileIndex] || twoFactorSecrets[0] || "";
+    if (!emailVal && emails.length > listIndex) emailVal = emails[listIndex] || "";
+    if (!passVal && passwords.length > listIndex) passVal = passwords[listIndex] || "";
+    if (!twoFactorSecret && twoFactorSecrets.length > listIndex) twoFactorSecret = twoFactorSecrets[listIndex] || "";
+
+    // 3. Mật khẩu Gmail fallback sang GOOGLE_PASSWORD hoặc passVal của chính profile này
     if (!gmailPassVal) gmailPassVal = process.env.GOOGLE_PASSWORD || passVal;
 
     return { 
@@ -1042,6 +1037,18 @@ async function handleFacebookContinue(context, timeoutMs = 60000, profileIndex =
                 }
             }
 
+            // E.0. Xử lý màn hình "Bạn đã đăng nhập. Tin cậy thiết bị này?" / "Lưu trình duyệt" / "Trust this device"
+            const trustDeviceBtn = page.locator('button, [role="button"], input[type="submit"], [type="submit"], div[role="button"], a[role="button"]')
+                .filter({ hasText: /Tin cậy thiết bị này|Tin cậy thiết bị|Tin cậy trình duyệt này|Tin cậy|Trust this device|Trust this browser|Trust device|Lưu trình duyệt|Save browser|Lưu thông tin đăng nhập|Lưu trình duyệt này/i })
+                .first();
+
+            if (await trustDeviceBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                console.log('[+] Phát hiện màn hình "Bạn đã đăng nhập. Tin cậy thiết bị này?". Đang click nút Tin cậy thiết bị...');
+                await trustDeviceBtn.click({ force: true, timeout: 4000 }).catch(() => {});
+                await page.waitForTimeout(3000).catch(() => {});
+                continue;
+            }
+
             // E. Nút Tiếp tục/Continue thông thường (chỉ click khi không có ô nhập mã code)
             const hasCodeInput = url.includes('codesubmit') || 
                                  (isCheckpointUrl(url) && 
@@ -1217,7 +1224,12 @@ async function main() {
                 const contexts = browser.contexts();
                 const context = contexts.length > 0 ? contexts[0] : await browser.newContext();
                 
-                await handleFacebookContinue(context, 45000);
+                let cdpProfileName = targetProfile || (typeof activeCdpProfile !== 'undefined' ? activeCdpProfile : 'Default');
+                let cdpIndex = 0;
+                const cdpNumMatch = String(cdpProfileName).match(/(\d+)/);
+                if (cdpNumMatch) cdpIndex = parseInt(cdpNumMatch[1], 10);
+                
+                await handleFacebookContinue(context, 45000, cdpIndex, cdpProfileName);
                 const cdpCookies = await context.cookies();
                 const fbCookies = cdpCookies.filter(c => c.domain.includes('facebook.com') || c.domain.includes('messenger.com'));
                 const hasUserCookie = fbCookies.some(c => c.name === 'c_user' || c.name === 'i_user');

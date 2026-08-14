@@ -30,6 +30,7 @@ Before providing any solution, refactor, or code fix, you MUST explicitly execut
   - ALWAYS kill/terminate any test processes immediately after running tests.
   - DO NOT automatically restart the main bot process on your own.
   - NEVER execute `node index.js` to run test bots. Let the user run `node index.js` manually. (Other test commands or scripts are allowed).
+  -**Data Protection:** Don't touch my config (bot-mess/config.json) and .env.
 
 ---
 

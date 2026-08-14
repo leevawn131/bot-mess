@@ -122,19 +122,43 @@ async function getNickname(threadID, userID) {
  */
 async function hasInteraction(threadID, userID) {
   try {
-    const statsPath = path.resolve(__dirname, "../../message_stats.json");
-    if (!fs.existsSync(statsPath)) return false;
-    const stats = JSON.parse(fs.readFileSync(statsPath, "utf8"));
-    const threadStats = stats[String(threadID)];
-    if (!threadStats) return false;
-    const userStats = threadStats[String(userID)];
-    if (!userStats) return false;
+    const threadKey = String(threadID);
+    const userKey = String(userID);
 
-    if (typeof userStats === "object") {
-      return Number(userStats.total || 0) > 0;
-    } else if (typeof userStats === "number") {
-      return userStats > 0;
+    // 1. Kiểm tra trong memberNicknames.json (nếu có biệt danh đã lưu -> là thành viên cũ)
+    const nicknamesData = readNicknames();
+    if (nicknamesData[threadKey] && nicknamesData[threadKey][userKey]) {
+      return true;
     }
+
+    // 2. Kiểm tra trong message_stats.json (thống kê tin nhắn)
+    const statsPath = path.resolve(__dirname, "../../message_stats.json");
+    if (fs.existsSync(statsPath)) {
+      try {
+        const stats = JSON.parse(fs.readFileSync(statsPath, "utf8"));
+        const threadStats = stats[threadKey];
+        if (threadStats && threadStats[userKey]) {
+          const userStats = threadStats[userKey];
+          if (typeof userStats === "object" && Number(userStats.total || 0) > 0) return true;
+          if (typeof userStats === "number" && userStats > 0) return true;
+        }
+      } catch (e) {}
+    }
+
+    // 3. Kiểm tra trong SQLite Database (messenger_users)
+    try {
+      const { execute } = require("./database");
+      const rows = await execute(
+        "SELECT id, total_exp, credits FROM messenger_users WHERE thread_id = ? AND psid = ?",
+        [threadKey, userKey]
+      );
+      if (rows && rows.length > 0) {
+        if (Number(rows[0].total_exp || 0) > 0 || Number(rows[0].credits || 0) !== 10000) {
+          return true;
+        }
+      }
+    } catch (e) {}
+
     return false;
   } catch (err) {
     console.error("❌ Lỗi khi kiểm tra tương tác người dùng:", err);
