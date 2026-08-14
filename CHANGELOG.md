@@ -1,29 +1,35 @@
-# CHANGELOG
+# 📋 CHANGELOG - Nhật Ký Cập Nhật Messenger Bot
 
-## [Phiên bản Cập nhật Gần nhất] - Tối ưu Database & Sửa lỗi Runtime
+---
 
-### 🚀 Tính năng & Cải tiến mới
-*   **Hệ thống Bot Rental (Thuê Bot):** 
-    *   Nâng cấp lệnh `!setthue`: Hỗ trợ cộng thêm thời gian thủ công (đơn vị ngày/tháng) linh hoạt cho Admin.
-    *   Tối ưu lệnh `!thuebot huy`: Huỷ giao dịch đang chờ một cách mượt mà.
-    *   Bổ sung tính năng tự động nhận diện `adminIDs` từ `config.json` để bỏ qua các lớp chặn (Block) quyền sử dụng khi chưa thuê.
-*   **Hệ thống Minigame (Tài xỉu):**
-    *   Hỗ trợ Tiếng Việt có dấu trọn vẹn: Người chơi có thể nhắn `tài`, `xỉu`, `TÀI`, `XỈU`... bot đều nhận diện được mà không bị trật nhịp.
-*   **Khả năng tương thích Docker:**
-    *   Cập nhật lệnh `!reset`: Đổi cơ chế sang `process.exit(1)` để tương thích 100% với môi trường container Docker (auto-restart).
+## [v2.5.0] - Dọn Dẹp Mã Nguồn, Tối Ưu Hóa Git & Đại Tu Tài Liệu (2026-08-14)
 
-### 🐛 Sửa lỗi (Bug Fixes)
-*   **Hệ thống Nhiệm vụ (`!quest`):**
-    *   Fix lỗi `ER_BAD_FIELD_ERROR (Unknown column 'id')` nghiêm trọng gây sập lệnh `!quest`. Sửa lại luồng SQL đồng bộ hoá nhiệm vụ hàng ngày thông qua hàm chuẩn `ensureUserDailyState`.
-    *   Fix lỗi `[object Promise]` hiển thị ở cột Date do hàm `getVNDateString()` bị định nghĩa trùng lặp cả đồng bộ và bất đồng bộ.
-*   **Sập Bot do lỗi API (Error: [object Object]):**
-    *   Fix lỗi truyền nhầm ID người dùng (`senderID`) thay vì ID tin nhắn (`messageID`) vào hàm reply của API `ws3-fca` trong `taixiu.js` và `baucua.js` khi Boss thử cược.
-*   **Lỗi Runtime ở các Lệnh Economy:**
-    *   `tien.js`: Fix lỗi `ReferenceError: BOSS_ID is not defined` (do sai chính tả biến thành `bossID`).
-    *   `shop.js`: Xoá khối `finally` thừa gây lỗi crash gọi kết nối mạng không tồn tại.
-    *   `openbox.js`: Fix lỗi `ReferenceError: connection is not defined`.
+### 🧹 Dọn Dẹp & Quản Trị Dự Án
+- **Loại bỏ File Rác & Scratch Test Scripts:** Xóa hơn 35 tệp tin tạm thời, log/shm/wal file cũ, script debug 1 lần và các thư mục test rác (`test_task/`, `modules/cache/`).
+- **Hoàn Thiện `.gitignore`:** Cấu hình lại các quy tắc bỏ qua an toàn, khắc phục triệt để việc ẩn nhầm mã nguồn trong `src/cache/`, `src/database/schema/schema.sql` và các asset GIF của lệnh đấm/hôn trong `modules/commands/cache/`.
+- **Đại Tu Tài Liệu:** Viết lại toàn bộ [README.md](file:///home/leevawn/bot-loz/bot-mess/README.md) và [DOCUMENTATION.md](file:///home/leevawn/bot-loz/bot-mess/DOCUMENTATION.md) chi tiết, chuẩn xác, liệt kê đầy đủ hơn 80 lệnh và kiến trúc SQLite3 / AI Social Engine.
+- **Chuẩn Hóa `.env.example`:** Cung cấp đầy đủ cấu hình cho Groq, Gemini, OpenAI, Ollama, ComfyUI, SQLite và trích xuất cookie tự động.
 
-### ⚙️ Tối ưu hoá Hệ thống (Refactoring & Database)
-*   **Quy chuẩn Connection Pool toàn Hệ thống:**
-    *   Thay thế toàn bộ lệnh `connection.end()` (đang bị Deprecated và gây tắc nghẽn) thành `connection.release()` tại tất cả các module (`tien`, `buy`, `cuop`, `baucua`, `taixiu`, `lode`, `vidgai`, `openbox`).
-    *   Khắc phục tình trạng tạo "Kết nối vãng lai" (`mysql.createConnection()`) gây lỗi `this.connection.release is not a function`. Tất cả các minigame và lệnh economy hiện đã dùng chung Pool (`getConnection()`) từ `database.js` để chịu tải cực tốt và không leak RAM.
+---
+
+## [v2.4.0] - Tích Hợp Đa AI, Groq Cloud & Hệ Thống Cấp Độ (Level System)
+
+### 🚀 Tính Năng Mới
+- **Tích Hợp Groq Cloud (Llama 3.3):** Nâng cấp lệnh `!noitu` và tính năng chat AI sang sử dụng Groq API với độ trễ phản hồi siêu thấp.
+- **Hệ Thống Level & EXP:** Tự động cộng điểm kinh nghiệm qua tin nhắn, bảng xếp hạng `!toplv`, thông báo thăng cấp kèm danh hiệu độc quyền và lệnh quản lý `!rankup on/off`.
+- **Hot-Reloading cho Autosend:** Cho phép nạp lại lịch gửi tin nhắn tự động thông qua `!cmd reload autosendScheduler` mà không cần khởi động lại bot.
+- **Hệ Thống AI Social Engine (`src/`):** Xây dựng thế giới nhân vật AI sống động với ký ức dài hạn, cảm xúc, nhật ký và bí mật.
+
+---
+
+## [v2.3.0] - Tối Ưu Database SQLite3 & Sửa Lỗi Runtime
+
+### 🚀 Tính Năng & Cải Tiến
+- **Chuyển Đổi SQLite3 Toàn Diện:** Chuyển đổi toàn bộ CSDL sang SQLite3 đặt tại `/runtime/bot.db` với chế độ WAL cho hiệu năng cao và không cần cài đặt MySQL.
+- **Hệ Thống Thuê Bot (`!thuebot`):** Nâng cấp lệnh `!setthue` hỗ trợ cộng thêm thời gian thủ công linh hoạt cho Admin và tự động nhận diện `adminIDs`.
+- **Hệ Thống Minigame (Tài Xỉu, Bầu Cua):** Hỗ trợ Tiếng Việt có dấu trọn vẹn, tính năng soi cầu và xử lý cược đa dạng.
+- **Khả Năng Tương Thích Docker:** Cập nhật lệnh `!reset` sang `process.exit(1)` tương thích hoàn toàn với cơ chế auto-restart của Docker container và PM2.
+
+### 🐛 Sửa Lỗi (Bug Fixes)
+- **Hệ Thống Nhiệm Vụ (`!quest`):** Khắc phục lỗi `Unknown column 'id'` và sửa lỗi Promise hiển thị ở cột Date.
+- **Sửa Lỗi Runtime Economy:** Sửa lỗi biến `BOSS_ID` trong `tien.js`, loại bỏ `finally` thừa trong `shop.js` và fix `ReferenceError` trong `openbox.js`.
