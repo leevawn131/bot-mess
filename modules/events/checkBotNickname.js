@@ -18,8 +18,8 @@ module.exports = {
             // Tránh kiểm tra quá thường xuyên để bảo vệ hiệu năng
             global.lastCheckBotNickname = global.lastCheckBotNickname || {};
             const lastCheck = global.lastCheckBotNickname[threadID];
-            // Chỉ kiểm tra lại sau mỗi 10 phút
-            if (lastCheck && Date.now() - lastCheck < 10 * 60 * 1000) return;
+            // Chỉ kiểm tra lại sau mỗi 4 tiếng (4 * 60 * 60 * 1000 ms)
+            if (lastCheck && Date.now() - lastCheck < 4 * 60 * 60 * 1000) return;
 
             // Đánh dấu thời gian kiểm tra ngay để tránh các tin nhắn đồng thời kích hoạt cùng lúc (race condition)
             global.lastCheckBotNickname[threadID] = Date.now();

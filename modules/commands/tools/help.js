@@ -82,6 +82,40 @@ function getCategoriesMap() {
   return categories;
 }
 
+const COMMANDS_PER_PAGE = 10;
+
+function buildCategoryPageMessage(selectedCategoryKey, page, categories) {
+  const commandList = categories[selectedCategoryKey] || [];
+  const totalPages = Math.ceil(commandList.length / COMMANDS_PER_PAGE) || 1;
+  const currentPage = Math.max(1, Math.min(page, totalPages));
+
+  const startIndex = (currentPage - 1) * COMMANDS_PER_PAGE;
+  const endIndex = Math.min(startIndex + COMMANDS_PER_PAGE, commandList.length);
+  const pageCommands = commandList.slice(startIndex, endIndex);
+
+  const displayName = categoryNames[selectedCategoryKey] || `📂 ${selectedCategoryKey.toUpperCase()}`;
+
+  let msg = `📂 DANH SÁCH LỆNH\n`;
+  msg += `📌 Danh mục: ${displayName}\n`;
+  msg += `📊 Trang: [${currentPage}/${totalPages}] (Tổng ${commandList.length} lệnh)\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+  const pad = (n) => (n < 10 ? `0${n}` : String(n));
+  pageCommands.forEach((cmd, idx) => {
+    const globalIdx = startIndex + idx + 1;
+    msg += `[${pad(globalIdx)}] ${cmd.name} ➔ ${cmd.description || "Không có mô tả"}\n`;
+  });
+  msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `💬 Hướng dẫn:\n`;
+  msg += `  • Reply số thứ tự lệnh (1-${commandList.length}) để xem chi tiết.\n`;
+  if (totalPages > 1) {
+    msg += `  • Reply "trang <số>" (hoặc "p <số>") để đổi trang (1-${totalPages}).\n`;
+  }
+  msg += `⏱️ Tự động ẩn menu sau 60s.`;
+
+  return { msg, totalPages, currentPage, commandList };
+}
+
 module.exports = {
   name: "help",
   description: "Xem danh sách lệnh theo nhóm (Hỗ trợ menu tương tác bằng cách reply)",
@@ -193,33 +227,19 @@ module.exports = {
     if (!handleReplyContext) return;
 
     const input = String(body || "").trim();
-    const choice = parseInt(input);
 
     try {
       const categories = getCategoriesMap();
 
-      // Bước 2: User chọn danh mục -> Hiển thị danh sách các lệnh trong danh mục
+      // Bước 2: User chọn danh mục -> Hiển thị danh sách các lệnh trong danh mục (Trang 1, 10 lệnh/trang)
       if (handleReplyContext.type === "select_category") {
+        const choice = parseInt(input);
         if (isNaN(choice) || choice < 1 || choice > handleReplyContext.categories.length) {
           return api.sendMessage(`⚠️ Vui lòng reply số thứ tự hợp lệ từ 1 đến ${handleReplyContext.categories.length}.`, threadID, messageID);
         }
 
         const selectedCategoryKey = handleReplyContext.categories[choice - 1];
-        const commandList = categories[selectedCategoryKey] || [];
-        const displayName = categoryNames[selectedCategoryKey] || `📂 ${selectedCategoryKey.toUpperCase()}`;
-
-        let msg = `📂 DANH SÁCH LỆNH\n`;
-        msg += `📌 Danh mục: ${displayName}\n`;
-        msg += `📊 Số lượng: ${commandList.length} lệnh\n`;
-        msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-
-        const pad = (n) => (n < 10 ? `0${n}` : n);
-        commandList.forEach((cmd, idx) => {
-          msg += `[${pad(idx + 1)}] ${cmd.name} ➔ ${cmd.description || "Không có mô tả"}\n`;
-        });
-        msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-        msg += `💬 Hướng dẫn: Reply số thứ tự lệnh để xem chi tiết cách dùng.\n`;
-        msg += `⏱️ Tự động ẩn menu sau 60s.`;
+        const { msg, totalPages, currentPage, commandList } = buildCategoryPageMessage(selectedCategoryKey, 1, categories);
 
         const sent = await api.sendMessage(msg, threadID, messageID);
 
@@ -238,6 +258,9 @@ module.exports = {
           messageID: sent.messageID,
           author: senderID,
           type: "select_command",
+          categoryKey: selectedCategoryKey,
+          currentPage: currentPage,
+          totalPages: totalPages,
           commands: commandList.map(cmd => cmd.name),
         });
 
@@ -245,10 +268,66 @@ module.exports = {
         return;
       }
 
-      // Bước 3: User chọn lệnh trong danh mục -> Hiển thị hướng dẫn sử dụng chi tiết
+      // Bước 3: User chọn lệnh HOẶC đổi trang trong danh mục
       if (handleReplyContext.type === "select_command") {
+        const selectedCategoryKey = handleReplyContext.categoryKey;
+        const totalPages = handleReplyContext.totalPages || 1;
+        const currentPage = handleReplyContext.currentPage || 1;
+
+        // 3.1 Kiểm tra xem người dùng có muốn ĐỔI TRANG không (vd: trang 2, p 2, t 2, next, prev)
+        const pageMatch = input.match(/^(?:trang|page|p|t)\s*(\d+)$/i);
+        let targetPage = null;
+
+        if (pageMatch) {
+          targetPage = parseInt(pageMatch[1]);
+        } else if (/^(?:next|sau|tiep|tiếp)$/i.test(input)) {
+          targetPage = currentPage + 1;
+        } else if (/^(?:prev|truoc|trước|back)$/i.test(input)) {
+          targetPage = currentPage - 1;
+        }
+
+        if (targetPage !== null) {
+          if (isNaN(targetPage) || targetPage < 1 || targetPage > totalPages) {
+            return api.sendMessage(`⚠️ Số trang không hợp lệ. Danh mục này có từ trang 1 đến ${totalPages}.`, threadID, messageID);
+          }
+
+          const { msg, currentPage: newCurrentPage } = buildCategoryPageMessage(selectedCategoryKey, targetPage, categories);
+          const sent = await api.sendMessage(msg, threadID, messageID);
+
+          // Gỡ tin nhắn trang cũ
+          try {
+            await api.unsendMessage(messageReply.messageID);
+          } catch (e) { }
+
+          // Dọn dẹp context cũ và lưu context mới
+          const index = list.findIndex(h => h.messageID === messageReply.messageID);
+          if (index > -1) list.splice(index, 1);
+
+          global.client.handleReply.push({
+            name: "help",
+            messageID: sent.messageID,
+            author: senderID,
+            type: "select_command",
+            categoryKey: selectedCategoryKey,
+            currentPage: newCurrentPage,
+            totalPages: totalPages,
+            commands: handleReplyContext.commands,
+          });
+
+          scheduleAutoUnsend(api, sent);
+          return;
+        }
+
+        // 3.2 Người dùng chọn SỐ THỨ TỰ LỆNH (1 đến tổng số lệnh)
+        const choice = parseInt(input);
         if (isNaN(choice) || choice < 1 || choice > handleReplyContext.commands.length) {
-          return api.sendMessage(`⚠️ Vui lòng reply số thứ tự hợp lệ từ 1 đến ${handleReplyContext.commands.length}.`, threadID, messageID);
+          let warnMsg = `⚠️ Vui lòng reply số thứ tự lệnh từ 1 đến ${handleReplyContext.commands.length}`;
+          if (totalPages > 1) {
+            warnMsg += ` hoặc "trang <số>" để chuyển trang.`;
+          } else {
+            warnMsg += `.`;
+          }
+          return api.sendMessage(warnMsg, threadID, messageID);
         }
 
         const selectedCommandName = handleReplyContext.commands[choice - 1];

@@ -124,6 +124,7 @@ module.exports = {
             const { isBlocked } = require("../utils/cutvvStorage");
             const { getThreadInfoCached } = require("../utils/threadInfo");
             const { toAdminIdList } = require("../utils/checkPermission");
+            const { ensureUserAccount } = require("../utils/database");
 
             // Kiểm tra xem bot có phải QTV không
             let isBotAdmin = false;
@@ -179,78 +180,69 @@ module.exports = {
             const joinedUIDs = allowedParticipants.map(user => String(user.userFbId || "").trim()).filter(Boolean);
             if (joinedUIDs.length > 0) removeLeaveHistoryEntries(threadID, joinedUIDs);
 
-            // 3. Phân loại Thành viên Cũ quay lại vs Thành viên Mới
-            const oldMembers = [];
-            const brandNewMembers = [];
-
+            // 3. Đồng bộ tên thành viên vào RAM & SQLite Database
             for (const user of allowedParticipants) {
                 const userID = String(user.userFbId || "").trim();
-                const savedNickname = await getNickname(threadID, userID);
-                const hasInteracted = await hasInteraction(threadID, userID);
-
-                if (hasInteracted || (savedNickname && savedNickname.trim() !== "")) {
-                    oldMembers.push({ ...user, savedNickname });
-                } else {
-                    brandNewMembers.push(user);
+                const fullName = String(user.fullName || "").trim();
+                if (userID && fullName) {
+                    if (global.data?.userName) global.data.userName.set(userID, fullName);
+                    ensureUserAccount(threadID, userID, fullName).catch(() => {});
                 }
             }
 
-            // 4. Xử lý Thành viên Cũ quay lại: Tự động khôi phục biệt danh
-            for (const user of oldMembers) {
+            // 4. Gửi Lời Chào Mừng (Chào mặc định hoặc Lời chào Custom)
+            const customGreeting = getJoinGreeting(threadID);
+            if (!customGreeting || customGreeting.text !== "off") {
+                const namesArray = allowedParticipants.map((user) => String(user?.fullName || "").trim()).filter(Boolean);
+                const listNames = namesArray.join(", ");
+
+                if (customGreeting && (customGreeting.text || customGreeting.media)) {
+                    let body = "";
+                    let mentions = [];
+
+                    if (customGreeting.text) {
+                        const formatted = formatGreeting(customGreeting.text, allowedParticipants);
+                        body = formatted.body;
+                        mentions = formatted.mentions;
+                    }
+
+                    let msgPayload = null;
+                    if (customGreeting.media && customGreeting.media.path && fs.existsSync(customGreeting.media.path)) {
+                        const attachmentStream = fs.createReadStream(customGreeting.media.path);
+                        if (body) {
+                            msgPayload = {
+                                body: body,
+                                attachment: attachmentStream,
+                            };
+                            if (mentions.length > 0) msgPayload.mentions = mentions;
+                        } else {
+                            msgPayload = {
+                                attachment: attachmentStream,
+                            };
+                        }
+                    } else if (body) {
+                        msgPayload = mentions.length > 0 ? { body, mentions } : body;
+                    }
+
+                    if (msgPayload) {
+                        api.sendMessage(msgPayload, threadID);
+                    }
+                } else {
+                    api.sendMessage(`Chào mừng ${listNames} đã tham gia nhóm! 🥳`, threadID);
+                }
+            }
+
+            // 5. Khôi phục biệt danh cho thành viên cũ nếu có lưu
+            for (const user of allowedParticipants) {
                 const userID = String(user.userFbId || "").trim();
                 const userName = user.fullName || "Thành viên cũ";
-                const savedNickname = user.savedNickname || await getNickname(threadID, userID);
-
-                if (savedNickname && savedNickname.trim() !== "") {
-                    checkAndRestoreOldMemberNickname(api, threadID, userID, userName);
-                } else {
-                    api.sendMessage(`[ THÀNH VIÊN CŨ ]\n🔎 Phát hiện thành viên cũ quay lại: ${userName}! Chào mừng bạn trở lại nhóm nhé 🎉`, threadID);
-                }
-            }
-
-            // 5. Xử lý Lời Chào Mừng (Chào thành viên mới hoặc Lời chào Custom)
-            const targetWelcomeList = brandNewMembers.length > 0 ? brandNewMembers : (oldMembers.length === 0 ? allowedParticipants : []);
-            if (targetWelcomeList.length > 0) {
-                const customGreeting = getJoinGreeting(threadID);
-
-                if (!customGreeting || customGreeting.text !== "off") {
-                    const namesArray = targetWelcomeList.map((user) => String(user?.fullName || "").trim()).filter(Boolean);
-                    const listNames = namesArray.join(", ");
-
-                    if (customGreeting && (customGreeting.text || customGreeting.media)) {
-                        let body = "";
-                        let mentions = [];
-
-                        if (customGreeting.text) {
-                            const formatted = formatGreeting(customGreeting.text, targetWelcomeList);
-                            body = formatted.body;
-                            mentions = formatted.mentions;
-                        }
-
-                        let msgPayload = null;
-                        if (customGreeting.media && customGreeting.media.path && fs.existsSync(customGreeting.media.path)) {
-                            const attachmentStream = fs.createReadStream(customGreeting.media.path);
-                            if (body) {
-                                msgPayload = {
-                                    body: body,
-                                    attachment: attachmentStream,
-                                };
-                                if (mentions.length > 0) msgPayload.mentions = mentions;
-                            } else {
-                                msgPayload = {
-                                    attachment: attachmentStream,
-                                };
-                            }
-                        } else if (body) {
-                            msgPayload = mentions.length > 0 ? { body, mentions } : body;
-                        }
-
-                        if (msgPayload) {
-                            api.sendMessage(msgPayload, threadID);
-                        }
-                    } else {
-                        api.sendMessage(`Chào mừng ${listNames} đã tham gia nhóm! 🥳`, threadID);
+                try {
+                    const savedNickname = await getNickname(threadID, userID);
+                    if (savedNickname && savedNickname.trim() !== "") {
+                        checkAndRestoreOldMemberNickname(api, threadID, userID, userName);
                     }
+                } catch (err) {
+                    console.error("Lỗi khi khôi phục biệt danh cũ:", err);
                 }
             }
 

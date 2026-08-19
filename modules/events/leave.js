@@ -113,8 +113,8 @@ module.exports = {
                 }
                 
                 // TRƯỜNG HỢP 2: TỰ OUT ("[TÊN] đã rời nhóm")
-                else if (logMessageBody.includes("đã rời khỏi nhóm.")) {
-                    const endPhrase = " đã rời khỏi nhóm.";
+                else if (logMessageBody.includes("đã rời khỏi nhóm")) {
+                    const endPhrase = "đã rời khỏi nhóm";
                     const lastEndIndex = logMessageBody.lastIndexOf(endPhrase);
                     
                     if (lastEndIndex !== -1) {
@@ -123,11 +123,26 @@ module.exports = {
                 }
             }
 
-            // Fallback: Nếu cắt chuỗi lỗi (do ngôn ngữ khác) thì mới gọi API
+            // Fallback 1: Lấy từ RAM global.data.userName hoặc SQLite Database
+            if (name === "Thành viên" || name === "") {
+                if (global.data?.userName?.has(String(leftID))) {
+                    name = global.data.userName.get(String(leftID));
+                } else {
+                    try {
+                        const { execute } = require("../utils/database");
+                        const dbRows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' LIMIT 1", [String(leftID)]);
+                        if (dbRows && dbRows[0] && dbRows[0].name) {
+                            name = dbRows[0].name;
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            // Fallback 2: Nếu vẫn chưa có tên thì gọi API Facebook
             if (name === "Thành viên" || name === "") {
                 try {
                     const info = await api.getUserInfo(leftID);
-                    if (info[leftID]?.name) name = info[leftID].name;
+                    if (info && info[leftID]?.name) name = info[leftID].name;
                 } catch (e) {}
             }
 
