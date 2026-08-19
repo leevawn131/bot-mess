@@ -34,18 +34,35 @@ module.exports = {
       await ensureAccountClusterSchema();
       const botUid = String(api.getCurrentUserID());
 
-      const activeProfile = accountProfilesManager.getActiveProfileName();
       const config = accountProfilesManager.loadConfig();
 
-      let activeClusterId = 1;
-      let activeClusterProfiles = ["Default", "Profile 1"];
+      let activeProfile = global.current_profile || null;
+      let activeClusterId = null;
+      let activeClusterProfiles = [];
+
+      // 1. Tìm profile và cụm theo UID của chính bot này trong SQLite
+      const profileInfo = await accountProfilesManager.getProfileInfoByUid(botUid);
+      if (profileInfo) {
+        activeProfile = profileInfo.profileName;
+        activeClusterId = profileInfo.clusterId;
+      }
+
+      // 2. Fallback nếu chưa có trong DB: dùng activeProfile mặc định
+      if (!activeProfile) {
+        activeProfile = accountProfilesManager.getActiveProfileName();
+      }
 
       for (const c of config.clusters || []) {
-        if (c.profiles && c.profiles.includes(activeProfile)) {
+        if (activeClusterId ? c.cluster_id === activeClusterId : (c.profiles && c.profiles.includes(activeProfile))) {
           activeClusterId = c.cluster_id;
-          activeClusterProfiles = c.profiles;
+          activeClusterProfiles = c.profiles || [];
           break;
         }
+      }
+
+      if (!activeClusterId) {
+        activeClusterId = 1;
+        activeClusterProfiles = ["Default", "Profile 1"];
       }
 
       let allClustersInfo = `📊 TÌNH TRẠNG TẤT CẢ CÁC CỤM\n━━━━━━━━━━━━━━━\n`;

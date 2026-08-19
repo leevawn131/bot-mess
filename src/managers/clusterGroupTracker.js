@@ -157,7 +157,15 @@ class ClusterGroupTracker {
 
       if (!api || typeof api.getThreadList !== 'function') return;
 
-      const activeProfile = profileName || accountProfilesManager.getActiveProfileName();
+      let activeProfile = profileName;
+      if (!activeProfile && accountUid) {
+        const info = await accountProfilesManager.getProfileInfoByUid(accountUid);
+        if (info) activeProfile = info.profileName;
+      }
+      if (!activeProfile) {
+        activeProfile = accountProfilesManager.getActiveProfileName();
+      }
+
       const config = accountProfilesManager.loadConfig();
 
       // Xác định activeProfile thuộc Cụm mấy

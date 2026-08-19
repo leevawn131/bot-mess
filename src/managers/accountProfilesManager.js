@@ -174,6 +174,26 @@ class AccountProfilesManager {
   }
 
   /**
+   * Lấy thông tin Profile và Cụm dựa theo UID của tài khoản Facebook
+   */
+  async getProfileInfoByUid(botUid) {
+    if (!botUid) return null;
+    await ensureAccountClusterSchema();
+    const rows = await execute(
+      `SELECT profile_name, cluster_id, status FROM profile_accounts WHERE uid = ?`,
+      [String(botUid)]
+    );
+    if (rows && rows.length > 0) {
+      return {
+        profileName: rows[0].profile_name,
+        clusterId: rows[0].cluster_id,
+        status: rows[0].status
+      };
+    }
+    return null;
+  }
+
+  /**
    * Ghi nhận UID & Facebook Name cho Profile đang chạy
    */
   async registerActiveAccount(profileName, botUid, accountName = "") {
