@@ -7,6 +7,29 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const login = require("./includes/f");
+
+// Hook bắt lỗi Appstate / Cookie từ FCA Logger để tự động cào lại cookie khi cookie die
+if (global.Fca && global.Fca.Require && global.Fca.Require.logger) {
+  const origLoggerError = global.Fca.Require.logger.Error;
+  global.Fca.Require.logger.Error = function(...args) {
+    const msg = args.map(a => String(a || '')).join(' ');
+    if (msg.includes('Appstate') || msg.includes('Cookie Của Bạn Đã Bị Lỗi') || msg.includes('ErrAppState')) {
+      const activeProf = global.current_logging_profile || (!isMainThread && workerData && workerData.profileName ? workerData.profileName : 'Default');
+      console.warn(`[🚨 CẢNH BÁO FCA] Cookie của Profile "${activeProf}" bị lỗi! Tự động xóa appstate và khởi chạy Trình duyệt lấy lại cookie mới...`);
+      
+      const brokenAppstatePath = path.join(__dirname, 'runtime', 'appstates', `appstate_${activeProf}.json`);
+      try {
+        if (fs.existsSync(brokenAppstatePath)) fs.unlinkSync(brokenAppstatePath);
+        if (fs.existsSync(APPSTATE_PATH)) fs.unlinkSync(APPSTATE_PATH);
+        if (fs.existsSync(LEGACY_APPSTATE_PATH)) fs.unlinkSync(LEGACY_APPSTATE_PATH);
+      } catch (e) {}
+
+      runAutoExtractor(activeProf);
+      scheduleLoginRetry(`tự động lấy lại cookie sau lỗi FCA cho ${activeProf}`, 5000);
+    }
+    return origLoggerError.apply(this, args);
+  };
+}
 const {
   checkPermission,
   getGroupMode,
@@ -117,6 +140,10 @@ const runAutoExtractor = (profileName = "") => {
       const content = fs.readFileSync(checkPath, "utf8").trim();
       if (content && content !== "[]" && content !== "{}") {
         JSON.parse(content);
+        try {
+          const lastCheckPath = path.join(__dirname, "cache", "top_reports_last_check.json");
+          if (fs.existsSync(lastCheckPath)) fs.unlinkSync(lastCheckPath);
+        } catch (ex) {}
         return true;
       }
     }
@@ -537,10 +564,29 @@ const attemptLogin = () => {
     const cred = credentialList[idx];
     setTimeout(() => {
       console.log(`[🚀] Đang tiến hành đăng nhập Profile "${cred.profileName}"...`);
+      global.current_logging_profile = cred.profileName;
+
+      let callbackCalled = false;
+      const loginWatchdog = setTimeout(() => {
+        if (!callbackCalled) {
+          console.warn(`[⏳ WATCHDOG] Đăng nhập Profile "${cred.profileName}" không nhận được phản hồi (FCA nuốt lỗi cookie). Tự động cào lại cookie mới...`);
+          const brokenAppstatePath = path.join(__dirname, 'runtime', 'appstates', `appstate_${cred.profileName}.json`);
+          try {
+            if (fs.existsSync(brokenAppstatePath)) fs.unlinkSync(brokenAppstatePath);
+            if (fs.existsSync(APPSTATE_PATH)) fs.unlinkSync(APPSTATE_PATH);
+            if (fs.existsSync(LEGACY_APPSTATE_PATH)) fs.unlinkSync(LEGACY_APPSTATE_PATH);
+          } catch (e) {}
+          runAutoExtractor(cred.profileName);
+          scheduleLoginRetry(`tự động cào lại cookie do login timeout cho ${cred.profileName}`, 5000);
+        }
+      }, 15000);
+
       login(
         { appState: cred.appState },
         fcaOptions,
         async (err, api) => {
+          callbackCalled = true;
+          clearTimeout(loginWatchdog);
           if (err) {
             const errStr = String(err.message || err);
             const isCtxErr = errStr.includes("reading 'ctx'") || errStr.includes("ctx");
@@ -552,22 +598,17 @@ const attemptLogin = () => {
             if (fs.existsSync(brokenAppstatePath)) {
               try {
                 fs.unlinkSync(brokenAppstatePath);
-                console.log(`[🗑️] Đã xóa appstate hỏng của Profile "${cred.profileName}" để chờ lấy mới.`);
+                console.log(`[🗑️] Đã xóa appstate hỏng của Profile "${cred.profileName}" để lấy lại mới.`);
               } catch (e) { }
             }
+            try {
+              if (fs.existsSync(APPSTATE_PATH)) fs.unlinkSync(APPSTATE_PATH);
+              if (fs.existsSync(LEGACY_APPSTATE_PATH)) fs.unlinkSync(LEGACY_APPSTATE_PATH);
+            } catch (e) {}
 
-            accountProfilesManager.loadConfig();
-            let myClusterId = 1;
-            for (const c of accountProfilesManager.config.clusters || []) {
-              if (c.profiles && c.profiles.includes(cred.profileName)) {
-                myClusterId = c.cluster_id;
-                break;
-              }
-            }
-
-            console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" (Cụm ${myClusterId}) bị dính đăng xuất/checkpoint. Tiến hành xoay vòng sang acc dự phòng Cụm ${myClusterId}...`);
-            await accountProfilesManager.switchProfileOnCheckpoint(cred.profileName, myClusterId);
-            scheduleLoginRetry(`chuyển sang acc dự phòng Cụm ${myClusterId}`, 5000);
+            console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" bị hết hạn cookie / checkpoint. Tự động khởi chạy Trình duyệt lấy lại cookie mới...`);
+            runAutoExtractor(cred.profileName);
+            scheduleLoginRetry(`tự động lấy lại cookie mới cho ${cred.profileName}`, 5000);
             return;
           }
 
@@ -580,6 +621,7 @@ const attemptLogin = () => {
 
           if (!global.api_instance) global.api_instance = api;
           if (!global.botID) global.botID = botID;
+          global.current_profile = cred.profileName;
 
           // Đồng bộ phân bổ rải nhóm thuê adminbot & tự đếm/rời nhóm thừa (Slot Tracker)
           try {
@@ -664,6 +706,34 @@ const attemptLogin = () => {
             return false;
           };
 
+          if (!global.knownGroupThreads) global.knownGroupThreads = new Set();
+
+          function isGroupThreadId(threadID) {
+            if (!threadID) return false;
+            const str = String(threadID);
+            if (global.knownGroupThreads.has(str)) return true;
+            return str.length >= 15;
+          }
+
+          function calculateHumanTypingDelay(msg) {
+            if (msg && typeof msg === "object" && (msg.noTyping || msg.skipTyping)) {
+              return 0;
+            }
+            let len = 0;
+            if (typeof msg === "string") {
+              len = msg.length;
+            } else if (msg && typeof msg === "object") {
+              if (typeof msg.body === "string") len = msg.body.length;
+              if (msg.attachment) len += 40;
+            }
+            if (len === 0) return 0;
+
+            // Độ trễ tự nhiên tối thiểu 1.2s - 3.5s để người dùng nhìn thấy rõ dấu 3 chấm nhảy múa
+            const base = 1200 + Math.min(len * 15, 2300);
+            const jitter = Math.floor(Math.random() * 300) - 150;
+            return Math.max(1200, Math.min(base + jitter, 3800));
+          }
+
           const originalSendMessage = api.sendMessage;
           if (typeof originalSendMessage === "function") {
             api.sendMessage = function (msg, threadID, arg3, arg4) {
@@ -681,17 +751,45 @@ const attemptLogin = () => {
                 callback = null;
               }
 
+              const delay = calculateHumanTypingDelay(msg);
+              const tid = String(threadID || "");
+
+              const sendAction = (cb) => {
+                let stopTyping = null;
+                if (delay > 0 && tid && typeof api.sendTypingIndicator === "function") {
+                  try {
+                    stopTyping = api.sendTypingIndicator(tid);
+                  } catch (e) {}
+                }
+
+                setTimeout(() => {
+                  try {
+                    originalSendMessage.call(api, msg, threadID, (err, messageInfo) => {
+                      if (typeof stopTyping === "function") {
+                        try { stopTyping(); } catch (e) {}
+                      } else if (typeof api.sendTypingIndicator === "function") {
+                        try { api.sendTypingIndicator(tid, false); } catch (e) {}
+                      }
+                      if (cb) cb(err, messageInfo);
+                    }, replyToMessage);
+                  } catch (e) {
+                    if (typeof stopTyping === "function") {
+                      try { stopTyping(); } catch (err) {}
+                    } else if (typeof api.sendTypingIndicator === "function") {
+                      try { api.sendTypingIndicator(tid, false); } catch (err) {}
+                    }
+                    if (handleAccountBlocked(e)) return;
+                    if (cb) cb(e);
+                  }
+                }, delay);
+              };
+
               if (typeof callback === "function") {
                 const wrappedCallback = (err, messageInfo) => {
                   if (err && handleAccountBlocked(err)) return;
                   callback(err, messageInfo);
                 };
-                try {
-                  return originalSendMessage.call(api, msg, threadID, wrappedCallback, replyToMessage);
-                } catch (e) {
-                  if (handleAccountBlocked(e)) return;
-                  throw e;
-                }
+                sendAction(wrappedCallback);
               } else {
                 return new Promise((resolve, reject) => {
                   const wrappedCallback = (err, messageInfo) => {
@@ -699,12 +797,7 @@ const attemptLogin = () => {
                     if (err) return reject(err);
                     resolve(messageInfo || {});
                   };
-                  try {
-                    originalSendMessage.call(api, msg, threadID, wrappedCallback, replyToMessage);
-                  } catch (e) {
-                    if (handleAccountBlocked(e)) return reject(e);
-                    reject(e);
-                  }
+                  sendAction(wrappedCallback);
                 });
               }
             };
@@ -727,17 +820,45 @@ const attemptLogin = () => {
                 callback = null;
               }
 
+              const delay = calculateHumanTypingDelay(msg);
+              const tid = String(threadID || "");
+
+              const sendAction = (cb) => {
+                let stopTyping = null;
+                if (delay > 0 && tid && typeof api.sendTypingIndicator === "function") {
+                  try {
+                    stopTyping = api.sendTypingIndicator(tid);
+                  } catch (e) {}
+                }
+
+                setTimeout(() => {
+                  try {
+                    originalSendMessageEffect.call(api, msg, threadID, (err, messageInfo) => {
+                      if (typeof stopTyping === "function") {
+                        try { stopTyping(); } catch (e) {}
+                      } else if (typeof api.sendTypingIndicator === "function") {
+                        try { api.sendTypingIndicator(tid, false); } catch (e) {}
+                      }
+                      if (cb) cb(err, messageInfo);
+                    }, replyToMessage);
+                  } catch (e) {
+                    if (typeof stopTyping === "function") {
+                      try { stopTyping(); } catch (err) {}
+                    } else if (typeof api.sendTypingIndicator === "function") {
+                      try { api.sendTypingIndicator(tid, false); } catch (err) {}
+                    }
+                    if (handleAccountBlocked(e)) return;
+                    if (cb) cb(e);
+                  }
+                }, delay);
+              };
+
               if (typeof callback === "function") {
                 const wrappedCallback = (err, messageInfo) => {
                   if (err && handleAccountBlocked(err)) return;
                   callback(err, messageInfo);
                 };
-                try {
-                  return originalSendMessageEffect.call(api, msg, threadID, wrappedCallback, replyToMessage);
-                } catch (e) {
-                  if (handleAccountBlocked(e)) return;
-                  throw e;
-                }
+                sendAction(wrappedCallback);
               } else {
                 return new Promise((resolve, reject) => {
                   const wrappedCallback = (err, messageInfo) => {
@@ -745,12 +866,7 @@ const attemptLogin = () => {
                     if (err) return reject(err);
                     resolve(messageInfo || {});
                   };
-                  try {
-                    originalSendMessageEffect.call(api, msg, threadID, wrappedCallback, replyToMessage);
-                  } catch (e) {
-                    if (handleAccountBlocked(e)) return reject(e);
-                    reject(e);
-                  }
+                  sendAction(wrappedCallback);
                 });
               }
             };
@@ -1051,24 +1167,35 @@ const attemptLogin = () => {
               } catch (e) {}
             }
 
-            // Kiểm tra gửi top ngày lúc 6:00 sáng (chỉ gửi 1 lần mỗi ngày)
+            // Kiểm tra xem còn nhóm nào chưa nhận báo cáo ngày hôm qua không
+            const hasPendingDaily = Object.keys(stats).some(
+              (tid) => dailyState[tid] !== yesterdayKey
+            );
+
+            // Kiểm tra gửi top ngày từ 6:00 sáng trở đi nếu còn ít nhất 1 nhóm chưa nhận hoặc chưa gửi hôm nay
             if (
               (hours > 6 || (hours === 6 && minutes >= 0)) &&
-              lastDailyCheckDate !== currentDate
+              (lastDailyCheckDate !== currentDate || hasPendingDaily)
             ) {
-              console.log("dt Đang gửi TOP 10 tương tác ngày cho tất cả nhóm chưa nhận...");
+              console.log("🕗 Đang gửi TOP 10 tương tác ngày cho tất cả nhóm chưa nhận...");
               lastDailyCheckDate = currentDate; // Đánh dấu trước để tránh gọi lặp lại
               writeLastTopCheckState(currentDate, undefined, undefined);
               await sendDailyTop10ToAllGroups(api);
             }
 
-            // Kiểm tra gửi top tháng lúc 6:00 sáng vào NGÀY MÙNG 1 ĐẦU THÁNG (chỉ gửi 1 lần mỗi tháng)
+            // Kiểm tra xem còn nhóm nào chưa nhận báo cáo tháng không (chỉ gửi vào ngày đầu tiên của tháng mới - ngày 1)
+            const isFirstDayOfMonth = currentDay === 1;
+            const hasPendingMonthly = isFirstDayOfMonth && Object.keys(stats).some(
+              (tid) => monthlyState[tid] !== previousMonthKey
+            );
+
+            // Kiểm tra gửi top tháng vào ngày 1 hàng tháng từ 6:00 sáng trở đi
             if (
-              currentDay === 1 &&
+              isFirstDayOfMonth &&
               (hours > 6 || (hours === 6 && minutes >= 0)) &&
-              lastMonthlyCheckDate !== currentDate
+              (lastMonthlyCheckDate !== currentDate || hasPendingMonthly)
             ) {
-              console.log("dt Đang gửi TOP 10 tương tác tháng cho tất cả nhóm chưa nhận...");
+              console.log("🕗 Đang gửi TOP 10 tương tác tháng cho tất cả nhóm chưa nhận...");
               lastMonthlyCheckDate = currentDate;
               writeLastTopCheckState(undefined, currentDate, undefined);
               await sendMonthlyTop10ToAllGroups(api);
@@ -1078,6 +1205,11 @@ const attemptLogin = () => {
           // Kiểm tra mỗi 30 giây để tránh miss thời điểm gửi
           setInterval(checkAndSendTopStats, 30000);
           console.log("✅ Đã bật hẹn giờ gửi TOP tương tác (6:00 sáng mỗi ngày)");
+
+          // Chạy kiểm tra ngay lập tức khi vừa đăng nhập / vừa lấy lại appstate mới
+          checkAndSendTopStats().catch((err) =>
+            console.error("❌ Lỗi kiểm tra TOP ngay sau khi có appstate/đăng nhập:", err.message)
+          );
 
           // --- HÀM ĐẾM TIN NHẮN ---
           const statsPath = path.join(__dirname, "message_stats.json");
@@ -1692,33 +1824,44 @@ const attemptLogin = () => {
           // --- LISTENER CHÍNH ---
           api.listenMqtt(async (err, event) => {
             if (err) {
+              const errStrFull = JSON.stringify(err || {}).toLowerCase() + " " + String(err.message || err.error || err).toLowerCase();
+              const isRealCheckpoint = errStrFull.includes('not logged in') || 
+                                       errStrFull.includes('account blocked') || 
+                                       errStrFull.includes('checkpoint') || 
+                                       errStrFull.includes('13570') || 
+                                       errStrFull.includes('đóng và mở lại cửa sổ trình duyệt') ||
+                                       errStrFull.includes('connection refused') ||
+                                       errStrFull.includes('connack') ||
+                                       errStrFull.includes('"code":21') ||
+                                       errStrFull.includes('code: 21') ||
+                                       (err && (err.code === 21 || err.code === "21")) ||
+                                       errStrFull.includes('eauth') ||
+                                       errStrFull.includes('invalid session') ||
+                                       errStrFull.includes('session expired') ||
+                                       errStrFull.includes('ctx') ||
+                                       errStrFull.includes('please login');
+
               const errMessage = String(err.error || err.message || err);
-              const isRealCheckpoint = errMessage.includes('Not logged in') || errMessage.includes('Account blocked') || errMessage.includes('checkpoint') || errMessage.includes('1357004') || errMessage.includes('đóng và mở lại cửa sổ trình duyệt');
 
               if (isRealCheckpoint) {
-                console.error(`❌ Listen Error (Checkpoint/Logout/Phiên lỗi 1357004) cho Profile "${cred.profileName}":`, errMessage);
+                console.error(`❌ Listen Error (Cookie hết hạn / Checkpoint / Logout) cho Profile "${cred.profileName}":`, errMessage);
 
+                // Xóa appstate hỏng của Profile này
+                const brokenProfilePath = path.join(__dirname, 'runtime', 'appstates', `appstate_${cred.profileName}.json`);
                 try {
+                  if (fs.existsSync(brokenProfilePath)) fs.unlinkSync(brokenProfilePath);
                   if (fs.existsSync(APPSTATE_PATH)) fs.unlinkSync(APPSTATE_PATH);
                   if (fs.existsSync(LEGACY_APPSTATE_PATH)) fs.unlinkSync(LEGACY_APPSTATE_PATH);
+                  console.log(`[🗑️] Đã xóa appstate hỏng của Profile "${cred.profileName}" để tự động lấy lại cookie.`);
                 } catch (e) {}
 
-                accountProfilesManager.loadConfig();
-                let myClusterId = 1;
-                for (const c of accountProfilesManager.config.clusters || []) {
-                  if (c.profiles && c.profiles.includes(cred.profileName)) {
-                    myClusterId = c.cluster_id;
-                    break;
-                  }
-                }
-
-                console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" (Cụm ${myClusterId}) bị văng checkpoint/lỗi phiên. Tiến hành xoay vòng sang acc dự phòng Cụm ${myClusterId}...`);
-                await accountProfilesManager.switchProfileOnCheckpoint(cred.profileName, myClusterId);
-                scheduleLoginRetry(`chuyển sang acc dự phòng Cụm ${myClusterId}`, 5000);
+                console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" bị mất kết nối/die cookie. Tự động khởi chạy Trình duyệt lấy lại cookie mới...`);
+                runAutoExtractor(cred.profileName);
+                scheduleLoginRetry(`tự động lấy lại cookie mới cho ${cred.profileName}`, 5000);
                 return;
               }
 
-              // Gián đoạn MQTT tạm thời (Server unavailable / Connection lost / stop_listen) -> Thử kết nối lại mà không xoay vần acc
+              // Gián đoạn MQTT tạm thời (Server unavailable / Connection lost / stop_listen) -> Thử kết nối lại mà không xóa cookie
               console.warn(`[⚠️] Kết nối MQTT của Profile "${cred.profileName}" bị gián đoạn tạm thời (${errMessage}). Đang tự động kết nối lại sau 5 giây...`);
               scheduleLoginRetry(`kết nối lại MQTT cho ${cred.profileName}`, 5000);
               return;
@@ -1843,7 +1986,9 @@ const attemptLogin = () => {
                     if (await shouldAllowEvent(ev, event.threadID)) {
                       await ev.execute({ api, event, config });
                     }
-                  } catch (e) { }
+                  } catch (e) {
+                    console.error(`❌ Lỗi thực thi event ${ev.name}:`, e.message);
+                  }
                 }
               });
             }
@@ -1856,7 +2001,9 @@ const attemptLogin = () => {
                     if (await shouldAllowEvent(ev, event.threadID)) {
                       await ev.execute({ api, event, config });
                     }
-                  } catch (e) { }
+                  } catch (e) {
+                    console.error(`❌ Lỗi thực thi event ${ev.name}:`, e.message);
+                  }
                 }
               });
             }
@@ -1911,7 +2058,34 @@ const attemptLogin = () => {
                         // Loại trừ các tin nhắn bắt đầu bằng prefix (lệnh của bot)
                         if (!bodyStr.startsWith(prefix) && !bodyStr.startsWith("!") && !bodyStr.startsWith("/")) {
                           const userMap = new Map((threadInfo.userInfo || []).map((u) => [String(u.id), u.name]));
-                          const userName = userMap.get(event.senderID) || "Người dùng";
+                          let userName = userMap.get(event.senderID);
+                          if (!userName || userName === "Người dùng" || userName.startsWith("User ")) {
+                            userName = global.data?.userName?.get(event.senderID);
+                          }
+                          if (!userName || userName === "Người dùng" || userName.startsWith("User ")) {
+                            try {
+                              const dbRows = await execute("SELECT name FROM messenger_users WHERE thread_id = ? AND psid = ?", [String(event.threadID), String(event.senderID)]);
+                              if (dbRows && dbRows[0] && dbRows[0].name && dbRows[0].name !== "Người dùng") {
+                                userName = dbRows[0].name;
+                              }
+                            } catch (e) {}
+                          }
+                          if (!userName || userName === "Người dùng" || userName.startsWith("User ")) {
+                            try {
+                              const userObj = await new Promise((resolve) => {
+                                api.getUserInfo(event.senderID, (err, ret) => {
+                                  if (err || !ret) return resolve(null);
+                                  resolve(ret[event.senderID]);
+                                });
+                              });
+                              if (userObj?.name) {
+                                userName = userObj.name;
+                                if (global.data?.userName) global.data.userName.set(event.senderID, userName);
+                                execute("UPDATE messenger_users SET name = ? WHERE thread_id = ? AND psid = ?", [userName, String(event.threadID), String(event.senderID)]).catch(() => {});
+                              }
+                            } catch (e) {}
+                          }
+                          userName = userName || "Người dùng";
                           const res = await LevelSystem.addChatExp(event.senderID, textToParse, event.threadID, userName);
                           if (res && res.didLevelUp) {
                             const { isLevelNotiEnabled } = require("./modules/utils/levelSettings");

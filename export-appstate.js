@@ -13,7 +13,7 @@ const CHROME_IP = process.env.CHROME_IP || '127.0.0.1';
 const CHROME_PORT = process.env.CHROME_PORT || '9222';
 const APPSTATE_PATH = path.join(__dirname, 'runtime', 'appstate.json');
 const LEGACY_APPSTATE_PATH = path.join(__dirname, 'appstate.json');
-const RESTART_CMD = process.env.RESTART_CMD || 'pm2 restart index';
+const RESTART_CMD = process.env.RESTART_CMD || 'pm2 restart botmess';
 
 function getRunningBraveUserDataDir() {
     try {
@@ -170,11 +170,7 @@ async function cleanupBrowser(browser, spawnedBraveProc, isCDP, shouldCloseCDPBr
         }
     }
 
-    // Diệt triệt để các tiến trình Chrome/Brave ngầm để giải phóng 100% RAM và CPU cho VPS 1 core
-    try {
-        const { execSync } = require('child_process');
-        execSync('pkill -9 -f "brave" || true');
-    } catch (e) {}
+    // Đóng browser context sạch sẽ bằng API của Playwright
 }
 
 function getCredentialsForProfile(profileName = "", profileIndex = 0) {
@@ -1265,11 +1261,8 @@ async function main() {
                 console.log(`[🔄] Đang thử Profile [${i + 1}/${candidateProfilesToUse.length}]: "${profileDir}"`);
                 console.log(`==========================================`);
 
-                // Giải phóng các tiến trình Brave ngầm cũ
-                try {
-                    const { execSync } = require('child_process');
-                    execSync('pkill -f "brave" || true');
-                } catch (pe) {}
+                // Dọn dẹp lock files cũ của Profile
+                removeBraveLockFiles(profilePath, profileDir);
 
                 if (profilePath) {
                     removeBraveLockFiles(profilePath);
@@ -1354,11 +1347,8 @@ async function main() {
                     currentBrowser = null;
                     currentSpawnedProc = null;
 
-                    // Diệt triệt để tất cả tiến trình Brave ngầm còn sót và xóa sạch SingletonLock
-                    try {
-                        const { execSync } = require('child_process');
-                        execSync('pkill -9 -f "brave" || true');
-                    } catch (e) {}
+                    // Dọn dẹp SingletonLock trước khi mở headless
+                    removeBraveLockFiles(profilePath, profileDir);
                     await new Promise(r => setTimeout(r, 800));
 
                     try {
@@ -1391,7 +1381,9 @@ async function main() {
                         });
 
                         await handleFacebookContinue(currentBrowser, 60000, i, profileDir);
-                        currentCookies = await currentBrowser.cookies();
+                        if (currentBrowser) {
+                            currentCookies = await currentBrowser.cookies().catch(() => []);
+                        }
                         currentIsCDP = false;
                     } catch (headlessErr) {
                         console.warn(`[!] Lỗi khi chạy Headless cho Profile "${profileDir}": ${headlessErr.message}`);
@@ -1527,6 +1519,15 @@ async function saveAppStateAndExit(cookiesList, b, proc, cdp, closeCdp, targetPr
             fs.writeFileSync(activeInfoPath, JSON.stringify({ profileDir: targetProfile, updatedAt: new Date().toISOString() }, null, 2));
         } catch (e) {}
     }
+
+    // Reset cờ kiểm tra báo cáo top để bot tự động quét và gửi bù ngay khi nhận appstate mới
+    try {
+        const lastCheckPath = path.join(__dirname, 'cache', 'top_reports_last_check.json');
+        if (fs.existsSync(lastCheckPath)) {
+            fs.unlinkSync(lastCheckPath);
+            console.log('[🧹] Đã reset top_reports_last_check.json để bot kiểm tra lại báo cáo TOP ngay sau khi có appstate mới.');
+        }
+    } catch (e) {}
 
     await cleanupBrowser(b, proc, cdp, closeCdp);
 
