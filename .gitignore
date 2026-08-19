@@ -107,3 +107,12 @@ venv/
 # ==========================================
 *.backup
 *.bak
+
+# ==========================================
+# 9. Runtime Data & Test Scratch Files
+# ==========================================
+message_stats.json
+modules/data/*.json
+src/tests/*.txt
+src/tests/*.json
+!src/tests/*.js
