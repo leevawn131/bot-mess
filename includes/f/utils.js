@@ -2312,66 +2312,84 @@ switch (hasData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMet
                 break;
             case "log:user-nickname": {
                 let x = getData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
-                x.nicknames[logMessageData.participant_id] = (logMessageData.nickname.length == 0 ? x.userInfo.find(i => i.id == String(logMessageData.participant_id)).name : logMessageData.nickname);
-                updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
+                if (x) {
+                    if (!x.nicknames || typeof x.nicknames !== "object") x.nicknames = {};
+                    let targetUser = Array.isArray(x.userInfo) ? x.userInfo.find(i => i && i.id == String(logMessageData.participant_id)) : null;
+                    let targetName = targetUser ? targetUser.name : "Người dùng";
+                    x.nicknames[logMessageData.participant_id] = (logMessageData.nickname && logMessageData.nickname.length > 0) ? logMessageData.nickname : targetName;
+                    updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
+                }
             }
                 break;
             case "log:thread-admins": {
                 let x = getData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
-                switch (logMessageData.ADMIN_EVENT) {
-                    case "add_admin": {
-                        x.adminIDs.push({ id: logMessageData.TARGET_ID });
-                    }
+                if (x) {
+                    if (!Array.isArray(x.adminIDs)) x.adminIDs = [];
+                    switch (logMessageData.ADMIN_EVENT) {
+                        case "add_admin": {
+                            x.adminIDs.push({ id: logMessageData.TARGET_ID });
+                        }
+                            break;
+                        case "remove_admin": {
+                            x.adminIDs = x.adminIDs.filter(item => item && item.id != logMessageData.TARGET_ID);
+                        }
                         break;
-                    case "remove_admin": {
-                        x.adminIDs = x.adminIDs.filter(item => item.id != logMessageData.TARGET_ID);
                     }
-                    break;
+                    updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
                 }
-                updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
             }
                 break;
             case "log:thread-approval-mode": {
                 let x = getData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
-                if (x.approvalMode == true) { 
-                    x.approvalMode = false;
+                if (x) {
+                    if (x.approvalMode == true) { 
+                        x.approvalMode = false;
+                    }
+                    else {
+                        x.approvalMode = true;
+                    }
+                    updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
                 }
-                else {
-                    x.approvalMode = true;
-                }
-                updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
             }
                 break;
             case "log:thread-name": {
                 let x = getData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
-                x.threadName = (logMessageData.name || formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
-                updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
+                if (x) {
+                    x.threadName = (logMessageData.name || formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
+                    updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
+                }
             }
                 break;
             case "log:subscribe": {
                 let x = getData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
-                for (let o of logMessageData.addedParticipants) {
-                    if (x.userInfo.some(i => i.id == o.userFbId)) continue; 
-                    else {
-                        x.userInfo.push({
-                            id: o.userFbId,
-                            name: o.fullName,
-                            gender: getGenderByPhysicalMethod(o.fullName)
-                        });
-                        x.participantIDs.push(o.userFbId);
+                if (x) {
+                    if (!Array.isArray(x.userInfo)) x.userInfo = [];
+                    if (!Array.isArray(x.participantIDs)) x.participantIDs = [];
+                    for (let o of (logMessageData.addedParticipants || [])) {
+                        if (x.userInfo.some(i => i && i.id == o.userFbId)) continue; 
+                        else {
+                            x.userInfo.push({
+                                id: o.userFbId,
+                                name: o.fullName,
+                                gender: getGenderByPhysicalMethod(o.fullName)
+                            });
+                            x.participantIDs.push(o.userFbId);
+                        }
                     }
+                    updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
                 }
-                updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);
             }
                 break;
             case "log:unsubscribe": {
                 let x = getData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()));
-                x.participantIDs = x.participantIDs.filter(item => item != logMessageData.leftParticipantFbId);
-                x.userInfo = x.userInfo.filter(item => item.id != logMessageData.leftParticipantFbId);
-                    if (x.adminIDs.some(i => i.id == logMessageData.leftParticipantFbId)) {
-                        x.adminIDs = x.adminIDs.filter(item => item.id != logMessageData.leftParticipantFbId);
+                if (x) {
+                    if (Array.isArray(x.participantIDs)) x.participantIDs = x.participantIDs.filter(item => item != logMessageData.leftParticipantFbId);
+                    if (Array.isArray(x.userInfo)) x.userInfo = x.userInfo.filter(item => item && item.id != logMessageData.leftParticipantFbId);
+                    if (Array.isArray(x.adminIDs) && x.adminIDs.some(i => i && i.id == logMessageData.leftParticipantFbId)) {
+                        x.adminIDs = x.adminIDs.filter(item => item && item.id != logMessageData.leftParticipantFbId);
                     }
-                updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);      
+                    updateData(formatID((m.messageMetadata.threadKey.threadFbId || m.messageMetadata.threadKey.otherUserFbId).toString()),x);      
+                }
             }
             break;
         }
@@ -2737,7 +2755,7 @@ function parseAndCheckLogin(ctx, defaultFuncs, retryCount) {
             }
 
             if (res.error === 1357001) {
-                if (global.Fca.Require.FastConfig.AutoLogin && global.Fca.Require.FastConfig.CheckPointBypass['956'].Allow) {
+                if (global.Fca && global.Fca.Require && global.Fca.Require.FastConfig && global.Fca.Require.FastConfig.AutoLogin && global.Fca.Require.FastConfig.CheckPointBypass && global.Fca.Require.FastConfig.CheckPointBypass['956'] && global.Fca.Require.FastConfig.CheckPointBypass['956'].Allow) {
                     return global.Fca.Require.logger.Warning(global.Fca.Require.Language.Index.Bypass_956, async function() {
                         const Check = () => new Promise((re) => {
                             defaultFuncs.get('https://facebook.com', ctx.jar).then(function(res) {
@@ -2758,17 +2776,17 @@ function parseAndCheckLogin(ctx, defaultFuncs, retryCount) {
                         await Check();
                     });
                 }
-                if (res.request.uri && res.request.uri.href.includes("https://www.facebook.com/checkpoint/")) {
-                    if (res.request.uri.href.includes('601051028565049')) {
+                if (data && data.request && data.request.uri && data.request.uri.href && data.request.uri.href.includes("https://www.facebook.com/checkpoint/")) {
+                    if (data.request.uri.href.includes('601051028565049')) {
                         return global.Fca.BypassAutomationNotification(undefined, ctx.jar, ctx.globalOptions, undefined ,process.env.UID)
                     }
                 }
-                if (global.Fca.Require.FastConfig.AutoLogin) {
+                if (global.Fca && global.Fca.Require && global.Fca.Require.FastConfig && global.Fca.Require.FastConfig.AutoLogin) {
                     return global.Fca.Require.logger.Warning(global.Fca.Require.Language.Index.AutoLogin, function() {
                         return global.Fca.Action('AutoLogin');
                     });
                 } 
-                else if (!global.Fca.Require.FastConfig.AutoLogin) {
+                else if (global.Fca && global.Fca.Require && global.Fca.Require.FastConfig && !global.Fca.Require.FastConfig.AutoLogin) {
                     return global.Fca.Require.logger.Error(global.Fca.Require.Language.Index.ErrAppState);
                 }
                 return;

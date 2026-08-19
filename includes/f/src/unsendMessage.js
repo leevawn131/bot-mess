@@ -1,12 +1,12 @@
 "use strict";
 
 const Balancer = require('../Extra/Balancer.js');
-var utils = require("../utils");
+var utils = require("../utils.js");
 var log = require("npmlog");
 
 module.exports = function (defaultFuncs, api, ctx) {
   //const BalancerInstance = new Balancer(api.unsendMessage, unsendMessage, 0.85);
-  
+
   function unsendMessage(messageID, threadID, callback) {
     var resolveFunc = function () { };
     var rejectFunc = function () { };
@@ -14,7 +14,12 @@ module.exports = function (defaultFuncs, api, ctx) {
       resolveFunc = resolve;
       rejectFunc = reject;
     });
-  
+
+    if (utils.getType(threadID) === "Function" || utils.getType(threadID) === "AsyncFunction") {
+      callback = threadID;
+      threadID = null;
+    }
+
     if (!callback) {
       callback = function (err, friendList) {
         if (err) return rejectFunc(err);
@@ -27,7 +32,7 @@ module.exports = function (defaultFuncs, api, ctx) {
       var form = {
         message_id: messageID
       };
-    
+
       defaultFuncs
         .post("https://www.facebook.com/messaging/unsend_message/", ctx.jar, form)
         .then(utils.parseAndCheckLogin(ctx, defaultFuncs))
@@ -39,7 +44,7 @@ module.exports = function (defaultFuncs, api, ctx) {
           log.error("unsendMessage", err);
           return callback(err);
         });
-    
+
       return returnPromise;
     }
   }

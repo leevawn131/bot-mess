@@ -4,77 +4,115 @@ var utils = require("../utils");
 var log = require("npmlog");
 
 module.exports = function (defaultFuncs, api, ctx) {
-  function makeTypingIndicator(typ, threadID, callback, isGroup) {
-    var form = {
-      typ: +typ,
-      to: "",
-      source: "mercury-chat",
-      thread: threadID
-    };
-
-    // Check if thread is a single person chat or a group chat
-    // More info on this is in api.sendMessage
-    if (utils.getType(isGroup) == "Boolean") {
-      if (!isGroup) {
-        form.to = threadID;
+  function publishTyping(isTyping, threadID, isGroup) {
+    return new Promise(function (resolve, reject) {
+      if (!ctx.mqttClient || !ctx.mqttClient.connected) {
+        return reject(new Error("MQTT client is not connected. Call listenMqtt first."));
       }
-      defaultFuncs
-        .post("https://www.facebook.com/ajax/messaging/typ.php", ctx.jar, form)
-        .then(utils.parseAndCheckLogin(ctx, defaultFuncs))
-        .then(function (resData) {
-          if (resData.error) throw resData;
-          return callback();
-        })
-        .catch(function (err) {
-          log.error("sendTypingIndicator", err);
-          if (utils.getType(err) == "Object" && err.error === "Not logged in") {
-            ctx.loggedIn = false;
-          }
-          return callback(err);
-        });
-    }
-    else {
-      api.getUserInfo(threadID, function (err, res) {
-        if (err) return callback(err);
-        // If id is single person chat
-        if (Object.keys(res).length > 0) form.to = threadID;
-        defaultFuncs
-          .post("https://www.facebook.com/ajax/messaging/typ.php", ctx.jar, form)
-          .then(utils.parseAndCheckLogin(ctx, defaultFuncs))
-          .then(function (resData) {
-            if (resData.error) throw resData;
-            return callback();
-          })
-          .catch(function (err) {
-            log.error("sendTypingIndicator", err);
-            if (utils.getType(err) == "Object" && err.error === "Not logged in.") ctx.loggedIn = false;
-            return callback(err);
-          });
-      });
-    }
+
+      if (!threadID) {
+        return reject(new Error("sendTypingIndicator requires a valid threadID."));
+      }
+
+      var isGroupThread =
+        typeof isGroup === "boolean"
+          ? isGroup
+          : String(threadID).length >= 16;
+
+      var wsContent = {
+        app_id: "2220391788200892",
+        payload: JSON.stringify({
+          label: 3,
+          payload: JSON.stringify({
+            thread_key: String(threadID),
+            is_group_thread: +isGroupThread,
+            is_typing: +!!isTyping,
+            attribution: 0
+          }),
+          version: "5849951561777440"
+        }),
+        request_id: ++ctx.req_ID,
+        type: 4
+      };
+
+      ctx.mqttClient.publish(
+        "/ls_req",
+        JSON.stringify(wsContent),
+        { qos: 1, retain: false },
+        function (err, packet) {
+          if (err) return reject(err);
+          resolve(packet);
+        }
+      );
+    });
   }
 
-  return function sendTypingIndicator(threadID, callback, isGroup) {
-    if (
-      utils.getType(callback) !== "Function" &&
-      utils.getType(callback) !== "AsyncFunction"
-    ) {
-      if (callback) log.warn("sendTypingIndicator", "callback is not a function - ignoring.");
-      callback = () => { };
+  return function sendTypingIndicator(arg1, arg2, arg3, arg4) {
+    var isTyping = true;
+    var threadID = "";
+    var callback = function () {};
+    var isGroup = undefined;
+    var isBooleanCall = false;
+
+    // Pattern 1: sendTypingIndicator(isTyping, threadID, [callback], [isGroup])
+    if (typeof arg1 === "boolean") {
+      isTyping = arg1;
+      threadID = arg2;
+      callback = typeof arg3 === "function" ? arg3 : function () {};
+      isGroup = typeof arg4 === "boolean" ? arg4 : undefined;
+      isBooleanCall = true;
+    }
+    // Pattern 2: sendTypingIndicator(threadID, isTyping, [callback], [isGroup])
+    else if (typeof arg2 === "boolean") {
+      threadID = arg1;
+      isTyping = arg2;
+      callback = typeof arg3 === "function" ? arg3 : function () {};
+      isGroup = typeof arg4 === "boolean" ? arg4 : undefined;
+      isBooleanCall = true;
+    }
+    // Pattern 3: sendTypingIndicator(threadID, [callback], [isGroup]) -> returns end() function
+    else {
+      threadID = arg1;
+      callback = typeof arg2 === "function" ? arg2 : function () {};
+      isGroup = typeof arg3 === "boolean" ? arg3 : undefined;
+      isTyping = true;
     }
 
-    makeTypingIndicator(true, threadID, callback, isGroup);
+    var promise = publishTyping(isTyping, threadID, isGroup)
+      .then(function (res) {
+        callback(null, res);
+        return res;
+      })
+      .catch(function (err) {
+        log.error("sendTypingIndicator", err);
+        callback(err);
+        throw err;
+      });
 
-    return function end(cb) {
-      if (
-        utils.getType(cb) !== "Function" &&
-        utils.getType(cb) !== "AsyncFunction"
-      ) {
-        if (cb) log.warn("sendTypingIndicator", "callback is not a function - ignoring.");
-        cb = () => { };
-      }
+    // If explicit boolean mode was used, return the Promise so it can be awaited
+    if (isBooleanCall) {
+      return promise;
+    }
 
-      makeTypingIndicator(false, threadID, cb, isGroup);
+    // Classic FCA pattern: returns end([cb]) function
+    var end = function (cb) {
+      var endCb = typeof cb === "function" ? cb : function () {};
+      return publishTyping(false, threadID, isGroup)
+        .then(function (res) {
+          endCb(null, res);
+          return res;
+        })
+        .catch(function (err) {
+          log.error("sendTypingIndicator (end)", err);
+          endCb(err);
+          throw err;
+        });
     };
+
+    // Attach promise to end function so callers can also do: await api.sendTypingIndicator(threadID)
+    end.then = promise.then.bind(promise);
+    end.catch = promise.catch.bind(promise);
+
+    return end;
   };
 };
