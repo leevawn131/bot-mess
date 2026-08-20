@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-ISC-yellow.svg)](#)
 [![AI Providers](https://img.shields.io/badge/AI-Groq%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20Ollama-orange.svg)](#-tích-hợp-trí-tuệ-nhân-tạo-ai)
 
-Nền tảng **Facebook Messenger Bot** toàn diện viết bằng **Node.js** và **ws3-fca** tùy biến cao cấp. Dự án được thiết kế theo kiến trúc **Master – Multi-Worker Threads (Đa Cụm)**, lưu trữ SQLite3 độc lập tại `/runtime`, tích hợp cơ chế chống Facebook Rate-Limit 3 tầng (Cache-First & DB-First), tự động trích xuất cookie qua trình duyệt Brave/Chrome, hỗ trợ đa mô hình AI (Groq, Gemini, OpenAI, Ollama), hệ thống kinh tế ảo, minigame phong phú và quản lý nhóm chuyên nghiệp.
+Nền tảng **Facebook Messenger Bot** toàn diện viết bằng **Node.js** và **FCA-HORIZON-REMASTERED** tùy biến cao cấp. Dự án được thiết kế theo kiến trúc **Master – Multi-Worker Threads (Đa Cụm)**, lưu trữ SQLite3 độc lập tại `/runtime`, tích hợp cơ chế chống Facebook Rate-Limit 3 tầng (Cache-First & DB-First), tự động trích xuất cookie qua trình duyệt Brave/Chrome, hỗ trợ đa mô hình AI (Groq, Gemini, OpenAI, Ollama), hệ thống kinh tế ảo, minigame phong phú và quản lý nhóm chuyên nghiệp.
 
 ---
 
