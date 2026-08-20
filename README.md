@@ -1,22 +1,25 @@
-# ⚡ Messenger Bot (DarkWin Engine)
+# ⚡ Messenger Bot (DarkWin Multi-Cluster Engine)
 
 [![Node.js](https://img.shields.io/badge/Node.js-v20%2B-green.svg)](https://nodejs.org/)
+[![Architecture](https://img.shields.io/badge/Architecture-Master--Worker%20Threads-purple.svg)](#-kiến-trúc-hệ-thống-đa-cụm-multi-cluster)
 [![Database](https://img.shields.io/badge/Database-SQLite3-blue.svg)](https://www.sqlite.org/)
 [![License](https://img.shields.io/badge/License-ISC-yellow.svg)](#)
-[![AI Providers](https://img.shields.io/badge/AI-Groq%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20Ollama-orange.svg)](#tích-hợp-ai)
+[![AI Providers](https://img.shields.io/badge/AI-Groq%20%7C%20Gemini%20%7C%20OpenAI%20%7C%20Ollama-orange.svg)](#-tích-hợp-trí-tuệ-nhân-tạo-ai)
 
-Nền tảng **Facebook Messenger Bot** toàn diện viết bằng **Node.js** và **ws3-fca** tùy biến, được thiết kế tối ưu hiệu năng cao, lưu trữ SQLite3 độc lập, hỗ trợ đa mô hình AI (Groq, Gemini, OpenAI, Ollama, ComfyUI), quản lý nhóm chuyên nghiệp, hệ thống minigame & kinh tế phong phú, cấp độ tương tác (Level System) và cơ chế tự động trích xuất cookie/appstate từ trình duyệt.
+Nền tảng **Facebook Messenger Bot** toàn diện viết bằng **Node.js** và **ws3-fca** tùy biến cao cấp. Dự án được thiết kế theo kiến trúc **Master – Multi-Worker Threads (Đa Cụm)**, lưu trữ SQLite3 độc lập tại `/runtime`, tích hợp cơ chế chống Facebook Rate-Limit 3 tầng (Cache-First & DB-First), tự động trích xuất cookie qua trình duyệt Brave/Chrome, hỗ trợ đa mô hình AI (Groq, Gemini, OpenAI, Ollama), hệ thống kinh tế ảo, minigame phong phú và quản lý nhóm chuyên nghiệp.
 
 ---
 
 ## 📑 Mục Lục
 1. [Tính Năng Nổi Bật](#-tính-năng-nổi-bật)
-2. [Yêu Cầu Hệ Thống](#-yêu-cầu-hệ-thống)
-3. [Cài Đặt & Khởi Chạy Nhanh](#-cài-đặt--khởi-chạy-nhanh)
-4. [Cấu Hình Hệ Thống (.env & config.json)](#-cấu-hình-hệ-thống)
-5. [Hệ Thống Cơ Sở Dữ Liệu SQLite](#-hệ-thống-cơ-sở-dữ-liệu-sqlite)
-6. [Tích Hợp Trí Tuệ Nhân Tạo (AI)](#-tích-hợp-trí-tuệ-nhân-tạo-ai)
-7. [Danh Mục Lệnh (Commands Catalog)](#-danh-mục-lệnh-commands-catalog)
+2. [Kiến Trúc Đa Cụm (Multi-Cluster & Worker Threads)](#-kiến-trúc-hệ-thống-đa-cụm-multi-cluster)
+3. [Cơ Chế Chống Rate-Limit & Realtime Sync](#-cơ-chế-chống-rate-limit--realtime-sync)
+4. [Yêu Cầu Hệ Thống](#-yêu-cầu-hệ-thống)
+5. [Cài Đặt & Khởi Chạy Nhanh](#-cài-đặt--khởi-chạy-nhanh)
+6. [Cấu Hình Hệ Thống (.env & config.json)](#-cấu-hình-hệ-thống)
+7. [Hệ Thống Cơ Sở Dữ Liệu SQLite](#-hệ-thống-cơ-sở-dữ-liệu-sqlite)
+8. [Tích Hợp Trí Tuệ Nhân Tạo (AI)](#-tích-hợp-trí-tuệ-nhân-tạo-ai)
+9. [Danh Mục Lệnh (Commands Catalog)](#-danh-mục-lệnh-commands-catalog)
    - [Admin Bot (Quản Trị Tối Cao)](#1-admin-bot-modulescommandsadminbot)
    - [Quản Trị Nhóm (QTV)](#2-quản-trị-nhóm-modulescommandsqtv)
    - [Kinh Tế & Tài Chính (Economy)](#3-kinh-tế--tài-chính-modulescommandseconomy)
@@ -24,32 +27,76 @@ Nền tảng **Facebook Messenger Bot** toàn diện viết bằng **Node.js** v
    - [Tương Tác Nhóm & Level (Group)](#5-tương-tác-nhóm--level-modulescommandsgroup)
    - [Công Cụ & Tiện Ích (Tools)](#6-công-cụ--tiện-ích-modulescommandstools)
    - [Hệ Thống Thuê Bot](#7-hệ-thống-thuê-bot-thuebotjs)
-8. [Hệ Thống Cấp Độ & Danh Hiệu (Level System)](#-hệ-thống-cấp-độ--danh-hiệu)
-9. [Tự Động Trích Xuất Cookie (Auto AppState)](#-tự-động-trích-xuất-cookie)
-10. [Triển Khai (Docker & PM2)](#-triển-khai-production)
-11. [Khắc Phục Sự Cố (Troubleshooting)](#-khắc-phục-sự-cố)
+10. [Hệ Thống Cấp Độ & Danh Hiệu (Level System)](#-hệ-thống-cấp-độ--danh-hiệu)
+11. [Tự Động Trích Xuất Cookie (Auto AppState)](#-tự-động-trích-xuất-cookie)
+12. [Triển Khai Production (PM2 & Docker)](#-triển-khai-production)
+13. [Khắc Phục Sự Cố (Troubleshooting)](#-khắc-phục-sự-cố)
 
 ---
 
 ## 🚀 Tính Năng Nổi Bật
 
-- 🗄️ **SQLite3 Zero-Config**: Cơ sở dữ liệu lưu trữ tập trung tại `/runtime/bot.db`, hiệu năng cao, không phụ thuộc máy chủ MySQL bên ngoài.
-- 🧠 **Đa Nền Tảng AI**: Tích hợp Groq Cloud (Llama 3.3 tốc độ phản hồi cực nhanh cho trò chơi nối từ và chat), Gemini 1.5, OpenAI GPT-4o-mini, Ollama Local và ComfyUI tạo ảnh.
-- 🛡️ **Quản Trị Nhóm Cấp Cao**: Chống spam, chống đổi tên bot, chống tag all, chống thu hồi tin nhắn, cảnh báo vi phạm, cút vĩnh viễn, duyệt nhóm, set prefix riêng từng nhóm.
-- 💰 **Hệ Thống Kinh Tế Ảo**: Ngân hàng gửi/rút/lãi suất, đi làm, điểm danh, vay vốn, cướp bóc, mở rương, mua vật phẩm shop, chuyển tiền, nhiệm vụ hàng ngày.
-- 🎲 **Minigame Đa Dạng**: Tài xỉu (hỗ trợ soi cầu), Bầu cua, Lô đề, Sicbo, Nối từ AI, Bóng đá, Câu cá, Ghép đôi, Đuổi hình bắt chữ.
-- ⭐ **Hệ Thống Level & EXP**: Tính điểm kinh nghiệm qua từng tin nhắn, bảng xếp hạng cấp độ (`toplv`), thông báo thăng cấp tự động kèm danh hiệu độc quyền.
-- ⏰ **Lập Lịch Tự Động**: Tự động gửi tin nhắn theo giờ (Autosend Scheduler), tự động chuyển chế độ hoạt động (Mode Scheduler: ban ngày mở, ban đêm tắt lệnh giải trí).
-- 🍪 **Tự Động Làm Mới Cookie**: Hỗ trợ trích xuất cookie từ AdsPower, Brave, Chrome Remote Debugging hoặc Firefox khi appstate hết hạn.
+- 👑 **Kiến Trúc Đa Cụm (Multi-Cluster Worker Threads)**: 1 Master Thread điều phối các Worker Threads độc lập. Mỗi Cụm chạy 1 tài khoản Facebook riêng biệt, tự động xoay ca (Rotation) 1h-3h giữa nick chính và nick dự phòng nhằm tránh Checkpoint/Block Spam.
+- ⚡ **Chống Facebook Rate-Limit 3 Tầng**: Phân giải thông tin (`userInfo`, `threadInfo`) theo quy tắc: **RAM Cache ➡️ SQLite Database ➡️ Facebook API Fallback**. Kèm theo Circuit Breaker tự ngắt request khi Facebook quá tải.
+- 🔄 **Realtime Event Sync**: Tự động cập nhật ngay lập tức trạng thái Quản trị viên (`log:thread-admins`), tên nhóm, biệt danh, thành viên vào/ra vào bộ nhớ RAM và SQLite mà không cần gọi lại Facebook API.
+- 📊 **Báo Cáo Tương Tác Top 10 Chuẩn Xác**: Tự động gửi bảng xếp hạng tương tác ngày (6:00 AM) và tháng với Mutex Lock chống gửi trùng lặp, xác thực `messageID` thực tế và phân giải tên thành viên 3 lớp.
+- 🗄️ **SQLite3 Zero-Config**: Toàn bộ dữ liệu nằm gọn trong `/runtime/bot.db`, an toàn, tự động migrate schema, hỗ trợ transaction & timeout lock protection.
+- 🧠 **Đa Nền Tảng AI**: Hỗ trợ Groq Cloud (Llama 3.3 siêu tốc cho minigame Nối từ và chat), Gemini 1.5, OpenAI GPT-4o-mini, Ollama Local và ComfyUI tạo ảnh.
+- 🛡️ **Quản Trị Nhóm Cấp Cao**: Chống spam, chống đổi tên bot, chống tag all, chống thu hồi tin nhắn, cảnh báo vi phạm (đủ 3 lần kick), cút vĩnh viễn (blacklist), duyệt nhóm, đổi prefix riêng từng nhóm.
+- 💰 **Kinh Tế Ảo & Ngân Hàng**: Gửi/rút tiết kiệm có lãi suất, đi làm, điểm danh, vay vốn, cướp bóc, mở rương bí mật, cửa hàng vật phẩm, chuyển tiền, nhiệm vụ hàng ngày.
+- 🎲 **Minigame Đa Dạng**: Tài xỉu (hỗ trợ soi cầu), Bầu cua, Lô đề, Sicbo, Nối từ Tiếng Việt thông minh, Bóng đá, Câu cá, Ghép đôi, Đuổi hình bắt chữ.
+- ⭐ **Level System & EXP**: Tích điểm kinh nghiệm qua từng tin nhắn, bảng xếp hạng `!toplv`, tự động thăng cấp kèm 25+ danh hiệu độc quyền.
+- 🍪 **Tự Động Trích Xuất Cookie (Auto Appstate)**: Tự động chạy Brave/Chrome Headless để xuất lại cookie khi session hết hạn, có khóa `extractor.lock` chống nghẽn CPU.
+
+---
+
+## 🏗️ Kiến Trúc Hệ Thống Đa Cụm (Multi-Cluster)
+
+```
+                    ┌───────────────────────────────┐
+                    │      MASTER THREAD (index.js) │
+                    │ - Webhook Server (SePay)      │
+                    │ - Cron / Schedulers           │
+                    │ - Điều phối & Giám sát Worker │
+                    └──────────────┬────────────────┘
+                                   │
+         ┌─────────────────────────┼─────────────────────────┐
+         ▼                         ▼                         ▼
+┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│  WORKER CỤM 1    │      │  WORKER CỤM 2    │      │  WORKER CỤM 3    │
+│ - Profile: Acc 1 │      │ - Profile: Acc 2 │      │ - Profile: Acc 3 │
+│ - Quản lý Nhóm A │      │ - Quản lý Nhóm B │      │ - Quản lý Nhóm C │
+│ - Xoay ca 1h-3h  │      │ - Xoay ca 1h-3h  │      │ - Xoay ca 1h-3h  │
+└──────────────────┘      └──────────────────┘      └──────────────────┘
+```
+
+- **Master Thread**: Chạy máy chủ Express nhận Webhook thanh toán SePay, nạp cấu hình `account_profiles.json`, khởi tạo và giám sát các Worker Threads.
+- **Worker Thread**: Mỗi Worker quản lý 1 Cụm tài khoản Facebook riêng biệt. Các Cụm hoạt động song song, không làm nghẽn Event Loop của nhau.
+- **Cơ chế Phân Bổ Nhóm (`group_profile_bindings`)**: Mỗi nhóm chat khi thêm bot sẽ được gán cứng vào 1 Cụm phụ trách duy nhất để tránh việc nhiều bot cùng trả lời trùng lặp.
+- **Cơ chế Xoay Ca (Shift Rotation)**: Tự động hoán đổi `active_profile` giữa các nick trong cùng một Cụm sau mỗi khoảng thời gian ngẫu nhiên từ 1 đến 3 giờ.
+
+---
+
+## ⚡ Cơ Chế Chống Rate-Limit & Realtime Sync
+
+Để giải quyết triệt để tình trạng Facebook chặn GraphQL Rate-Limit dẫn đến bot bị treo hoặc không nhận quyền QTV:
+
+1. **Quy trình Tra Cứu Thông Tin (User & Thread Resolution)**:
+   - **Tầng 1 (RAM Cache):** Kiểm tra `global.data.userName` hoặc `_threadInfoCache`.
+   - **Tầng 2 (SQLite Database):** Truy vấn bảng `messenger_users` hoặc `thread_info_cache` trong `/runtime/bot.db`.
+   - **Tầng 3 (Facebook API Fallback):** Chỉ gọi `api.getUserInfo` / `api.getThreadInfo` khi 2 tầng trên chưa có dữ liệu, sau đó lưu ngược vào RAM và SQLite.
+2. **Đồng Bộ Sự Kiện Realtime (Zero-Latency Sync)**:
+   - Khi nhận event `log:thread-admins`: Cập nhật ngay UID vào mảng `adminIDs` trong cả RAM và SQLite ➡️ Bot nhận quyền QTV tức thì.
+   - Áp dụng tương tự cho `log:thread-name`, `log:user-nickname`, `log:subscribe`, `log:unsubscribe`, `change_thread_image`, `log:thread-color`.
 
 ---
 
 ## 💻 Yêu Cầu Hệ Thống
 
-- **Node.js**: Phiên bản `18.x` trở lên (Khuyến nghị **Node.js 20 LTS**).
-- **SQLite3**: Được biên dịch sẵn cùng `sqlite3` npm package.
-- **Hệ Điều Hành**: Linux (Ubuntu/Debian/CentOS), macOS, hoặc Windows.
-- **Tài khoản Facebook**: Đã đăng nhập và có file `appstate.json`.
+- **Node.js**: Phiên bản `18.x` trở lên (Khuyến nghị **Node.js 20 LTS** hoặc **Node.js 22**).
+- **SQLite3**: Được cài đặt và cấu hình sẵn cùng `sqlite3` npm package.
+- **Hệ Điều Hành**: Linux (Ubuntu 20.04/22.04/24.04, Debian), macOS, hoặc Windows.
+- **Trình duyệt (Tùy chọn)**: Google Chrome hoặc Brave Browser trên máy chủ để phục vụ tính năng tự động trích xuất cookie.
 
 ---
 
@@ -63,18 +110,21 @@ npm install
 ```
 
 ### 2. Cấu Hình File Biến Môi Trường (.env)
-Sao chép file mẫu và cấu hình:
+Sao chép file mẫu và chỉnh sửa cấu hình:
 ```bash
 cp .env.example .env
 nano .env
 ```
-Điền các thông tin cơ bản:
-- `ADMIN_IDS`: UID Facebook của bạn (Admin bot).
-- `GROQ_APIKEY`: API Key từ [Groq Console](https://console.groq.com/) (Dùng cho lệnh `!noitu` và AI chat siêu tốc).
-- `SQLITE_DB_PATH`: Mặc định là `./runtime/bot.db`.
+Điền các thông tin quan trọng:
+- `ADMIN_IDS`: Danh sách UID Facebook của Admin bot (ngăn cách bằng dấu phẩy).
+- `GROQ_APIKEY`: API Key từ [Groq Console](https://console.groq.com/) (Dùng cho lệnh `!noitu` và AI chat).
+- `SQLITE_DB_PATH`: Đường dẫn cơ sở dữ liệu (mặc định: `./runtime/bot.db`).
 
-### 3. Cung Cấp AppState Facebook
-Đặt file `appstate.json` của tài khoản Facebook vào thư mục `runtime/appstate.json` (hoặc thư mục gốc của bot).
+### 3. Cung Cấp AppState / Cookie Facebook
+Đặt file cookie `appstate.json` vào thư mục `runtime/appstate.json` hoặc sử dụng script tự động trích xuất:
+```bash
+node export-appstate.js
+```
 
 ### 4. Khởi Động Bot
 ```bash
@@ -86,7 +136,6 @@ node index.js
 ## ⚙️ Cấu Hình Hệ Thống
 
 ### 1. File `.env`
-Hệ thống ưu tiên đọc cấu hình từ biến môi trường:
 ```env
 # Database SQLite
 SQLITE_DB_PATH=./runtime/bot.db
@@ -113,7 +162,6 @@ LOG_LEVEL=info
 ```
 
 ### 2. File `config.json`
-Cung cấp cấu hình dự phòng và cài đặt bot:
 ```json
 {
   "prefix": "!",
@@ -128,28 +176,51 @@ Cung cấp cấu hình dự phòng và cài đặt bot:
 }
 ```
 
+### 3. File `runtime/account_profiles.json` (Quản Lý Cụm)
+```json
+{
+  "max_groups_per_account": 5,
+  "clusters": [
+    {
+      "cluster_id": 1,
+      "name": "Cụm 1",
+      "active_profile": "Default",
+      "profiles": ["Default", "Profile 1"]
+    },
+    {
+      "cluster_id": 2,
+      "name": "Cụm 2",
+      "active_profile": "Profile 2",
+      "profiles": ["Profile 2", "Profile 3"]
+    }
+  ]
+}
+```
+
 ---
 
 ## 🗄️ Hệ Thống Cơ Sở Dữ Liệu SQLite
 
-Toàn bộ dữ liệu của bot được lưu tại thư mục `/runtime`:
-- **`runtime/bot.db`**: Cơ sở dữ liệu chính (Tài khoản người dùng, số dư ví, tiền gửi bank, lịch sử thuê bot, cảnh báo vi phạm, bảng xếp hạng EXP, cấu hình prefix nhóm).
-- **`runtime/social_engine.sqlite`**: Cơ sở dữ liệu dành riêng cho hệ thống AI Social Engine (nhân vật, ký ức hội thoại, cảm xúc và nhật ký).
-
-Các bảng được tự động khởi tạo (`CREATE TABLE IF NOT EXISTS`) ngay khi bot khởi động lần đầu thông qua `modules/utils/database.js`.
+Toàn bộ dữ liệu của bot được quản lý độc lập tại thư mục `/runtime`:
+- **`runtime/bot.db`**: Cơ sở dữ liệu chính gồm các bảng:
+  - `messenger_users`: Dữ liệu người dùng và tên hiển thị.
+  - `thread_info_cache`: Persistent cache cho thông tin nhóm và danh sách QTV.
+  - `user_economy` & `bank_accounts`: Dữ liệu ví tiền, ngân hàng, thể lực.
+  - `rented_groups` & `group_profile_bindings`: Dữ liệu thuê bot và phân bổ Cụm.
+  - `thread_custom_prefixes`: Tiền tố lệnh riêng theo từng nhóm.
+  - `message_stats` & `user_levels`: Thống kê tin nhắn và cấp độ EXP.
+- **`runtime/social_engine.sqlite`**: Cơ sở dữ liệu dành riêng cho hệ thống AI Social Engine (ký ức hội thoại, cảm xúc và ngữ cảnh).
 
 ---
 
 ## 🧠 Tích Hợp Trí Tuệ Nhân Tạo (AI)
 
-Hệ thống hỗ trợ nhiều Provider linh hoạt:
-
 1. **Groq Cloud (Khuyên dùng)**:
-   - Sử dụng mô hình `llama-3.3-70b-versatile` với tốc độ phản hồi tính bằng mili-giây.
-   - Ứng dụng: Lệnh `!noitu` (nối từ đỉnh cao chống lặp từ), lệnh `!ai` và sự kiện `aiAutoReply`.
+   - Sử dụng model `llama-3.3-70b-versatile` với tốc độ phản hồi cực nhanh (~100-200ms).
+   - Ứng dụng: Lệnh `!noitu` (nối từ tiếng Việt thông minh, chống lặp từ) và lệnh `!ai`.
 2. **Google Gemini**: Hỗ trợ `gemini-1.5-flash` và `gemini-1.5-pro`.
 3. **OpenAI**: Hỗ trợ `gpt-4o`, `gpt-4o-mini`.
-4. **Ollama Local**: Chạy hoàn toàn offline trên máy chủ local (`llama3`, `qwen2.5`, `mistral`).
+4. **Ollama Local**: Chạy hoàn toàn offline trên máy chủ local (`llama3`, `qwen2.5`).
 5. **ComfyUI**: Tạo ảnh AI thông qua workflow cục bộ (`src/ai/comfy.js`).
 
 ---
@@ -166,7 +237,7 @@ Hệ thống hỗ trợ nhiều Provider linh hoạt:
 | `duyetbox` | `!duyetbox [list\|accept\|del]` | Duyệt và cấp quyền hoạt động cho các nhóm chat mới |
 | `mode` | `!mode [status\|set <mode>]` | Đổi chế độ bot (`all`, `admingr`, `adminbot`) |
 | `request` | `!request` | Xem và xử lý các yêu cầu thuê bot / hỗ trợ |
-| `reset` | `!reset` | Khởi động lại tiến trình bot |
+| `reset` | `!reset` | Khởi động lại toàn bộ tiến trình hệ thống |
 | `resetbotname` | `!resetbotname` | Đặt lại biệt danh mặc định của bot trong tất cả các nhóm |
 | `sendallbox` | `!sendallbox <tin nhắn>` | Gửi thông báo đến toàn bộ các nhóm bot đang tham gia |
 | `sendtobox` | `!sendtobox <threadID> <nội dung>` | Gửi tin nhắn đến một nhóm cụ thể |
@@ -284,7 +355,7 @@ Hệ thống hỗ trợ nhiều Provider linh hoạt:
 ### 7. Hệ Thống Thuê Bot (`thuebot.js`)
 Hệ thống cho thuê bot tự động hoá toàn diện:
 - Lệnh: `!thuebot`
-- Hỗ trợ: Kiểm tra thời hạn thuê, tạo giao dịch gia hạn, thông báo sắp hết hạn, tự động hạn chế tính năng khi chưa được kích hoạt thuê.
+- Hỗ trợ: Kiểm tra thời hạn thuê, tạo giao dịch chuyển khoản tự động qua SePay Webhook, thông báo sắp hết hạn, tự động phân bổ Cụm.
 - Admin có thể cấp ngày trực tiếp qua `!setthue <threadID> <số ngày>`.
 
 ---
@@ -293,7 +364,7 @@ Hệ thống cho thuê bot tự động hoá toàn diện:
 
 Bot tích hợp cơ chế cộng điểm kinh nghiệm (`EXP`) khi người dùng nhắn tin trong nhóm chat (`modules/utils/LevelSystem.js`):
 - Mỗi tin nhắn hợp lệ cộng ngẫu nhiên từ `10 - 25 EXP` (Cooldown 15 giây chống spam).
-- Công thức tính EXP thăng cấp mượt mà: `EXP = 50 * level^1.5`.
+- Công thức tính EXP thăng cấp: `EXP = 50 * level^1.5`.
 - Hệ thống danh hiệu độc quyền theo cấp bậc:
   - Cấp 1 - 5: 🌟 *Tập Sự*
   - Cấp 6 - 10: 🍀 *Mầm Non*
@@ -308,13 +379,16 @@ Bot tích hợp cơ chế cộng điểm kinh nghiệm (`EXP`) khi người dùn
 
 ## 🍪 Tự Động Trích Xuất Cookie
 
-Khi `appstate.json` hết hạn, bot có thể tự động làm mới session mà không cần copy tay:
-- **AdsPower**: Tích hợp với trình duyệt chống phát hiện qua REST API (`ADSPOWER_API`).
-- **Brave / Chrome**: Kết nối qua Remote Debugging Port (`CHROME_PORT=9222`) hoặc đọc trực tiếp profile SQLite (`export-appstate.js`).
+Khi `appstate.json` hết hạn hoặc tài khoản bị checkpoint, hệ thống tự động chạy trình duyệt headless để lấy lại cookie mới mà không cần thao tác thủ công:
+- Hỗ trợ trình duyệt Brave và Google Chrome.
+- Hỗ trợ tên Profile có dấu cách (`Profile 1`, `Profile 2`...).
+- Tích hợp khóa `extractor.lock` để đảm bảo tối đa chỉ có 1 trình duyệt chạy, tránh gây quá tải CPU/RAM máy chủ.
 
 Chạy trích xuất thủ công:
 ```bash
 node export-appstate.js
+# Hoặc xuất riêng cho 1 Profile:
+node export-appstate.js "Profile 2"
 ```
 
 ---
@@ -323,20 +397,23 @@ node export-appstate.js
 
 ### 1. Triển khai bằng PM2 (Khuyên dùng trên Linux VPS)
 ```bash
-# Cài đặt PM2
+# Cài đặt PM2 toàn cục
 npm install -g pm2
 
 # Khởi chạy bot
-pm2 start index.js --name "messenger-bot"
+pm2 start index.js --name "botmess"
 
-# Cài đặt tự khởi động cùng hệ thống
+# Lưu cấu hình tự khởi động cùng hệ thống
 pm2 startup
 pm2 save
+
+# Xem log thời gian thực
+pm2 logs botmess
 ```
 
 ### 2. Triển khai bằng Docker
 ```bash
-# Build và chạy ngầm
+# Build và chạy ngầm container
 docker compose up -d --build
 
 # Xem log thời gian thực
@@ -347,14 +424,16 @@ docker compose logs -f bot
 
 ## 🛠️ Khắc Phục Sự Cố
 
-1. **Lỗi `Error retrieving userID` hoặc Đăng nhập thất bại:**
-   - AppState hoặc Cookie đã hết hạn. Hãy đăng nhập tài khoản Facebook trên trình duyệt máy chủ, sau đó chạy `node export-appstate.js` để làm mới `runtime/appstate.json`.
+1. **Lỗi `Error retrieving userID` hoặc Cookie hết hạn:**
+   - Đăng nhập tài khoản Facebook trên trình duyệt máy chủ, sau đó chạy `node export-appstate.js` để tự động làm mới `runtime/appstates/`.
 2. **Lỗi kết nối SQLite:**
-   - Đảm bảo thư mục `/runtime` có quyền ghi (`chmod -R 755 runtime`).
+   - Đảm bảo thư mục `/runtime` có quyền ghi: `chmod -R 755 runtime`.
 3. **Bot không nhận lệnh trong nhóm:**
-   - Kiểm tra `!mode` của nhóm (có thể đang ở chế độ `admingr` hoặc `adminbot`).
+   - Kiểm tra chế độ hoạt động của nhóm: `!mode` (có thể đang ở chế độ `admingr` hoặc `adminbot`).
    - Kiểm tra thời hạn thuê bot bằng lệnh `!thuebot`.
    - Kiểm tra tiền tố lệnh của nhóm bằng cách tag bot hoặc gõ `!setprefix`.
+4. **Bot chưa nhận quyền QTV khi vừa được thăng chức:**
+   - Hệ thống tự động đồng bộ realtime qua event `log:thread-admins`. Nếu Facebook bị delay, bạn có thể gõ `!help` hoặc một lệnh bất kỳ để bot tự động làm mới dữ liệu từ SQLite Cache.
 
 ---
 
