@@ -35,14 +35,17 @@ module.exports = {
 
             if (fs.existsSync(nickFile)) {
                 try {
-                    const nickData = fs.readJsonSync(nickFile);
-                    const savedNickname = nickData[threadID] || "";
-                    if (savedNickname) {
-                        // Tách bỏ phần ngày cũ nếu có (bất kỳ chuỗi nào dạng " | [còn lại/còn] [số] ngày" ở cuối)
-                        baseName = savedNickname.replace(/\s*\|\s*(?:còn\s*(?:lại\s*)?)?\d+\s*ngày\s*$/i, "").trim();
+                    const content = fs.readFileSync(nickFile, "utf8").trim();
+                    if (content) {
+                        const nickData = JSON.parse(content);
+                        const savedNickname = nickData[threadID] || "";
+                        if (savedNickname) {
+                            // Tách bỏ phần ngày cũ nếu có (bất kỳ chuỗi nào dạng " | [còn lại/còn] [số] ngày" ở cuối)
+                            baseName = savedNickname.replace(/\s*\|\s*(?:còn\s*(?:lại\s*)?)?\d+\s*ngày\s*$/i, "").trim();
+                        }
                     }
                 } catch (e) {
-                    console.error("[checkBotNickname] Lỗi đọc file botNicknames.json:", e);
+                    console.error("[checkBotNickname] Lỗi đọc file botNicknames.json:", e.message);
                 }
             }
 
@@ -74,7 +77,7 @@ module.exports = {
                     daysLeft = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
                 }
             } catch (e) {
-                console.error("[checkBotNickname] Lỗi tính ngày hết hạn thuê:", e);
+                console.error("[checkBotNickname] Lỗi tính ngày hết hạn thuê:", e.message);
             }
 
             // Tạo biệt danh mong muốn đầy đủ
@@ -104,18 +107,27 @@ module.exports = {
                             global.allowBotNicknameChange[threadID] = 0;
                         }
                     } else {
-                        // Đổi thành công, lưu lại vào file botNicknames.json nếu chưa khớp
+                        // Đổi thành công, lưu lại vào file botNicknames.json an toàn
                         try {
                             let nickData = {};
                             if (fs.existsSync(nickFile)) {
-                                nickData = fs.readJsonSync(nickFile);
+                                try {
+                                    const raw = fs.readFileSync(nickFile, "utf8").trim();
+                                    if (raw) nickData = JSON.parse(raw);
+                                } catch (_) {
+                                    nickData = {};
+                                }
                             }
                             if (nickData[threadID] !== expectedNickname) {
                                 nickData[threadID] = expectedNickname;
-                                fs.writeJsonSync(nickFile, nickData, { spaces: 4 });
+                                const dir = path.dirname(nickFile);
+                                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                                const tmpFile = `${nickFile}.tmp.${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+                                fs.writeFileSync(tmpFile, JSON.stringify(nickData, null, 4));
+                                fs.renameSync(tmpFile, nickFile);
                             }
                         } catch (e) {
-                            console.error("[checkBotNickname] Lỗi ghi botNicknames.json:", e);
+                            console.error("[checkBotNickname] Lỗi ghi botNicknames.json:", e.message);
                         }
 
                         // Cập nhật lại cache của threadInfo
@@ -125,7 +137,7 @@ module.exports = {
                 });
             }
         } catch (error) {
-            console.error("[checkBotNickname] Lỗi xử lý kiểm tra biệt danh bot:", error);
+            console.error("[checkBotNickname] Lỗi xử lý kiểm tra biệt danh bot:", error.message);
         }
     }
 };

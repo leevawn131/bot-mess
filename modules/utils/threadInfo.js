@@ -389,22 +389,25 @@ async function syncThreadAdminRealtime(threadID, targetID, action) {
   if (!data) {
     data = await loadThreadInfoFromDb(key);
   }
-  if (!data) return;
+  if (!data) {
+    data = { threadID: key, isGroup: true, adminIDs: [], participantIDs: [], userInfo: [] };
+  }
 
   let adminIDs = Array.isArray(data.adminIDs) ? [...data.adminIDs] : [];
   
-  if (action === "add_admin") {
+  if (action === "add_admin" || action === "addAdmin") {
     const exists = adminIDs.some(item => String(item.id || item) === targetIdStr);
     if (!exists) {
       adminIDs.push({ id: targetIdStr });
     }
-  } else if (action === "remove_admin") {
+  } else if (action === "remove_admin" || action === "removeAdmin") {
     adminIDs = adminIDs.filter(item => String(item.id || item) !== targetIdStr);
   }
 
   data.adminIDs = adminIDs;
   _threadInfoCache.set(key, { data, ts: Date.now() });
-  saveThreadInfoToDb(key, data).catch(() => {});
+  await saveThreadInfoToDb(key, data).catch(() => {});
+  console.log(`[syncThreadAdminRealtime] Đã cập nhật QTV cho nhóm ${key}: ${action} UID ${targetIdStr} (Tổng QTV: ${adminIDs.length})`);
 }
 
 /**
@@ -416,7 +419,9 @@ async function syncThreadNameRealtime(threadID, newName) {
   if (!data) {
     data = await loadThreadInfoFromDb(key);
   }
-  if (!data) return;
+  if (!data) {
+    data = { threadID: key, isGroup: true, adminIDs: [], participantIDs: [], userInfo: [] };
+  }
 
   data.threadName = newName;
   data.name = newName;
@@ -433,7 +438,9 @@ async function syncThreadNicknameRealtime(threadID, targetID, nickname) {
   if (!data) {
     data = await loadThreadInfoFromDb(key);
   }
-  if (!data) return;
+  if (!data) {
+    data = { threadID: key, isGroup: true, adminIDs: [], participantIDs: [], userInfo: [] };
+  }
 
   if (!data.nicknames || typeof data.nicknames !== "object") {
     data.nicknames = {};
@@ -452,7 +459,9 @@ async function syncThreadParticipantRealtime(threadID, participantData, action) 
   if (!data) {
     data = await loadThreadInfoFromDb(key);
   }
-  if (!data) return;
+  if (!data) {
+    data = { threadID: key, isGroup: true, adminIDs: [], participantIDs: [], userInfo: [] };
+  }
 
   let participantIDs = Array.isArray(data.participantIDs) ? [...data.participantIDs] : [];
   let userInfo = Array.isArray(data.userInfo) ? [...data.userInfo] : [];

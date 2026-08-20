@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { getThreadInfoCached } = require("../utils/threadInfo");
+const { execute } = require("../utils/database");
 
 const ANTITHUHOI_DIR = path.join(__dirname, "../../cache/antithuhoi");
 const SETTINGS_PATH = path.join(ANTITHUHOI_DIR, "settings.json");
@@ -67,6 +68,7 @@ async function resolveSenderName(
   fallbackName = "Unknown",
 ) {
   if (!senderID) return fallbackName;
+  const sID = String(senderID);
 
   try {
     if (typeof getThreadInfoCached === "function") {
@@ -74,15 +76,30 @@ async function resolveSenderName(
       const memberInfo = Array.isArray(threadInfo?.userInfo)
         ? threadInfo.userInfo
         : [];
-      const found = memberInfo.find((u) => String(u.id) === String(senderID));
+      const found = memberInfo.find((u) => String(u.id) === sID);
       if (found?.name) return found.name;
     }
   } catch {}
 
+  if (global.data?.userName?.has(sID)) {
+    return global.data.userName.get(sID);
+  }
+
   try {
-    const userInfo = await api.getUserInfo(String(senderID));
-    const info = userInfo && userInfo[String(senderID)];
-    if (info && info.name) return info.name;
+    const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [sID]);
+    if (rows && rows[0] && rows[0].name) {
+      if (global.data?.userName) global.data.userName.set(sID, rows[0].name);
+      return rows[0].name;
+    }
+  } catch {}
+
+  try {
+    const userInfo = await api.getUserInfo(sID);
+    const info = userInfo && userInfo[sID];
+    if (info && info.name) {
+      if (global.data?.userName) global.data.userName.set(sID, info.name);
+      return info.name;
+    }
   } catch {}
 
   return fallbackName;

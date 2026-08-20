@@ -34,25 +34,41 @@ function buildRandomPunchMessage(actorName, targetTag) {
         .replace('{target}', targetTag);
 }
 
-async function getUserName(api, userID, fallback = 'Người dùng') {
-    try {
-        const info = await api.getUserInfo(userID);
-        const user = info?.[userID];
-        return user?.name || fallback;
-    } catch {
-        return fallback;
-    }
-}
+async function getUserName(api, userID, fallback = 'Người dùng', threadID = null) {
+    const id = String(userID || '').trim();
+    if (!id) return fallback;
 
-async function getUserNameFromThread(api, threadID, userID) {
-    try {
-        const threadInfo = await getThreadInfoCached(api, threadID);
-        const members = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
-        const found = members.find((user) => String(user.id) === String(userID));
-        return found?.name || null;
-    } catch {
-        return null;
+    if (threadID) {
+        try {
+            const threadInfo = await getThreadInfoCached(api, threadID);
+            const members = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
+            const found = members.find((user) => String(user.id) === id);
+            if (found?.name) return found.name;
+        } catch (_) {}
     }
+
+    if (global.data?.userName?.has(id)) {
+        return global.data.userName.get(id);
+    }
+
+    try {
+        const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [id]);
+        if (rows && rows[0] && rows[0].name) {
+            if (global.data?.userName) global.data.userName.set(id, rows[0].name);
+            return rows[0].name;
+        }
+    } catch (_) {}
+
+    try {
+        const info = await api.getUserInfo(id);
+        const user = info?.[id];
+        if (user?.name) {
+            if (global.data?.userName) global.data.userName.set(id, user.name);
+            return user.name;
+        }
+    } catch (_) {}
+
+    return fallback;
 }
 
 module.exports = {
@@ -85,8 +101,7 @@ module.exports = {
             if (replyName) {
                 targetName = replyName;
             } else {
-                const threadName = await getUserNameFromThread(api, threadID, targetID);
-                targetName = threadName || await getUserName(api, targetID, 'Người ấy');
+                targetName = await getUserName(api, targetID, 'Người ấy', threadID);
             }
         }
 
@@ -121,7 +136,7 @@ module.exports = {
             if (connection) connection.release();
         }
 
-        const actorName = await getUserName(api, senderID, 'Bạn');
+        const actorName = await getUserName(api, senderID, 'Bạn', threadID);
         const targetTag = `@${targetName}`;
         const gifPath = pickRandomGif();
 

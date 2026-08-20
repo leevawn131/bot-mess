@@ -36,28 +36,37 @@ async function initTable() {
 initTable().catch(() => {});
 
 async function getUserName(api, threadID, userID) {
+    const sUid = String(userID);
     try {
         const threadInfo = await getThreadInfoCached(api, threadID);
         if (threadInfo && Array.isArray(threadInfo.userInfo)) {
-            const found = threadInfo.userInfo.find(u => String(u.id) === String(userID));
+            const found = threadInfo.userInfo.find(u => String(u.id) === sUid);
             if (found && found.name) return found.name;
         }
     } catch (e) {}
 
-    if (global.data && global.data.userName && global.data.userName.has(String(userID))) {
-        return global.data.userName.get(String(userID));
+    if (global.data && global.data.userName && global.data.userName.has(sUid)) {
+        return global.data.userName.get(sUid);
     }
-    if (global.data && global.data.userName && global.data.userName.has(Number(userID))) {
-        return global.data.userName.get(Number(userID));
+    if (global.data && global.data.userName && global.data.userName.has(Number(sUid))) {
+        return global.data.userName.get(Number(sUid));
     }
 
     try {
-        const info = await api.getUserInfo(userID);
-        if (info && info[userID] && info[userID].name) {
+        const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [sUid]);
+        if (rows && rows[0] && rows[0].name) {
+            if (global.data?.userName) global.data.userName.set(sUid, rows[0].name);
+            return rows[0].name;
+        }
+    } catch (e) {}
+
+    try {
+        const info = await api.getUserInfo(sUid);
+        if (info && info[sUid] && info[sUid].name) {
             if (global.data && global.data.userName) {
-                global.data.userName.set(String(userID), info[userID].name);
+                global.data.userName.set(sUid, info[sUid].name);
             }
-            return info[userID].name;
+            return info[sUid].name;
         }
     } catch (e) {}
 

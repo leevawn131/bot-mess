@@ -64,16 +64,18 @@ async function getConnection() {
                 if (isReadQuery) {
                     db.all(translatedQuery, sanitizedParams, (err, rows) => {
                         if (err) return reject(err);
-                        resolve([rows]);
+                        resolve([rows || []]);
                     });
                 } else {
                     db.run(translatedQuery, sanitizedParams, function (err) {
                         if (err) return reject(err);
+                        const changes = this && typeof this.changes === 'number' ? this.changes : 0;
+                        const lastID = this && typeof this.lastID !== 'undefined' ? this.lastID : 0;
                         resolve([{
-                            affectedRows: this.changes,
-                            insertId: this.lastID,
-                            lastID: this.lastID,
-                            changes: this.changes
+                            affectedRows: changes,
+                            insertId: lastID,
+                            lastID: lastID,
+                            changes: changes
                         }]);
                     });
                 }

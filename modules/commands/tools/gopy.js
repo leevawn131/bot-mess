@@ -8,22 +8,38 @@ async function resolveUserName(api, uid) {
   const id = String(uid || "").trim();
   if (!id) return null;
 
+  if (global.data?.userName?.has(id)) {
+    return global.data.userName.get(id);
+  }
+
+  try {
+    const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [id]);
+    if (rows && rows[0] && rows[0].name) {
+      if (global.data?.userName) global.data.userName.set(id, rows[0].name);
+      return rows[0].name;
+    }
+  } catch {}
+
   try {
     const info = await api.getUserInfo(id);
     if (!info) return null;
 
+    let foundName = null;
     if (info[id] && typeof info[id].name === 'string' && info[id].name.trim()) {
-      return info[id].name.trim();
-    }
-    if (typeof info.name === 'string' && info.name.trim()) {
-      return info.name.trim();
-    }
-    if (Array.isArray(info) && info.length > 0) {
+      foundName = info[id].name.trim();
+    } else if (typeof info.name === 'string' && info.name.trim()) {
+      foundName = info.name.trim();
+    } else if (Array.isArray(info) && info.length > 0) {
       const first = info[0];
       if (first && typeof first === 'object') {
-        if (first[id] && typeof first[id].name === 'string') return first[id].name.trim();
-        if (typeof first.name === 'string') return first.name.trim();
+        if (first[id] && typeof first[id].name === 'string') foundName = first[id].name.trim();
+        else if (typeof first.name === 'string') foundName = first.name.trim();
       }
+    }
+
+    if (foundName) {
+      if (global.data?.userName) global.data.userName.set(id, foundName);
+      return foundName;
     }
   } catch {}
 

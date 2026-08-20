@@ -1,6 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const { checkCooldown } = require("../../utils/cooldown");
+const { execute } = require("../../utils/database");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
 // Load resolver at runtime inside execute to pick up hot-reloads
 
 function normalizeMentionLabel(text) {
@@ -92,14 +94,41 @@ function pickRandomGif() {
   return path.join(KISS_GIF_DIR, pickRandom(files));
 }
 
-async function getUserName(api, userID, fallback = "Người ấy") {
-  try {
-    const info = await api.getUserInfo(userID);
-    const user = info?.[userID];
-    return user?.name || fallback;
-  } catch {
-    return fallback;
+async function getUserName(api, userID, fallback = "Người ấy", threadID = null) {
+  const id = String(userID || "").trim();
+  if (!id) return fallback;
+
+  if (threadID) {
+    try {
+      const threadInfo = await getThreadInfoCached(api, threadID);
+      const members = Array.isArray(threadInfo?.userInfo) ? threadInfo.userInfo : [];
+      const found = members.find((user) => String(user.id) === id);
+      if (found?.name) return found.name;
+    } catch (_) {}
   }
+
+  if (global.data?.userName?.has(id)) {
+    return global.data.userName.get(id);
+  }
+
+  try {
+    const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [id]);
+    if (rows && rows[0] && rows[0].name) {
+      if (global.data?.userName) global.data.userName.set(id, rows[0].name);
+      return rows[0].name;
+    }
+  } catch (_) {}
+
+  try {
+    const info = await api.getUserInfo(id);
+    const user = info?.[id];
+    if (user?.name) {
+      if (global.data?.userName) global.data.userName.set(id, user.name);
+      return user.name;
+    }
+  } catch (_) {}
+
+  return fallback;
 }
 
 module.exports = {
@@ -121,7 +150,6 @@ module.exports = {
     // try to infer targets from thread member names (conservative: only when unique).
     if ((Object.keys(event.mentions || {}).length === 0) && String(event.body || "").includes("@")) {
       const { inferMentionEntriesFromBody } = require("../../utils/mentionResolver");
-      const { getThreadInfoCached } = require("../../utils/threadInfo");
       try {
         const threadInfo = await getThreadInfoCached(api, threadID);
         try {
@@ -169,7 +197,7 @@ module.exports = {
       targetName =
         (typeof messageReply.senderName === "string" && messageReply.senderName.trim()) ||
         (typeof messageReply.name === "string" && messageReply.name.trim()) ||
-        (await getUserName(api, targetID, "Người ấy"));
+        (await getUserName(api, targetID, "Người ấy", threadID));
     }
 
     if (!targetID) {
@@ -184,7 +212,7 @@ module.exports = {
       return api.sendMessage("😳 Tự hôn bản thân hả? Tag người khác đi nè.", threadID, messageID);
     }
 
-    const actorName = await getUserName(api, senderID, "Bạn");
+    const actorName = await getUserName(api, senderID, "Bạn", threadID);
     const targetTag = `@${targetName}`;
     const message = pickRandom(KISS_MESSAGES)
       .replace("{actor}", actorName)

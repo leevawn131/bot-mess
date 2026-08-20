@@ -1,8 +1,39 @@
 const { checkCooldown } = require("../../utils/cooldown");
 const { execute: executeQuery } = require("../../utils/database");
 const { toAdminIdList } = require("../../utils/checkPermission");
+const { getThreadInfoCached } = require("../../utils/threadInfo");
 const axios = require("axios");
 const prefix = process.env.BOT_PREFIX;
+
+async function resolveUserName(api, threadID, uid) {
+    const id = String(uid || "").trim();
+    if (!id) return "Thành viên";
+
+    try {
+        const threadInfo = await getThreadInfoCached(api, threadID);
+        if (threadInfo && Array.isArray(threadInfo.userInfo)) {
+            const found = threadInfo.userInfo.find(u => String(u.id) === id);
+            if (found && found.name) return found.name;
+        }
+    } catch (_) {}
+
+    if (global.data?.userName?.has(id)) return global.data.userName.get(id);
+
+    try {
+        const rows = await executeQuery("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [id]);
+        if (rows && rows[0] && rows[0].name) return rows[0].name;
+    } catch (_) {}
+
+    try {
+        const info = await api.getUserInfo(id);
+        if (info && info[id] && info[id].name) {
+            if (global.data?.userName) global.data.userName.set(id, info[id].name);
+            return info[id].name;
+        }
+    } catch (_) {}
+
+    return "Thành viên";
+}
 
 // Lưu trữ phiên minigame theo threadID
 global.noituSessions = global.noituSessions || {};
@@ -435,7 +466,7 @@ module.exports = {
             // Kiểm tra quyền (chủ phòng, QTV hoặc Admin Bot)
             let isGroupAdmin = false;
             try {
-                const threadInfo = await api.getThreadInfo(threadID);
+                const threadInfo = await getThreadInfoCached(api, threadID);
                 const adminIDs = toAdminIdList(threadInfo);
                 isGroupAdmin = adminIDs.includes(String(senderID));
             } catch (_) {}
@@ -485,7 +516,7 @@ module.exports = {
             // Kiểm tra quyền
             let isGroupAdmin = false;
             try {
-                const threadInfo = await api.getThreadInfo(threadID);
+                const threadInfo = await getThreadInfoCached(api, threadID);
                 const adminIDs = toAdminIdList(threadInfo);
                 isGroupAdmin = adminIDs.includes(String(senderID));
             } catch (_) {}
@@ -527,13 +558,7 @@ module.exports = {
                 return api.sendMessage("⚠️ Bạn đã đăng ký tham gia phòng này rồi!", threadID, messageID);
             }
 
-            let senderName = "Thành viên";
-            try {
-                const info = await api.getUserInfo(senderID);
-                if (info && info[senderID]) {
-                    senderName = info[senderID].name || senderName;
-                }
-            } catch (_) {}
+            const senderName = await resolveUserName(api, threadID, senderID);
 
             session.players.push({ id: senderID, name: senderName });
             session.scores[senderID] = 0;

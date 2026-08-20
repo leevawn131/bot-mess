@@ -8,14 +8,40 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const login = require("./includes/f");
 
-// Hook bắt lỗi Appstate / Cookie từ FCA Logger để tự động cào lại cookie khi cookie die
+// Helper yêu cầu Master khởi động lại RIÊNG luồng con của Cụm này (không ảnh hưởng các Cụm khác)
+const requestWorkerRestart = (reason) => {
+  if (!isMainThread && parentPort) {
+    const cId = workerData?.clusterId || 1;
+    const pName = workerData?.profileName || 'Default';
+    console.warn(`[WORKER CỤM ${cId}] 🔄 Yêu cầu Master khởi động lại RIÊNG luồng Cụm ${cId} (${reason})...`);
+    parentPort.postMessage({
+      type: "restart_worker",
+      clusterId: cId,
+      profileName: pName
+    });
+  } else {
+    scheduleLoginRetry(reason, 5000);
+  }
+};
+
+// Hook bắt lỗi Appstate / Cookie / Blocked từ FCA Logger để tự động cào lại cookie khi cookie die
 if (global.Fca && global.Fca.Require && global.Fca.Require.logger) {
   const origLoggerError = global.Fca.Require.logger.Error;
-  global.Fca.Require.logger.Error = function(...args) {
-    const msg = args.map(a => String(a || '')).join(' ');
-    if (msg.includes('Appstate') || msg.includes('Cookie Của Bạn Đã Bị Lỗi') || msg.includes('ErrAppState')) {
+  const origLoggerWarning = global.Fca.Require.logger.Warning;
+
+  const handleFcaFailure = (msg) => {
+    const isFatal = msg.includes('Appstate') || 
+                    msg.includes('Cookie Của Bạn Đã Bị Lỗi') || 
+                    msg.includes('ErrAppState') ||
+                    msg.includes('CANT NOT GET THREADINFO') ||
+                    msg.includes('MAYBE U HAS BEEN BLOCKED') ||
+                    msg.includes('1357001') ||
+                    msg.includes('1357004') ||
+                    msg.includes('1390008');
+
+    if (isFatal) {
       const activeProf = global.current_logging_profile || (!isMainThread && workerData && workerData.profileName ? workerData.profileName : 'Default');
-      console.warn(`[🚨 CẢNH BÁO FCA] Cookie của Profile "${activeProf}" bị lỗi! Tự động xóa appstate và khởi chạy Trình duyệt lấy lại cookie mới...`);
+      console.warn(`[🚨 CẢNH BÁO FCA] Cookie của Profile "${activeProf}" bị lỗi / checkpoint / block! Tự động xóa appstate và khởi chạy Trình duyệt lấy lại cookie mới...`);
       
       const brokenAppstatePath = path.join(__dirname, 'runtime', 'appstates', `appstate_${activeProf}.json`);
       try {
@@ -25,9 +51,20 @@ if (global.Fca && global.Fca.Require && global.Fca.Require.logger) {
       } catch (e) {}
 
       runAutoExtractor(activeProf);
-      scheduleLoginRetry(`tự động lấy lại cookie sau lỗi FCA cho ${activeProf}`, 5000);
+      requestWorkerRestart(`tự động lấy lại cookie sau lỗi FCA cho ${activeProf}`);
     }
+  };
+
+  global.Fca.Require.logger.Error = function(...args) {
+    const msg = args.map(a => String(a || '')).join(' ');
+    handleFcaFailure(msg);
     return origLoggerError.apply(this, args);
+  };
+
+  global.Fca.Require.logger.Warning = function(...args) {
+    const msg = args.map(a => String(a || '')).join(' ');
+    handleFcaFailure(msg);
+    return origLoggerWarning.apply(this, args);
   };
 }
 const {
@@ -45,6 +82,12 @@ const {
 const {
   getThreadInfoCached,
   clearThreadInfoCache,
+  syncThreadAdminRealtime,
+  syncThreadNameRealtime,
+  syncThreadNicknameRealtime,
+  syncThreadParticipantRealtime,
+  syncThreadImageRealtime,
+  syncThreadThemeRealtime,
 } = require("./modules/utils/threadInfo");
 const accountProfilesManager = require("./src/managers/accountProfilesManager");
 const clusterGroupTracker = require("./src/managers/clusterGroupTracker");
@@ -435,6 +478,12 @@ if (isMainThread) {
 
     worker.on('message', (msg) => {
       if (msg.type === "log") console.log(`[WORKER CỤM ${clusterId}] ${msg.text}`);
+      if (msg.type === "restart_worker") {
+        console.log(`[MASTER] 🔄 Nhận yêu cầu khởi động lại RIÊNG cho Cụm ${clusterId} (Profile: ${msg.profileName || profileName})...`);
+        if (activeWorkers[clusterId]) {
+          activeWorkers[clusterId].terminate();
+        }
+      }
     });
 
     worker.on('exit', (code) => {
@@ -577,7 +626,7 @@ const attemptLogin = () => {
             if (fs.existsSync(LEGACY_APPSTATE_PATH)) fs.unlinkSync(LEGACY_APPSTATE_PATH);
           } catch (e) {}
           runAutoExtractor(cred.profileName);
-          scheduleLoginRetry(`tự động cào lại cookie do login timeout cho ${cred.profileName}`, 5000);
+          requestWorkerRestart(`tự động cào lại cookie do login timeout cho ${cred.profileName}`);
         }
       }, 15000);
 
@@ -608,7 +657,7 @@ const attemptLogin = () => {
 
             console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" bị hết hạn cookie / checkpoint. Tự động khởi chạy Trình duyệt lấy lại cookie mới...`);
             runAutoExtractor(cred.profileName);
-            scheduleLoginRetry(`tự động lấy lại cookie mới cho ${cred.profileName}`, 5000);
+            requestWorkerRestart(`tự động lấy lại cookie mới cho ${cred.profileName}`);
             return;
           }
 
@@ -695,9 +744,7 @@ const attemptLogin = () => {
                 } catch (e) {
                   console.error("❌ Lỗi khi xoay profile do block action:", e);
                 } finally {
-                  setTimeout(() => {
-                    process.exit(0);
-                  }, 1000);
+                  requestWorkerRestart(`xoay profile do block action cho ${cred.profileName}`);
                 }
               })();
 
@@ -1127,91 +1174,7 @@ const attemptLogin = () => {
             };
           };
 
-          // Hàm lấy ngày theo Việt Nam (UTC+7)
-          const getDateStamp = (date) => {
-            const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-            const y = vnTime.getUTCFullYear();
-            const m = String(vnTime.getUTCMonth() + 1).padStart(2, "0");
-            const d = String(vnTime.getUTCDate()).padStart(2, "0");
-            return `${y}-${m}-${d}`;
-          };
-
-          const checkAndSendTopStats = async () => {
-            const now = new Date();
-            const { hours, minutes } = getVNTimeComponents(now);
-            const currentDate = getDateStamp(now);
-            const currentDay = parseInt(currentDate.split("-")[2]);
-
-            // Quét và reset chuỗi lúc 00:00-00:04 hàng ngày (giờ Việt Nam)
-            if (
-              hours === 0 &&
-              minutes >= 0 &&
-              minutes <= 4 &&
-              lastStreakResetDate !== currentDate
-            ) {
-              console.log("🕗 Đang quét và reset chuỗi tương tác (00:00)...");
-              lastStreakResetDate = currentDate;
-              writeLastTopCheckState(undefined, undefined, currentDate);
-              await performDailyStreakReset(api);
-            }
-
-            // Đọc trạng thái per-group
-            const dailyState = readDailyTopState();
-            const monthlyState = readMonthlyTopState();
-            const yesterdayKey = getPreviousDayKey(now);
-            const previousMonthKey = getPreviousMonthKey(now);
-            const stats = {};
-            if (fs.existsSync(statsPath)) {
-              try {
-                Object.assign(stats, JSON.parse(fs.readFileSync(statsPath, "utf8")));
-              } catch (e) {}
-            }
-
-            // Kiểm tra xem còn nhóm nào chưa nhận báo cáo ngày hôm qua không
-            const hasPendingDaily = Object.keys(stats).some(
-              (tid) => dailyState[tid] !== yesterdayKey
-            );
-
-            // Kiểm tra gửi top ngày từ 6:00 sáng trở đi nếu còn ít nhất 1 nhóm chưa nhận hoặc chưa gửi hôm nay
-            if (
-              (hours > 6 || (hours === 6 && minutes >= 0)) &&
-              (lastDailyCheckDate !== currentDate || hasPendingDaily)
-            ) {
-              console.log("🕗 Đang gửi TOP 10 tương tác ngày cho tất cả nhóm chưa nhận...");
-              lastDailyCheckDate = currentDate; // Đánh dấu trước để tránh gọi lặp lại
-              writeLastTopCheckState(currentDate, undefined, undefined);
-              await sendDailyTop10ToAllGroups(api);
-            }
-
-            // Kiểm tra xem còn nhóm nào chưa nhận báo cáo tháng không (chỉ gửi vào ngày đầu tiên của tháng mới - ngày 1)
-            const isFirstDayOfMonth = currentDay === 1;
-            const hasPendingMonthly = isFirstDayOfMonth && Object.keys(stats).some(
-              (tid) => monthlyState[tid] !== previousMonthKey
-            );
-
-            // Kiểm tra gửi top tháng vào ngày 1 hàng tháng từ 6:00 sáng trở đi
-            if (
-              isFirstDayOfMonth &&
-              (hours > 6 || (hours === 6 && minutes >= 0)) &&
-              (lastMonthlyCheckDate !== currentDate || hasPendingMonthly)
-            ) {
-              console.log("🕗 Đang gửi TOP 10 tương tác tháng cho tất cả nhóm chưa nhận...");
-              lastMonthlyCheckDate = currentDate;
-              writeLastTopCheckState(undefined, currentDate, undefined);
-              await sendMonthlyTop10ToAllGroups(api);
-            }
-          };
-
-          // Kiểm tra mỗi 30 giây để tránh miss thời điểm gửi
-          setInterval(checkAndSendTopStats, 30000);
-          console.log("✅ Đã bật hẹn giờ gửi TOP tương tác (6:00 sáng mỗi ngày)");
-
-          // Chạy kiểm tra ngay lập tức khi vừa đăng nhập / vừa lấy lại appstate mới
-          checkAndSendTopStats().catch((err) =>
-            console.error("❌ Lỗi kiểm tra TOP ngay sau khi có appstate/đăng nhập:", err.message)
-          );
-
-          // --- HÀM ĐẾM TIN NHẮN ---
+          // --- HÀM ĐẾM TIN NHẮN & ĐỌC TRẠNG THÁI TOP ---
           const statsPath = path.join(__dirname, "message_stats.json");
           let dailyTopStateCache = null;
           let monthlyTopStateCache = null;
@@ -1264,6 +1227,15 @@ const attemptLogin = () => {
             const dir = path.dirname(MONTHLY_TOP_STATE_PATH);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(MONTHLY_TOP_STATE_PATH, JSON.stringify(state, null, 2));
+          };
+
+          // Hàm lấy ngày theo Việt Nam (UTC+7)
+          const getDateStamp = (date) => {
+            const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+            const y = vnTime.getUTCFullYear();
+            const m = String(vnTime.getUTCMonth() + 1).padStart(2, "0");
+            const d = String(vnTime.getUTCDate()).padStart(2, "0");
+            return `${y}-${m}-${d}`;
           };
 
           const getTimeKeys = (now = new Date()) => {
@@ -1373,7 +1345,100 @@ const attemptLogin = () => {
 
           // maybeSendDailyTop10 đã bị xóa — top 10 chỉ gửi theo lịch 6:00 sáng qua sendDailyTop10ToAllGroups
 
+          // Khóa Mutex chống gửi lặp đồng thời giữa các vòng lặp interval
+          let isSendingDailyTop = false;
+          let isSendingMonthlyTop = false;
+          let isResettingDailyStreak = false;
+
+          const dailyTopFailureCooldowns = new Map(); // threadID -> timestamp
+          const dailyTopRetryCounts = new Map(); // threadID -> count
+          const monthlyTopFailureCooldowns = new Map(); // threadID -> timestamp
+          const monthlyTopRetryCounts = new Map(); // threadID -> count
+
+          /**
+           * Hàm phân giải tên người dùng 3 lớp (Tránh lỗi User XXXXXX)
+           * Lớp 1: threadInfo.userInfo
+           * Lớp 2: global.data.userName & SQLite bảng messenger_users
+           * Lớp 3: Batch api.getUserInfo (có timeout)
+           */
+          const getUserNames = async (api, uids, threadInfo) => {
+            const userMap = new Map();
+            if (threadInfo?.userInfo && Array.isArray(threadInfo.userInfo)) {
+              for (const u of threadInfo.userInfo) {
+                if (u && u.id && u.name) userMap.set(String(u.id), u.name);
+              }
+            }
+
+            const missingUids = uids.map(String).filter((id) => !userMap.has(id));
+            if (missingUids.length === 0) return userMap;
+
+            // 1. Tìm trong global.data.userName
+            if (global.data?.userName instanceof Map) {
+              for (const id of missingUids) {
+                if (global.data.userName.has(id)) {
+                  userMap.set(id, global.data.userName.get(id));
+                }
+              }
+            }
+
+            const stillMissing = missingUids.filter((id) => !userMap.has(id));
+            if (stillMissing.length === 0) return userMap;
+
+            // 2. Tìm trong SQLite (messenger_users)
+            try {
+              const { execute } = require("./modules/utils/database");
+              const placeholders = stillMissing.map(() => "?").join(",");
+              const rows = await execute(
+                `SELECT psid, name FROM messenger_users WHERE psid IN (${placeholders}) AND name IS NOT NULL AND name != 'Người dùng' AND name != ''`,
+                stillMissing
+              );
+              if (Array.isArray(rows)) {
+                for (const row of rows) {
+                  if (row && row.psid && row.name) {
+                    userMap.set(String(row.psid), row.name);
+                  }
+                }
+              }
+            } catch (e) {}
+
+            const finalMissing = stillMissing.filter((id) => !userMap.has(id));
+            if (finalMissing.length === 0) return userMap;
+
+            // 3. Batch gọi api.getUserInfo từ Facebook (timeout tối đa 5 giây)
+            if (typeof api?.getUserInfo === "function") {
+              try {
+                const info = await new Promise((resolve) => {
+                  const timer = setTimeout(() => resolve(null), 5000);
+                  api.getUserInfo(finalMissing, (err, data) => {
+                    clearTimeout(timer);
+                    if (err || !data) return resolve(null);
+                    resolve(data);
+                  });
+                });
+                if (info && typeof info === "object") {
+                  if (Array.isArray(info)) {
+                    for (const item of info) {
+                      if (item && typeof item === "object") {
+                        for (const [id, u] of Object.entries(item)) {
+                          if (u && u.name) userMap.set(String(id), u.name);
+                        }
+                      }
+                    }
+                  } else {
+                    for (const [id, u] of Object.entries(info)) {
+                      if (u && u.name) userMap.set(String(id), u.name);
+                    }
+                  }
+                }
+              } catch (e) {}
+            }
+
+            return userMap;
+          };
+
           const performDailyStreakReset = async (api) => {
+            if (isResettingDailyStreak) return;
+            isResettingDailyStreak = true;
             try {
               const stats = {};
               if (fs.existsSync(statsPath)) {
@@ -1400,14 +1465,12 @@ const attemptLogin = () => {
                     : [];
                   const participantSet = new Set(participantIDs);
 
-                  const userMap = new Map(
-                    (threadInfo.userInfo || []).map((u) => [String(u.id), u.name]),
+                  const activeUids = Object.keys(threadStats).filter(
+                    (uid) => /^\d+$/.test(uid) && (participantSet.size === 0 || participantSet.has(uid))
                   );
+                  const userMap = await getUserNames(api, activeUids, threadInfo);
 
-                  for (const uid of Object.keys(threadStats)) {
-                    if (!/^\d+$/.test(uid)) continue;
-                    if (!participantSet.has(uid)) continue;
-
+                  for (const uid of activeUids) {
                     const entry = normalizeEntry(threadStats[uid]);
                     if (entry.streak.current > 0) {
                       const yesterdayMsgCount = Number(entry.daily?.[yesterdayKey] || 0);
@@ -1437,10 +1500,14 @@ const attemptLogin = () => {
               console.log("✅ Hoàn thành quét reset chuỗi tương tác hàng ngày.");
             } catch (e) {
               console.error("❌ Lỗi quét reset chuỗi tương tác hàng ngày:", e);
+            } finally {
+              isResettingDailyStreak = false;
             }
           };
 
           const sendDailyTop10ToAllGroups = async (api) => {
+            if (isSendingDailyTop) return;
+            isSendingDailyTop = true;
             try {
               const stats = {};
               if (fs.existsSync(statsPath)) {
@@ -1451,9 +1518,31 @@ const attemptLogin = () => {
               const yesterdayKey = getPreviousDayKey();
               const todayKey = getTimeKeys().dayKey;
               const state = readDailyTopState();
+              const nowTs = Date.now();
 
               for (const threadID of Object.keys(stats)) {
                 if (state[threadID] === yesterdayKey) continue;
+
+                // Kiểm tra cooldown nếu nhóm này vừa bị lỗi
+                const cooldownUntil = dailyTopFailureCooldowns.get(threadID) || 0;
+                if (nowTs < cooldownUntil) continue;
+
+                // Kiểm tra số lần thử lại tối đa (3 lần/ngày)
+                const retries = dailyTopRetryCounts.get(threadID) || 0;
+                if (retries >= 3) continue;
+
+                // Kiểm tra trạng thái thuê bot
+                try {
+                  const { checkRentalStatus } = require("./modules/utils/rental");
+                  const isRented = await checkRentalStatus(threadID);
+                  if (!isRented) {
+                    state[threadID] = yesterdayKey;
+                    writeDailyTopState(state);
+                    continue;
+                  }
+                } catch (e) {
+                  console.error(`❌ Lỗi check rental cho top ngày nhóm ${threadID}:`, e.message);
+                }
 
                 const threadStats = stats[threadID];
                 const ranked = Object.entries(threadStats)
@@ -1494,16 +1583,15 @@ const attemptLogin = () => {
                     console.warn(`[sendDailyTop10] Không lấy được threadInfo cho nhóm ${threadID} (có thể bị rate-limit), dùng fallback.`);
                     threadInfo = { isGroup: true, userInfo: [] };
                   }
-                  if (!threadInfo.isGroup) continue;
+                  if (threadInfo.isGroup === false) continue;
 
-                  const userMap = new Map(
-                    (threadInfo.userInfo || []).map((u) => [String(u.id), u.name]),
-                  );
+                  const top10 = ranked.slice(0, 10);
+                  const userMap = await getUserNames(api, top10.map((item) => item.uid), threadInfo);
 
                   const lines = [
                     `📊 TOP 10 TƯƠNG TÁC NGÀY ${formatDayLabel(yesterdayKey)}`,
                     "━".repeat(13),
-                    ...ranked.slice(0, 10).map((item, idx) => {
+                    ...top10.map((item, idx) => {
                       const name =
                         userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
                       const currentStreak = item.streakValue || 0;
@@ -1526,7 +1614,7 @@ const attemptLogin = () => {
                     delete state[threadID + "_lostUsers"];
                   }
 
-                  await new Promise((resolve, reject) => {
+                  const sendResult = await new Promise((resolve, reject) => {
                     const bodyMsg = lines.join("\n");
                     const sendFallback = () => {
                       api.sendMessage(bodyMsg, threadID, (err, info) => {
@@ -1551,26 +1639,48 @@ const attemptLogin = () => {
                     }
                   });
 
-                  state[threadID] = yesterdayKey;
-                  writeDailyTopState(state);
-                  console.log(`✅ Đã gửi TOP 10 tương tác ngày cho nhóm ${threadID}`);
+                  // Chỉ ghi nhận thành công khi Facebook trả về xác nhận
+                  if (sendResult && (sendResult.messageID || sendResult.messageIDs || typeof sendResult === "object")) {
+                    state[threadID] = yesterdayKey;
+                    writeDailyTopState(state);
+                    dailyTopFailureCooldowns.delete(threadID);
+                    dailyTopRetryCounts.delete(threadID);
+                    console.log(`✅ Đã gửi TOP 10 tương tác ngày cho nhóm ${threadID}`);
+                  } else {
+                    throw new Error("Không nhận được messageID xác nhận từ Facebook");
+                  }
 
                   // Delay 2 giây giữa các nhóm để tránh bị Facebook throttle
                   await new Promise((r) => setTimeout(r, 2000));
                 } catch (e) {
-                  console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}:`, e.message);
-                  state[threadID] = yesterdayKey;
-                  writeDailyTopState(state);
+                  const errMsg = e?.message || String(e || "");
+                  console.error(`❌ Lỗi gửi TOP 10 cho nhóm ${threadID}:`, errMsg);
+
+                  if (errMsg.includes("1545012")) {
+                    console.warn(`⚠️ [sendDailyTop10] Bot không còn trong nhóm ${threadID} (bị kick hoặc nhóm khóa). Bỏ qua báo cáo.`);
+                    state[threadID] = yesterdayKey;
+                    writeDailyTopState(state);
+                  } else {
+                    // Lỗi tạm thời: KHÔNG đánh dấu đã gửi (tránh fake status), thiết lập cooldown 5 phút
+                    const currentRetries = (dailyTopRetryCounts.get(threadID) || 0) + 1;
+                    dailyTopRetryCounts.set(threadID, currentRetries);
+                    dailyTopFailureCooldowns.set(threadID, Date.now() + 5 * 60 * 1000);
+                    console.log(`⏳ Sẽ thử lại gửi TOP 10 cho nhóm ${threadID} sau 5 phút (Lần thử: ${currentRetries}/3)`);
+                  }
                 }
               }
 
               writeDailyTopState(state);
             } catch (e) {
               console.error("❌ Lỗi gửi TOP 10 tương tác ngày cho tất cả nhóm:", e);
+            } finally {
+              isSendingDailyTop = false;
             }
           };
 
           const sendMonthlyTop10ToAllGroups = async (api) => {
+            if (isSendingMonthlyTop) return;
+            isSendingMonthlyTop = true;
             try {
               const stats = {};
               if (fs.existsSync(statsPath)) {
@@ -1580,15 +1690,28 @@ const attemptLogin = () => {
 
               const previousMonthKey = getPreviousMonthKey();
               const state = readMonthlyTopState();
+              const nowTs = Date.now();
 
               for (const threadID of Object.keys(stats)) {
                 if (state[threadID] === previousMonthKey) continue;
+
+                // Kiểm tra cooldown nếu nhóm này vừa bị lỗi
+                const cooldownUntil = monthlyTopFailureCooldowns.get(threadID) || 0;
+                if (nowTs < cooldownUntil) continue;
+
+                // Kiểm tra số lần thử lại tối đa (3 lần)
+                const retries = monthlyTopRetryCounts.get(threadID) || 0;
+                if (retries >= 3) continue;
 
                 // Skip sending monthly stats if the group's rental has expired
                 try {
                   const { checkRentalStatus } = require("./modules/utils/rental");
                   const isRented = await checkRentalStatus(threadID);
-                  if (!isRented) continue;
+                  if (!isRented) {
+                    state[threadID] = previousMonthKey;
+                    writeMonthlyTopState(state);
+                    continue;
+                  }
                 } catch (e) {
                   console.error(`❌ Lỗi check rental cho top tháng nhóm ${threadID}:`, e.message);
                 }
@@ -1637,16 +1760,17 @@ const attemptLogin = () => {
                     console.warn(`[sendMonthlyTop10] Không lấy được threadInfo cho nhóm ${threadID} (có thể bị rate-limit), dùng fallback.`);
                     threadInfo = { isGroup: true, userInfo: [] };
                   }
-                  if (!threadInfo.isGroup) continue;
+                  if (threadInfo.isGroup === false) continue;
 
-                  const userMap = new Map(
-                    (threadInfo.userInfo || []).map((u) => [String(u.id), u.name]),
-                  );
+                  const top10 = ranked.slice(0, 10);
+                  const streakTop10 = rankedStreaks.slice(0, 10);
+                  const allNeededUids = Array.from(new Set([...top10.map(i => i.uid), ...streakTop10.map(i => i.uid)]));
+                  const userMap = await getUserNames(api, allNeededUids, threadInfo);
 
                   const lines = [
                     `📊 TOP 10 TƯƠNG TÁC THÁNG ${formatMonthLabel(previousMonthKey)}`,
                     "━".repeat(13),
-                    ...ranked.slice(0, 10).map((item, idx) => {
+                    ...top10.map((item, idx) => {
                       const name =
                         userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
                       const longest = item.streak?.longest || 0;
@@ -1664,13 +1788,13 @@ const attemptLogin = () => {
                     lines.push("");
                     lines.push("🔥 TOP 10 GIỮ CHUỖI TƯƠNG TÁC LÂU NHẤT THÁNG");
                     lines.push("━".repeat(13));
-                    rankedStreaks.slice(0, 10).forEach((item, idx) => {
+                    streakTop10.forEach((item, idx) => {
                       const name = userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
                       lines.push(`${idx + 1}. ${name} — ${item.longest} ngày`);
                     });
                   }
 
-                  await new Promise((resolve, reject) => {
+                  const sendResult = await new Promise((resolve, reject) => {
                     const bodyMsg = lines.join("\n");
                     const sendFallback = () => {
                       api.sendMessage(bodyMsg, threadID, (err, info) => {
@@ -1695,30 +1819,47 @@ const attemptLogin = () => {
                     }
                   });
 
-                  // Reset brokenCount cho toàn bộ thành viên nhóm sau khi báo cáo tháng
-                  for (const uid of Object.keys(threadStats)) {
-                    if (/^\d+$/.test(uid)) {
-                      if (stats[threadID][uid] && stats[threadID][uid].streak) {
-                        stats[threadID][uid].streak.brokenCount = 0;
+                  if (sendResult && (sendResult.messageID || sendResult.messageIDs || typeof sendResult === "object")) {
+                    // Reset brokenCount cho toàn bộ thành viên nhóm sau khi báo cáo tháng
+                    for (const uid of Object.keys(threadStats)) {
+                      if (/^\d+$/.test(uid)) {
+                        if (stats[threadID][uid] && stats[threadID][uid].streak) {
+                          stats[threadID][uid].streak.brokenCount = 0;
+                        }
                       }
                     }
-                  }
 
-                  state[threadID] = previousMonthKey;
-                  writeMonthlyTopState(state);
-                  console.log(
-                    `✅ Đã gửi TOP 10 tương tác tháng cho nhóm ${threadID}`,
-                  );
+                    state[threadID] = previousMonthKey;
+                    writeMonthlyTopState(state);
+                    monthlyTopFailureCooldowns.delete(threadID);
+                    monthlyTopRetryCounts.delete(threadID);
+                    console.log(
+                      `✅ Đã gửi TOP 10 tương tác tháng cho nhóm ${threadID}`,
+                    );
+                  } else {
+                    throw new Error("Không nhận được messageID xác nhận từ Facebook");
+                  }
 
                   // Delay 2 giây giữa các nhóm để tránh bị Facebook throttle
                   await new Promise((r) => setTimeout(r, 2000));
                 } catch (e) {
+                  const errMsg = e?.message || String(e || "");
                   console.error(
                     `❌ Lỗi gửi TOP 10 tháng cho nhóm ${threadID}:`,
-                    e.message,
+                    errMsg,
                   );
-                  state[threadID] = previousMonthKey;
-                  writeMonthlyTopState(state);
+
+                  if (errMsg.includes("1545012")) {
+                    console.warn(`⚠️ [sendMonthlyTop10] Bot không còn trong nhóm ${threadID}. Bỏ qua báo cáo.`);
+                    state[threadID] = previousMonthKey;
+                    writeMonthlyTopState(state);
+                  } else {
+                    // Lỗi tạm thời: KHÔNG đánh dấu đã gửi, thiết lập cooldown 5 phút
+                    const currentRetries = (monthlyTopRetryCounts.get(threadID) || 0) + 1;
+                    monthlyTopRetryCounts.set(threadID, currentRetries);
+                    monthlyTopFailureCooldowns.set(threadID, Date.now() + 5 * 60 * 1000);
+                    console.log(`⏳ Sẽ thử lại gửi TOP 10 tháng cho nhóm ${threadID} sau 5 phút (Lần thử: ${currentRetries}/3)`);
+                  }
                 }
               }
 
@@ -1726,8 +1867,88 @@ const attemptLogin = () => {
               writeMonthlyTopState(state);
             } catch (e) {
               console.error("❌ Lỗi gửi TOP 10 tương tác tháng cho tất cả nhóm:", e);
+            } finally {
+              isSendingMonthlyTop = false;
             }
           };
+
+          const checkAndSendTopStats = async () => {
+            const now = new Date();
+            const { hours, minutes } = getVNTimeComponents(now);
+            const currentDate = getDateStamp(now);
+            const currentDay = parseInt(currentDate.split("-")[2]);
+
+            // Quét và reset chuỗi lúc 00:00-00:04 hàng ngày (giờ Việt Nam)
+            if (
+              hours === 0 &&
+              minutes >= 0 &&
+              minutes <= 4 &&
+              lastStreakResetDate !== currentDate &&
+              !isResettingDailyStreak
+            ) {
+              console.log("🕗 Đang quét và reset chuỗi tương tác (00:00)...");
+              lastStreakResetDate = currentDate;
+              writeLastTopCheckState(undefined, undefined, currentDate);
+              await performDailyStreakReset(api);
+            }
+
+            // Đọc trạng thái per-group
+            const dailyState = readDailyTopState();
+            const monthlyState = readMonthlyTopState();
+            const yesterdayKey = getPreviousDayKey(now);
+            const previousMonthKey = getPreviousMonthKey(now);
+            const stats = {};
+            if (fs.existsSync(statsPath)) {
+              try {
+                Object.assign(stats, JSON.parse(fs.readFileSync(statsPath, "utf8")));
+              } catch (e) {}
+            }
+
+            // Kiểm tra xem còn nhóm nào chưa nhận báo cáo ngày hôm qua không
+            const hasPendingDaily = Object.keys(stats).some(
+              (tid) => dailyState[tid] !== yesterdayKey
+            );
+
+            // Kiểm tra gửi top ngày từ 6:00 sáng trở đi nếu còn ít nhất 1 nhóm chưa nhận hoặc chưa gửi hôm nay
+            if (
+              (hours > 6 || (hours === 6 && minutes >= 0)) &&
+              (lastDailyCheckDate !== currentDate || hasPendingDaily) &&
+              !isSendingDailyTop
+            ) {
+              console.log("🕗 Đang gửi TOP 10 tương tác ngày cho tất cả nhóm chưa nhận...");
+              lastDailyCheckDate = currentDate; // Đánh dấu trước để tránh gọi lặp lại
+              writeLastTopCheckState(currentDate, undefined, undefined);
+              await sendDailyTop10ToAllGroups(api);
+            }
+
+            // Kiểm tra xem còn nhóm nào chưa nhận báo cáo tháng không (chỉ gửi vào ngày đầu tiên của tháng mới - ngày 1)
+            const isFirstDayOfMonth = currentDay === 1;
+            const hasPendingMonthly = isFirstDayOfMonth && Object.keys(stats).some(
+              (tid) => monthlyState[tid] !== previousMonthKey
+            );
+
+            // Kiểm tra gửi top tháng vào ngày 1 hàng tháng từ 6:00 sáng trở đi
+            if (
+              isFirstDayOfMonth &&
+              (hours > 6 || (hours === 6 && minutes >= 0)) &&
+              (lastMonthlyCheckDate !== currentDate || hasPendingMonthly) &&
+              !isSendingMonthlyTop
+            ) {
+              console.log("🕗 Đang gửi TOP 10 tương tác tháng cho tất cả nhóm chưa nhận...");
+              lastMonthlyCheckDate = currentDate;
+              writeLastTopCheckState(undefined, currentDate, undefined);
+              await sendMonthlyTop10ToAllGroups(api);
+            }
+          };
+
+          // Kiểm tra mỗi 30 giây để tránh miss thời điểm gửi
+          setInterval(checkAndSendTopStats, 30000);
+          console.log("✅ Đã bật hẹn giờ gửi TOP tương tác (6:00 sáng mỗi ngày)");
+
+          // Chạy kiểm tra ngay lập tức khi vừa đăng nhập / vừa lấy lại appstate mới
+          checkAndSendTopStats().catch((err) =>
+            console.error("❌ Lỗi kiểm tra TOP ngay sau khi có appstate/đăng nhập:", err.message)
+          );
 
           // maybeSendMonthlyTop10 đã bị xóa — top tháng chỉ gửi theo lịch ngày 1 lúc 6:00 sáng qua sendMonthlyTop10ToAllGroups
 
@@ -1839,12 +2060,13 @@ const attemptLogin = () => {
                                        errStrFull.includes('invalid session') ||
                                        errStrFull.includes('session expired') ||
                                        errStrFull.includes('ctx') ||
-                                       errStrFull.includes('please login');
+                                       errStrFull.includes('please login') ||
+                                       errStrFull.includes('client disconnecting');
 
               const errMessage = String(err.error || err.message || err);
 
               if (isRealCheckpoint) {
-                console.error(`❌ Listen Error (Cookie hết hạn / Checkpoint / Logout) cho Profile "${cred.profileName}":`, errMessage);
+                console.error(`❌ Listen Error (Cookie hết hạn / Checkpoint / Logout / Mqtt Drop) cho Profile "${cred.profileName}":`, errMessage);
 
                 // Xóa appstate hỏng của Profile này
                 const brokenProfilePath = path.join(__dirname, 'runtime', 'appstates', `appstate_${cred.profileName}.json`);
@@ -1857,13 +2079,13 @@ const attemptLogin = () => {
 
                 console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" bị mất kết nối/die cookie. Tự động khởi chạy Trình duyệt lấy lại cookie mới...`);
                 runAutoExtractor(cred.profileName);
-                scheduleLoginRetry(`tự động lấy lại cookie mới cho ${cred.profileName}`, 5000);
+                requestWorkerRestart(`tự động lấy lại cookie mới cho ${cred.profileName}`);
                 return;
               }
 
-              // Gián đoạn MQTT tạm thời (Server unavailable / Connection lost / stop_listen) -> Thử kết nối lại mà không xóa cookie
-              console.warn(`[⚠️] Kết nối MQTT của Profile "${cred.profileName}" bị gián đoạn tạm thời (${errMessage}). Đang tự động kết nối lại sau 5 giây...`);
-              scheduleLoginRetry(`kết nối lại MQTT cho ${cred.profileName}`, 5000);
+              // Gián đoạn MQTT tạm thời (Server unavailable / Connection lost / stop_listen) -> Khởi động lại riêng luồng này
+              console.warn(`[⚠️] Kết nối MQTT của Profile "${cred.profileName}" bị gián đoạn tạm thời (${errMessage}). Khởi động lại riêng luồng này...`);
+              requestWorkerRestart(`kết nối lại MQTT cho ${cred.profileName}`);
               return;
             }
 
@@ -1939,14 +2161,29 @@ const attemptLogin = () => {
               }
 
               if (event.logMessageType || event.type === "change_thread_image") {
-                clearThreadInfoCache(event.threadID);
-                if (
-                  ["log:thread-admins", "log:thread-name", "log:thread-image", "log:user-nickname"].includes(event.logMessageType) ||
-                  event.type === "change_thread_image"
-                ) {
-                  setTimeout(() => clearThreadInfoCache(event.threadID), 2000);
-                  setTimeout(() => clearThreadInfoCache(event.threadID), 5000);
-                  setTimeout(() => clearThreadInfoCache(event.threadID), 10000);
+                const lmt = event.logMessageType || event.type;
+                const lmd = event.logMessageData || {};
+                const tid = event.threadID;
+
+                if (lmt === "log:thread-admins" && lmd) {
+                  const targetID = lmd.TARGET_ID || lmd.target_id || lmd.targetId || lmd.participant_id;
+                  const adminEvent = lmd.ADMIN_EVENT || lmd.admin_event;
+                  if (targetID && adminEvent) {
+                    syncThreadAdminRealtime(tid, targetID, adminEvent).catch(() => {});
+                  }
+                } else if (lmt === "log:thread-name" && lmd?.name) {
+                  syncThreadNameRealtime(tid, lmd.name).catch(() => {});
+                } else if (lmt === "log:user-nickname" && lmd?.participant_id) {
+                  syncThreadNicknameRealtime(tid, lmd.participant_id, lmd.nickname !== undefined ? lmd.nickname : "").catch(() => {});
+                } else if (lmt === "log:subscribe" && lmd?.addedParticipants) {
+                  syncThreadParticipantRealtime(tid, lmd.addedParticipants, "add").catch(() => {});
+                } else if (lmt === "log:unsubscribe" && lmd?.leftParticipantFbId) {
+                  syncThreadParticipantRealtime(tid, lmd.leftParticipantFbId, "remove").catch(() => {});
+                } else if (lmt === "change_thread_image" || lmt === "log:thread-image") {
+                  const imgUrl = event.image?.url || lmd?.url || "";
+                  if (imgUrl) syncThreadImageRealtime(tid, imgUrl).catch(() => {});
+                } else if (lmt === "log:thread-color" || lmt === "log:thread-icon") {
+                  syncThreadThemeRealtime(tid, { emoji: lmd.theme_emoji || lmd.thread_icon, color: lmd.theme_color }).catch(() => {});
                 }
               }
             }

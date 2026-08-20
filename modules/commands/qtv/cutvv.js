@@ -3,7 +3,40 @@ const { getAdminBotUIDs, toAdminIdList } = require("../../utils/checkPermission"
 const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
 const { getThreadInfoCached } = require("../../utils/threadInfo");
 const { addBlock, removeBlock, getBlockedList } = require("../../utils/cutvvStorage");
+const { execute } = require("../../utils/database");
 const prefix = process.env.BOT_PREFIX || "!";
+
+async function resolveCutvvUserName(api, threadID, uid, threadInfo = null) {
+  const id = String(uid || "").trim();
+  if (!id) return "Người dùng Facebook";
+
+  if (threadInfo && Array.isArray(threadInfo.userInfo)) {
+    const found = threadInfo.userInfo.find(u => String(u.id) === id);
+    if (found?.name) return found.name;
+  }
+
+  if (global.data?.userName?.has(id)) {
+    return global.data.userName.get(id);
+  }
+
+  try {
+    const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [id]);
+    if (rows && rows[0] && rows[0].name) {
+      if (global.data?.userName) global.data.userName.set(id, rows[0].name);
+      return rows[0].name;
+    }
+  } catch (_) {}
+
+  try {
+    const uInfo = await api.getUserInfo(id);
+    if (uInfo && uInfo[id]?.name) {
+      if (global.data?.userName) global.data.userName.set(id, uInfo[id].name);
+      return uInfo[id].name;
+    }
+  } catch (_) {}
+
+  return "Người dùng Facebook";
+}
 
 module.exports = {
   name: "cutvv",
@@ -94,31 +127,51 @@ module.exports = {
 
         if (uidsToFetch.length > 0) {
           try {
-            const rawUserInfo = await api.getUserInfo(uidsToFetch) || {};
-            // Gộp tất cả các object (trong trường hợp API trả về Array của Object)
-            const mergedInfo = {};
-            if (Array.isArray(rawUserInfo)) {
-              rawUserInfo.forEach(item => {
-                if (item && typeof item === "object") {
-                  Object.assign(mergedInfo, item);
-                }
-              });
-            } else if (rawUserInfo && typeof rawUserInfo === "object") {
-              Object.assign(mergedInfo, rawUserInfo);
-            }
-
-            const { execute } = require("../../utils/database");
+            const missingFromCache = [];
             for (const uid of uidsToFetch) {
-              const name = mergedInfo[uid]?.name;
-              if (name && name !== "Người dùng Facebook") {
+              const uIdStr = String(uid);
+              let foundName = null;
+              if (global.data?.userName?.has(uIdStr)) {
+                foundName = global.data.userName.get(uIdStr);
+              } else {
+                const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [uIdStr]);
+                if (rows && rows[0] && rows[0].name) {
+                  foundName = rows[0].name;
+                  if (global.data?.userName) global.data.userName.set(uIdStr, foundName);
+                }
+              }
+              if (foundName && foundName !== "Người dùng Facebook") {
                 await execute(
                   "UPDATE thread_blocked_members SET name = ? WHERE thread_id = ? AND user_id = ?",
-                  [name, String(threadID), String(uid)]
+                  [foundName, String(threadID), uIdStr]
                 );
-                // Cập nhật tên mới vào mảng pageUsers để hiển thị ngay
-                const userObj = pageUsers.find(u => u.user_id === uid);
-                if (userObj) {
-                  userObj.name = name;
+                const userObj = pageUsers.find(u => String(u.user_id) === uIdStr);
+                if (userObj) userObj.name = foundName;
+              } else {
+                missingFromCache.push(uIdStr);
+              }
+            }
+
+            if (missingFromCache.length > 0) {
+              const rawUserInfo = await api.getUserInfo(missingFromCache) || {};
+              const mergedInfo = {};
+              if (Array.isArray(rawUserInfo)) {
+                rawUserInfo.forEach(item => {
+                  if (item && typeof item === "object") Object.assign(mergedInfo, item);
+                });
+              } else if (rawUserInfo && typeof rawUserInfo === "object") {
+                Object.assign(mergedInfo, rawUserInfo);
+              }
+              for (const uid of missingFromCache) {
+                const name = mergedInfo[uid]?.name;
+                if (name && name !== "Người dùng Facebook") {
+                  if (global.data?.userName) global.data.userName.set(uid, name);
+                  await execute(
+                    "UPDATE thread_blocked_members SET name = ? WHERE thread_id = ? AND user_id = ?",
+                    [name, String(threadID), String(uid)]
+                  );
+                  const userObj = pageUsers.find(u => String(u.user_id) === uid);
+                  if (userObj) userObj.name = name;
                 }
               }
             }
@@ -138,35 +191,37 @@ module.exports = {
         msg += "\n💬 Reply tin nhắn này kèm số thứ tự (ví dụ: 1 2) để gỡ cấm vĩnh viễn.";
         if (totalPages > 1) {
           const botPrefix = process.env.BOT_PREFIX || "!";
-          msg += `\n💡 Dùng ${botPrefix}cutvv list <số trang> hoặc reply "page <số trang>" để xem trang khác.`;
+          msg += `\n📄 Dùng \`${botPrefix}cutvv list [trang]\` để xem các trang khác.`;
         }
 
-        const info = await api.sendMessage(msg, threadID, messageID);
-
-        if (!global.client) global.client = {};
-        if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
-        global.client.handleReply.push({
-          name: "cutvv",
-          author: senderID,
-          messageID: info.messageID,
-          threadID: threadID,
-          page: page,
-          totalPages: totalPages,
-          startIndex: startIndex,
-          pageUIDs: pageUsers.map(u => u.user_id),
-          allUIDs: blockedUsers.map(u => u.user_id)
-        });
-        return info;
+        return api.sendMessage(
+          msg,
+          threadID,
+          (err, info) => {
+            if (err) return;
+            if (!global.client) global.client = {};
+            if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
+            global.client.handleReply.push({
+              name: "cutvv",
+              messageID: info.messageID,
+              author: senderID,
+              threadID: threadID,
+              pageUsers: pageUsers,
+              page: page
+            });
+          },
+          messageID
+        );
       }
 
       // 2. SUBCOMMAND: UNBAN (Gỡ cấm)
-      if (subcommand === "unban" || subcommand === "gỡ" || subcommand === "remove") {
+      if (args[0] && (args[0].toLowerCase() === "unban" || args[0].toLowerCase() === "remove" || args[0].toLowerCase() === "del")) {
         let targetID = null;
 
-        if (event.type === "message_reply") {
-          targetID = event.messageReply.senderID;
-        } else if (Object.keys(mentions || {}).length > 0) {
+        if (Object.keys(mentions || {}).length > 0) {
           targetID = Object.keys(mentions)[0];
+        } else if (event.type === "message_reply") {
+          targetID = event.messageReply.senderID;
         } else if (args[1] && !isNaN(args[1])) {
           targetID = args[1];
         } else if (args[1]) {
@@ -205,13 +260,7 @@ module.exports = {
 
         const removed = await removeBlock(threadID, targetID);
         if (removed) {
-          let userName = targetID;
-          try {
-            const uInfo = await api.getUserInfo(String(targetID));
-            if (uInfo && uInfo[String(targetID)]) {
-              userName = uInfo[String(targetID)].name;
-            }
-          } catch (e) {}
+          const userName = await resolveCutvvUserName(api, threadID, targetID, threadInfo);
 
           return api.sendMessage(
             `✅ Đã gỡ cấm vĩnh viễn cho thành viên: ${userName} (${targetID}).\nBây giờ người này có thể tham gia lại nhóm.`,
@@ -285,18 +334,7 @@ module.exports = {
           continue;
         }
 
-        let targetName = "Người dùng Facebook";
-        const userInfoInThread = (threadInfo.userInfo || []).find(u => String(u.id) === targetStr);
-        if (userInfoInThread && userInfoInThread.name) {
-          targetName = userInfoInThread.name;
-        } else {
-          try {
-            const uInfo = await api.getUserInfo(targetStr);
-            if (uInfo && uInfo[targetStr]) {
-              targetName = uInfo[targetStr].name || targetName;
-            }
-          } catch (e) {}
-        }
+        const targetName = await resolveCutvvUserName(api, threadID, targetStr, threadInfo);
 
         const added = await addBlock(threadID, targetStr, targetName, senderID);
         if (added) {

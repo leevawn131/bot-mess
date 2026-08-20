@@ -46,36 +46,45 @@ module.exports = {
     try {
       connection = await getConnection();
 
-      // 2. HÀM LẤY TÊN (CHIÊU CUỐI: USER INFO + THREAD SCAN)
+      // 2. HÀM LẤY TÊN (ƯU TIÊN MENTIONS -> CACHE -> DATABASE -> API)
       const getName = async (uid) => {
         if (mentions[uid]) return mentions[uid].replace("@", "");
 
-        const apiName = await new Promise((resolve) => {
-          api.getUserInfo(uid, (err, info) => {
-            if (err || !info || !info[uid]) return resolve(null);
-            resolve(info[uid].name);
-          });
-        });
-        if (apiName) return apiName;
+        const strUid = String(uid);
+        if (global.data?.userName?.has(strUid)) {
+          return global.data.userName.get(strUid);
+        }
 
         try {
           const threadInfo = await getThreadInfoCached(api, threadID);
-          const mem = threadInfo.userInfo.find((u) => u.id == uid);
+          const mem = (threadInfo?.userInfo || []).find((u) => String(u.id) === strUid);
           if (mem && mem.name) return mem.name;
         } catch (e) { }
 
         try {
           const [rows] = await connection.execute(
-            "SELECT name FROM messenger_users WHERE thread_id = ? AND psid = ?",
-            [stringThreadID, String(uid)],
+            "SELECT name FROM messenger_users WHERE thread_id = ? AND psid = ? AND name != 'Người dùng' AND name != 'Thành viên mới' AND name != '' LIMIT 1",
+            [stringThreadID, strUid],
           );
           if (
             rows.length > 0 &&
-            rows[0].name &&
-            rows[0].name !== "Thành viên mới"
-          )
+            rows[0].name
+          ) {
+            if (global.data?.userName) global.data.userName.set(strUid, rows[0].name);
             return rows[0].name;
+          }
         } catch (e) { }
+
+        const apiName = await new Promise((resolve) => {
+          api.getUserInfo(strUid, (err, info) => {
+            if (err || !info || !info[strUid]) return resolve(null);
+            resolve(info[strUid].name);
+          });
+        });
+        if (apiName) {
+          if (global.data?.userName) global.data.userName.set(strUid, apiName);
+          return apiName;
+        }
 
         return "Thành viên mới";
       };

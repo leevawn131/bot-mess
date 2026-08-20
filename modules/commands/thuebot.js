@@ -61,25 +61,38 @@ async function sendRentedList(api, threadID, senderID, page) {
 
       let renterName = "Không rõ";
       try {
-        if (renterId) {
-          const uInfo = await api.getUserInfo(renterId);
-          if (uInfo && uInfo[renterId] && uInfo[renterId].name) {
-            renterName = `${uInfo[renterId].name} (${renterId})`;
-          } else {
-            renterName = renterId;
-          }
-        } else {
+        let targetUid = renterId;
+        if (!targetUid) {
           const tx = await execute(
             "SELECT user_id FROM transactions WHERE thread_id = ? AND status = 'success' ORDER BY created_at DESC LIMIT 1",
             [rThreadID]
           );
           if (tx && tx.length > 0) {
-            const uid = tx[0].user_id;
-            const uInfo = await api.getUserInfo(uid);
-            if (uInfo && uInfo[uid] && uInfo[uid].name) {
-              renterName = `${uInfo[uid].name} (${uid})`;
+            targetUid = tx[0].user_id;
+          }
+        }
+
+        if (targetUid) {
+          const id = String(targetUid).trim();
+          if (global.data?.userName?.has(id)) {
+            renterName = `${global.data.userName.get(id)} (${id})`;
+          } else {
+            const dbRows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [id]);
+            if (dbRows && dbRows[0] && dbRows[0].name) {
+              if (global.data?.userName) global.data.userName.set(id, dbRows[0].name);
+              renterName = `${dbRows[0].name} (${id})`;
             } else {
-              renterName = uid;
+              try {
+                const uInfo = await api.getUserInfo(id);
+                if (uInfo && uInfo[id] && uInfo[id].name) {
+                  if (global.data?.userName) global.data.userName.set(id, uInfo[id].name);
+                  renterName = `${uInfo[id].name} (${id})`;
+                } else {
+                  renterName = id;
+                }
+              } catch (_) {
+                renterName = id;
+              }
             }
           }
         }

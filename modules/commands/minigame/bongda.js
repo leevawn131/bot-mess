@@ -1364,15 +1364,22 @@ Ví dụ: "1 50k" hoặc "6 all" hoặc "4 half"
     }
 
     let senderName = "Người dùng";
-    try {
-      const userInfo = await api.getUserInfo(senderID);
-      if (userInfo && userInfo[senderID]) {
-        senderName = userInfo[senderID].name;
-      }
-    } catch (e) {
-      if (global.data && global.data.userName && global.data.userName.has(senderID)) {
-        senderName = global.data.userName.get(senderID);
-      }
+    if (global.data?.userName?.has(senderID)) {
+      senderName = global.data.userName.get(senderID);
+    } else {
+      try {
+        const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [String(senderID)]);
+        if (rows && rows[0] && rows[0].name) {
+          senderName = rows[0].name;
+          if (global.data?.userName) global.data.userName.set(senderID, senderName);
+        } else {
+          const userInfo = await api.getUserInfo(senderID);
+          if (userInfo && userInfo[senderID]?.name) {
+            senderName = userInfo[senderID].name;
+            if (global.data?.userName) global.data.userName.set(senderID, senderName);
+          }
+        }
+      } catch (e) {}
     }
 
     const user = await ensureUserAccount(threadID, senderID, senderName);

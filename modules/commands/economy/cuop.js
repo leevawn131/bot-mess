@@ -268,10 +268,23 @@ module.exports = {
       // Xử lý tên nạn nhân
       let targetName = targetData ? targetData.name : "Nạn nhân";
       if (!targetData) {
-        try {
-          const userInfo = await api.getUserInfo(targetID);
-          targetName = userInfo[targetID].name;
-        } catch (e) { }
+        if (global.data?.userName?.has(String(targetID))) {
+          targetName = global.data.userName.get(String(targetID));
+        } else {
+          try {
+            const rows = await execute("SELECT name FROM messenger_users WHERE psid = ? AND name != 'Người dùng' AND name != '' LIMIT 1", [String(targetID)]);
+            if (rows && rows[0] && rows[0].name) {
+              targetName = rows[0].name;
+              if (global.data?.userName) global.data.userName.set(String(targetID), targetName);
+            } else {
+              const userInfo = await api.getUserInfo(targetID);
+              if (userInfo && userInfo[targetID]?.name) {
+                targetName = userInfo[targetID].name;
+                if (global.data?.userName) global.data.userName.set(String(targetID), targetName);
+              }
+            }
+          } catch (e) { }
+        }
       }
 
       // Kiểm tra điều kiện cướp

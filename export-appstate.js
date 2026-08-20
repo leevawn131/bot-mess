@@ -1132,7 +1132,8 @@ async function main() {
         const profilePath = getBraveUserDataDir();
         const allProfiles = getBraveProfileDirectories(profilePath);
         
-        let targetProfile = process.argv.slice(2).find(arg => !arg.startsWith('--')) || '';
+        const nonFlagArgs = process.argv.slice(2).filter(arg => !arg.startsWith('--'));
+        let targetProfile = nonFlagArgs.join(' ').trim();
         let candidateProfilesToUse = [];
         
         const activeInfoPath = path.join(__dirname, 'runtime', 'active_profile.json');
@@ -1195,9 +1196,9 @@ async function main() {
         if (targetProfile) {
             try {
                 const psOutput = require("child_process").execSync("ps aux | grep brave").toString();
-                const match = psOutput.match(/--remote-debugging-port=9222.*--profile-directory=([^\s]+)/);
-                if (match && match[1]) {
-                    let activeCdpProfile = match[1];
+                const match = psOutput.match(/--remote-debugging-port=9222.*--profile-directory=(?:["']([^"']+)["']|([^\s]+))/);
+                if (match && (match[1] || match[2])) {
+                    let activeCdpProfile = match[1] || match[2];
                     // Normalize "Profile 1" vs "Profile\ 1"
                     activeCdpProfile = activeCdpProfile.replace(/\\ /g, ' ');
                     if (activeCdpProfile !== targetProfile) {
