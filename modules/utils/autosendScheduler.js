@@ -181,6 +181,9 @@ async function checkAndSendAutosend(api) {
       runningJobs.add(job.id);
       console.log(`[AUTOSEND] Thực thi Job ID ${job.id} cho nhóm ${job.thread_id} (tại Cụm ${myClusterId})`);
 
+      // Cập nhật ngay last_sent trong DB để tránh race condition và lặp vô tận khi tin nhắn bị delay/timeout
+      await execute("UPDATE autosend_jobs SET last_sent = ? WHERE id = ?", [dateKey, job.id]).catch(() => {});
+
       // Thực thi công việc bất đồng bộ độc lập
       (async () => {
         try {
@@ -275,7 +278,7 @@ async function checkAndSendAutosend(api) {
                 }
               } else {
                 const localPath = path.isAbsolute(media) 
-                  ? media 
+                ? media 
                   : path.resolve(__dirname, "../../", media);
                 
                 if (fs.existsSync(localPath)) {
@@ -304,13 +307,14 @@ async function checkAndSendAutosend(api) {
             // Gửi tin nhắn có timeout 15 giây phòng trường hợp callback bị treo
             await new Promise((resolve) => {
               let isResolved = false;
-              const timeout = setTimeout(() => {
+              const timeout = setTimeout(async () => {
                 if (!isResolved) {
                   isResolved = true;
                   console.warn(`[AUTOSEND] Gửi tin nhắn Job ID ${job.id} quá 15s timeout.`);
                   if (isTempFile && tempFilePath && fs.existsSync(tempFilePath)) {
                     fs.unlink(tempFilePath, () => {});
                   }
+                  await execute("UPDATE autosend_jobs SET last_sent = ? WHERE id = ?", [dateKey, job.id]).catch(() => {});
                   resolve();
                 }
               }, 15000);
@@ -347,6 +351,7 @@ async function checkAndSendAutosend(api) {
             if (isTempFile && tempFilePath && fs.existsSync(tempFilePath)) {
               fs.unlink(tempFilePath, () => {});
             }
+            await execute("UPDATE autosend_jobs SET last_sent = ? WHERE id = ?", [dateKey, job.id]).catch(() => {});
           }
         } finally {
           runningJobs.delete(job.id);

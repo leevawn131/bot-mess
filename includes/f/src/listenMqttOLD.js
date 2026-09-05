@@ -293,11 +293,19 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
           callback,
           type
         } = ctx.callback_Task[request_ID];
+        
+        let apiError = null;
+        if (payload && payload.step) {
+          apiError = findRemoveTaskError(payload.step);
+        }
+
         const Data = new getRespData(type, payload);
         if (!callback) {
           return;
         }
-        else if (!Data) {
+        if (apiError) {
+          callback({ error: apiError, errorCode: apiError }, null);
+        } else if (!Data) {
           callback("Something went wrong 🐳", null);
         } else {
           callback(null, Data);
@@ -370,6 +378,23 @@ function getRespData(Type, payload) {
     return null;
   }
 }
+function findRemoveTaskError(step) {
+  if (!Array.isArray(step)) return null;
+  if (step[0] === 5 && step[1] === "removeTask" && Array.isArray(step[2]) && Array.isArray(step[3])) {
+    if (step[3].length === 1 && step[3][0] === 9) {
+      return null;
+    }
+    return step[3][1] || "Unknown LightSpeed Error";
+  }
+  for (let i = 0; i < step.length; i++) {
+    if (Array.isArray(step[i])) {
+      const err = findRemoveTaskError(step[i]);
+      if (err) return err;
+    }
+  }
+  return null;
+}
+
 
 function LogUptime() {
   const uptime = process.uptime();

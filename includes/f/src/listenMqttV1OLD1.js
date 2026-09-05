@@ -674,6 +674,14 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                                         })();
                                     break;
                                 case "UserMessage":
+                                    var mobj = {};
+                                    if (fetchData.message && fetchData.message.ranges) {
+                                        for (var n in fetchData.message.ranges) {
+                                            if (fetchData.message.ranges[n] && fetchData.message.ranges[n].entity && fetchData.message.ranges[n].entity.id) {
+                                                mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || "").substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                                            }
+                                        }
+                                    }
                                     log.info("ff-Return", {
                                         type: "message",
                                         senderID: utils.formatID(fetchData.message_sender.id),
@@ -698,7 +706,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                                             subattachments: fetchData.extensible_attachment.subattachments,
                                             properties: fetchData.extensible_attachment.story_attachment.properties,
                                         }],
-                                        mentions: {},
+                                        mentions: mobj,
                                         timestamp: parseInt(fetchData.timestamp_precise),
                                         isGroup: (fetchData.message_sender.id != tid.toString())
                                     });
@@ -726,7 +734,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                                             subattachments: fetchData.extensible_attachment.subattachments,
                                             properties: fetchData.extensible_attachment.story_attachment.properties,
                                         }],
-                                        mentions: {},
+                                        mentions: mobj,
                                         timestamp: parseInt(fetchData.timestamp_precise),
                                         isGroup: (fetchData.message_sender.id != tid.toString())
                                     });

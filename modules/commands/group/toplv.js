@@ -71,7 +71,7 @@ module.exports = {
             const topList = levelRanked.slice(0, limit);
 
             let msg = `🏆 BẢNG XẾP HẠNG LEVEL NHÓM 🏆\n`;
-            msg += `━━━━━━━━━━━━━━━━━\n`;
+            msg += `━━━━━━━━━━━━━\n`;
 
             const formatNum = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
@@ -80,7 +80,7 @@ module.exports = {
                 msg += `${index + 1}. ${item.name} - Cấp ${item.level} ${titleInfo.icon} ${titleInfo.title}\n`;
             });
 
-            msg += `━━━━━━━━━━━━━━━━━\n`;
+            msg += `━━━━━━━━━━━━━\n`;
             msg += `👉 Hãy tích cực trò chuyện để nâng cao thứ hạng của bạn!`;
 
             return api.sendMessage(msg, threadID, messageID);

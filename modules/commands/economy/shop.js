@@ -119,14 +119,14 @@ async function handleBanCa(api, threadID, messageID, senderID) {
     const newBalance = user ? user.credits : 0;
 
     let msg = `💵 HÓA ĐƠN BÁN CÁ THÀNH CÔNG (THẾ GIỚI NÀY)!\n`;
-    msg += `━━━━━━━━━━━━━━━━━━\n`;
+    msg += `━━━━━━━━━━━━━\n`;
     msg += `🐟 Tổng số cá đã bán: ${fishList.length} con\n`;
     if (kingCount > 0) {
       msg += `👑 Cá Kỷ Lục (King Size): ${kingCount} con\n`;
     }
     msg += `💰 Tổng xu thu về: +${totalXu.toLocaleString('vi-VN')} xu!\n`;
     msg += `💳 Số dư hiện tại: ${newBalance.toLocaleString('vi-VN')} xu\n`;
-    msg += `━━━━━━━━━━━━━━━━━━\n`;
+    msg += `━━━━━━━━━━━━━\n`;
     msg += `✨ Cảm ơn bạn đã giao dịch tại Chợ Cá!`;
 
     return api.sendMessage(msg, threadID, messageID);

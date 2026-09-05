@@ -22,18 +22,27 @@ module.exports = function (defaultFuncs, api, ctx) {
 			};
 		}
 
+		if (!ctx.mqttClient || !ctx.mqttClient.connected) {
+			var connErr = new Error("MQTT client is not connected");
+			callback(connErr, null);
+			return returnPromise;
+		}
+
         const Payload = {
-            message_id:messageID,
-            thread_key:threadID,
+            message_id: messageID,
+            thread_key: threadID,
             sync_group: 1
         };
 
-        if (messageID != undefined || messageID != null) Payload.reply_metadata = {
-            reply_source_id: messageID,
-            reply_source_type: 1,
-            reply_type: 0
-        };
+        if (messageID != undefined && messageID != null) {
+            Payload.reply_metadata = {
+                reply_source_id: messageID,
+                reply_source_type: 1,
+                reply_type: 0
+            };
+        }
 
+        var reqID = ++ctx.req_ID;
         const Form = JSON.stringify({
             app_id: "2220391788200892",
             payload: JSON.stringify({
@@ -46,20 +55,49 @@ module.exports = function (defaultFuncs, api, ctx) {
                 }],
                 epoch_id: utils.generateOfflineThreadingID(),
                 version_id: '9094446350588544',
-
             }),
-            request_id: ++ctx.req_ID,
+            request_id: reqID,
             type: 3
         });
 
-		ctx.mqttClient.publish('/ls_req', Form,{
-            qos: 1,
-            retain: false,
-        });
-        ctx.callback_Task[ctx.req_ID] = new Object({
-            callback,
+        var isFinished = false;
+        var fallbackTimer = null;
+
+        var cleanupAndResolve = function (err, data) {
+            if (isFinished) return;
+            isFinished = true;
+            if (fallbackTimer) {
+                clearTimeout(fallbackTimer);
+                fallbackTimer = null;
+            }
+            if (ctx.callback_Task && ctx.callback_Task[reqID]) {
+                delete ctx.callback_Task[reqID];
+            }
+            callback(err, data);
+        };
+
+        // Safety timeout 1.5s
+        fallbackTimer = setTimeout(function () {
+            cleanupAndResolve(null, { success: true });
+        }, 1500);
+
+        ctx.callback_Task[reqID] = new Object({
+            callback: cleanupAndResolve,
             type: "unsendMqttMessage",
         });
+
+        try {
+            ctx.mqttClient.publish('/ls_req', Form, {
+                qos: 1,
+                retain: false,
+            }, function (pubErr) {
+                if (pubErr) {
+                    cleanupAndResolve(pubErr, null);
+                }
+            });
+        } catch (pubErr) {
+            cleanupAndResolve(pubErr, null);
+        }
         
 		return returnPromise;
 	};

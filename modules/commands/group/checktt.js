@@ -881,13 +881,13 @@ module.exports = {
         const formatNum = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
         const lines = [
           "🏆 BẢNG XẾP HẠNG LEVEL NHÓM 🏆",
-          "━━━━━━━━━━━━━━━━━",
+          "━━━━━━━━━━━━━",
           ...levelRanked.map((item, idx) => {
             const status = item.inGroup ? "" : " (❌)";
             const titleInfo = LevelSystem.getTitle(item.level);
             return `${idx + 1}. ${item.name}${status} - Cấp ${item.level} [${titleInfo.icon} ${titleInfo.title}]`;
           }),
-          "━━━━━━━━━━━━━━━━━",
+          "━━━━━━━━━━━━━",
           "👉 Hãy tích cực trò chuyện để nâng cao thứ hạng của bạn!"
         ];
 

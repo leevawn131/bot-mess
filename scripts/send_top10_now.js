@@ -5,38 +5,8 @@ const login = require('../includes/f');
 const DAILY_TOP_STATE_PATH = path.join(__dirname, '..', 'cache', 'checktt_daily_top_state.json');
 const MONTHLY_TOP_STATE_PATH = path.join(__dirname, '..', 'cache', 'checktt_monthly_top_state.json');
 const STATS_PATH = path.join(__dirname, '..', 'message_stats.json');
-
-const THREAD_INFO_TTL = 5 * 60 * 1000;
-const _threadInfoCache = new Map();
-
-try {
-  const npmlog = require('../includes/f/node_modules/npmlog');
-  npmlog.error = () => {};
-} catch (e) {}
-
-async function _quietGetThreadInfo(api, key) {
-  const _origErr = console.error;
-  console.error = () => {};
-  try {
-    return await api.getThreadInfo(key);
-  } finally {
-    console.error = _origErr;
-  }
-}
-
-async function getThreadInfoCached(api, threadID) {
-  const key = String(threadID);
-  const cached = _threadInfoCache.get(key);
-  if (cached && Date.now() - cached.ts < THREAD_INFO_TTL) return cached.data;
-  try {
-    const info = await _quietGetThreadInfo(api, key);
-    if (info) _threadInfoCache.set(key, { data: info, ts: Date.now() });
-    return info;
-  } catch (e) {
-    if (cached) return cached.data;
-    return null;
-  }
-}
+const { getThreadInfoCached } = require('../modules/utils/threadInfo');
+const { execute } = require('../modules/utils/database');
 
 const getClusterGroupSet = async (clusterId) => {
   if (!clusterId) return null;
@@ -156,6 +126,12 @@ const writeState = (filePath, state) => {
   } catch (e) {}
 };
 
+/**
+ * Hàm phân giải tên người dùng 3 lớp (Tránh lỗi User XXXXXX)
+ * Lớp 1: threadInfo.userInfo
+ * Lớp 2: global.data.userName & SQLite bảng messenger_users
+ * Lớp 3: Batch api.getUserInfo (có timeout tối đa 5s)
+ */
 async function getUserNames(api, uids, threadInfo) {
   const userMap = new Map();
   if (threadInfo?.userInfo && Array.isArray(threadInfo.userInfo)) {
@@ -163,11 +139,48 @@ async function getUserNames(api, uids, threadInfo) {
       if (u && u.id && u.name) userMap.set(String(u.id), u.name);
     }
   }
-  const missingUids = uids.filter((id) => !userMap.has(String(id)));
-  if (missingUids.length > 0 && typeof api?.getUserInfo === 'function') {
+
+  const missingUids = uids.map(String).filter((id) => !userMap.has(id));
+  if (missingUids.length === 0) return userMap;
+
+  // 1. Tìm trong global.data.userName
+  if (global.data?.userName instanceof Map) {
+    for (const id of missingUids) {
+      if (global.data.userName.has(id)) {
+        userMap.set(id, global.data.userName.get(id));
+      }
+    }
+  }
+
+  const stillMissing = missingUids.filter((id) => !userMap.has(id));
+  if (stillMissing.length === 0) return userMap;
+
+  // 2. Tìm trong SQLite (messenger_users)
+  try {
+    const placeholders = stillMissing.map(() => '?').join(',');
+    const rows = await execute(
+      `SELECT psid, name FROM messenger_users WHERE psid IN (${placeholders}) AND name IS NOT NULL AND name != 'Người dùng' AND name != ''`,
+      stillMissing
+    );
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        if (row && row.psid && row.name) {
+          userMap.set(String(row.psid), row.name);
+        }
+      }
+    }
+  } catch (e) {}
+
+  const finalMissing = stillMissing.filter((id) => !userMap.has(id));
+  if (finalMissing.length === 0) return userMap;
+
+  // 3. Batch gọi api.getUserInfo từ Facebook (timeout tối đa 5 giây)
+  if (typeof api?.getUserInfo === 'function') {
     try {
       const info = await new Promise((resolve) => {
-        api.getUserInfo(missingUids, (err, data) => {
+        const timer = setTimeout(() => resolve(null), 5000);
+        api.getUserInfo(finalMissing, (err, data) => {
+          clearTimeout(timer);
           if (err || !data) return resolve(null);
           resolve(data);
         });
@@ -189,6 +202,7 @@ async function getUserNames(api, uids, threadInfo) {
       }
     } catch (e) {}
   }
+
   return userMap;
 }
 
@@ -261,12 +275,11 @@ const sendDailyTop10ToAllGroups = async (api, force = false, clusterFilter = nul
         if (threadInfo.isGroup === false) continue;
 
         const top10 = ranked.slice(0, 10);
-        const userMap = await getUserNames(api, top10.map(item => item.uid), threadInfo);
 
         // Chuẩn bị danh sách đứt chuỗi
         let lostUsers = state[threadID + "_lostUsers"];
+        const pendingLostUids = [];
         if (!Array.isArray(lostUsers)) {
-          lostUsers = [];
           const participantIDs = Array.isArray(threadInfo?.participantIDs)
             ? threadInfo.participantIDs.map((id) => String(id))
             : [];
@@ -280,9 +293,8 @@ const sendDailyTop10ToAllGroups = async (api, force = false, clusterFilter = nul
             if (entry.streak.current > 0) {
               const yesterdayMsgCount = Number(entry.daily?.[yesterdayKey] || 0);
               if (yesterdayMsgCount === 0) {
-                lostUsers.push({
+                pendingLostUids.push({
                   uid,
-                  name: userMap.get(uid) || `User ${uid.slice(-6)}`,
                   lostStreak: entry.streak.current,
                 });
 
@@ -294,6 +306,24 @@ const sendDailyTop10ToAllGroups = async (api, force = false, clusterFilter = nul
             }
           }
           fs.writeFileSync(STATS_PATH, JSON.stringify(stats, null, 2));
+        }
+
+        // Lấy tên cho TẤT CẢ UIDs cần hiển thị (top 10 + người mất chuỗi)
+        const allNeededDailyUids = Array.from(
+          new Set([
+            ...top10.map((item) => item.uid),
+            ...pendingLostUids.map((item) => item.uid),
+            ...(Array.isArray(lostUsers) ? lostUsers.map((u) => u.uid) : []),
+          ])
+        );
+        const userMap = await getUserNames(api, allNeededDailyUids, threadInfo);
+
+        if (!Array.isArray(lostUsers)) {
+          lostUsers = pendingLostUids.map((item) => ({
+            uid: item.uid,
+            name: userMap.get(item.uid) || `User ${item.uid.slice(-6)}`,
+            lostStreak: item.lostStreak,
+          }));
         }
 
         const lines = [
@@ -315,7 +345,8 @@ const sendDailyTop10ToAllGroups = async (api, force = false, clusterFilter = nul
           lines.push("❄️ THÀNH VIÊN ĐÃ MẤT CHUỖI");
           lines.push("━".repeat(13));
           lostUsers.forEach((user) => {
-            lines.push(`- ${user.name} (đứt chuỗi ${user.lostStreak} ngày)`);
+            const userName = user.name || userMap.get(user.uid) || `User ${String(user.uid || '').slice(-6)}`;
+            lines.push(`- ${userName} (đứt chuỗi ${user.lostStreak} ngày)`);
           });
           delete state[threadID + "_lostUsers"];
         }
@@ -438,7 +469,14 @@ const sendMonthlyTop10ToAllGroups = async (api, force = false, clusterFilter = n
         if (threadInfo.isGroup === false) continue;
 
         const top10 = ranked.slice(0, 10);
-        const userMap = await getUserNames(api, top10.map(item => item.uid), threadInfo);
+        const streakTop10 = rankedStreaks.slice(0, 10);
+        const allNeededMonthlyUids = Array.from(
+          new Set([
+            ...top10.map((item) => item.uid),
+            ...streakTop10.map((item) => item.uid),
+          ])
+        );
+        const userMap = await getUserNames(api, allNeededMonthlyUids, threadInfo);
 
         const lines = [
           `📊 TOP 10 TƯƠNG TÁC THÁNG ${formatMonthLabel(previousMonthKey)}`,
@@ -460,7 +498,7 @@ const sendMonthlyTop10ToAllGroups = async (api, force = false, clusterFilter = n
           lines.push("");
           lines.push("🔥 TOP 10 GIỮ CHUỖI TƯƠNG TÁC LÂU NHẤT THÁNG");
           lines.push("━".repeat(13));
-          rankedStreaks.slice(0, 10).forEach((item, idx) => {
+          streakTop10.forEach((item, idx) => {
             const name = userMap.get(item.uid) || `User ${item.uid.slice(-6)}`;
             lines.push(`${idx + 1}. ${name} — ${item.longest} ngày`);
           });

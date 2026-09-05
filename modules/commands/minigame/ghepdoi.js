@@ -87,7 +87,7 @@ function drawAvatar(ctx, img, x, y, radius, name, color) {
 module.exports = {
     name: "ghepdoi",
     description: "Ghép đôi (Hỗ trợ ghép 2 người cụ thể kèm ảnh Canvas)",
-    usage: `\n${prefix}ghepdoi → Ghép đôi ngẫu nhiên 2 người\n${prefix}ghepdoi tao → Tìm duyên cho bản thân\n${prefix}ghepdoi @A @B → Ghép đôi 2 người chỉ định\n━━━━━━━━━━━━━━━━━━\n💘 Hiển thị tỉ lệ hợp đôi và nhận xét vui kèm ảnh\n💡 Hỗ trợ: tag, reply, hoặc tìm tên`,
+    usage: `\n${prefix}ghepdoi → Ghép đôi ngẫu nhiên 2 người\n${prefix}ghepdoi tao → Tìm duyên cho bản thân\n${prefix}ghepdoi @A @B → Ghép đôi 2 người chỉ định\n━━━━━━━━━━━━━\n💘 Hiển thị tỉ lệ hợp đôi và nhận xét vui kèm ảnh\n💡 Hỗ trợ: tag, reply, hoặc tìm tên`,
 
     async execute({ api, event, args }) {
         await ensureMentionsFromHistory(api, event);

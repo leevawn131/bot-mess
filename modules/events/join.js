@@ -3,6 +3,8 @@ const { removeLeaveHistoryEntries } = require("../utils/leaveHistory");
 const { getJoinGreeting } = require("../utils/joinGreetingSettings");
 const { getNickname, hasInteraction } = require("../utils/nicknameStorage");
 const { checkAndRestoreOldMemberNickname } = require("../utils/restoreNickname");
+const { getThreadPrefix } = require("../utils/threadPrefixStorage");
+const { isAutoBdEnabled } = require("../utils/autobdStorage");
 
 function buildMentionChunk(participants) {
     const rows = Array.isArray(participants) ? participants : [];
@@ -232,17 +234,56 @@ module.exports = {
                 }
             }
 
-            // 5. Khôi phục biệt danh cho thành viên cũ nếu có lưu
+            // 5. Khôi phục biệt danh cũ hoặc Tự động đổi biệt danh (AutoBD) cho thành viên mới
+            const autoBdActive = await isAutoBdEnabled(threadID);
+            const groupPrefix = autoBdActive ? await getThreadPrefix(threadID) : null;
+
+            let staggerDelayIndex = 0;
             for (const user of allowedParticipants) {
                 const userID = String(user.userFbId || "").trim();
-                const userName = user.fullName || "Thành viên cũ";
+                const userName = user.fullName || "Thành viên mới";
+                if (!userID || userID === botID) continue;
+
                 try {
                     const savedNickname = await getNickname(threadID, userID);
+                    // Nếu là thành viên cũ và có biệt danh đã lưu
                     if (savedNickname && savedNickname.trim() !== "") {
-                        checkAndRestoreOldMemberNickname(api, threadID, userID, userName);
+                        // Nếu không bật AutoBD, hoặc chưa setkitu, hoặc biệt danh cũ đã chứa groupPrefix: ưu tiên khôi phục biệt danh cũ
+                        if (!autoBdActive || !groupPrefix || savedNickname.startsWith(groupPrefix)) {
+                            checkAndRestoreOldMemberNickname(api, threadID, userID, userName);
+                            continue;
+                        }
+                    }
+
+                    // Nếu AutoBD đang bật và nhóm đã có ký tự box (setkitu)
+                    if (autoBdActive && groupPrefix && typeof api.changeNickname === "function") {
+                        let userFullName = String(user.fullName || "").trim();
+                        if (!userFullName) {
+                            try {
+                                const userInfo = await api.getUserInfo(userID);
+                                if (userInfo && userInfo[userID]?.name) {
+                                    userFullName = userInfo[userID].name.trim();
+                                }
+                            } catch (e) {}
+                        }
+                        if (!userFullName) userFullName = "Thành viên";
+
+                        const targetNickname = (userFullName.startsWith(groupPrefix) ? userFullName : `${groupPrefix}${userFullName}`).slice(0, 64);
+                        const delayMs = 2000 + staggerDelayIndex * 1000;
+                        staggerDelayIndex++;
+
+                        setTimeout(() => {
+                            api.changeNickname(targetNickname, threadID, userID, (err) => {
+                                if (err) {
+                                    console.error(`[AUTOBD] Không thể đặt biệt danh cho ${userID} tại nhóm ${threadID}:`, err?.message || err);
+                                } else {
+                                    console.log(`[AUTOBD] Đã đặt biệt danh cho ${userID} (${userFullName}) tại nhóm ${threadID}: ${targetNickname}`);
+                                }
+                            });
+                        }, delayMs);
                     }
                 } catch (err) {
-                    console.error("Lỗi khi khôi phục biệt danh cũ:", err);
+                    console.error("Lỗi khi xử lý biệt danh thành viên mới:", err);
                 }
             }
 

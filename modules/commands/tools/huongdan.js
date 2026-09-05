@@ -29,7 +29,7 @@ module.exports = {
       // 1. HƯỚNG DẪN TỔNG QUAN
       if (!mode || mode === "all") {
         const totalMsg = `🎮 HƯỚNG DẪN NGƯỜI CHƠI MỚI
-━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 👋 ** BƯỚC 1: TẠO TÀI KHOẢN **
 Gõ lệnh: ${prefix}tien
 → Tạo tài khoản và nhận 10k credits đầu tiên.
@@ -61,7 +61,7 @@ ${prefix}huongdan cơ_bản - Thuật ngữ cơ bản
 ${prefix}huongdan kiếm_tiền - Chi tiết cách kiếm tiền
 ${prefix}huongdan minigame - Hướng dẫn chơi game
 ${prefix}huongdan mẹo - Mẹo chơi hay ho
-━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 Dùng ${prefix}help để xem tất cả lệnh!`;
 
         return api.sendMessage(totalMsg, threadID, messageID);

@@ -4,6 +4,7 @@ const {
   checkMinigameLimit,
   recordMinigameSuccess,
 } = require("../../utils/minigameLimiter");
+const { parseMoneyAmount } = require("../../utils/parseMoney");
 const prefix = process.env.BOT_PREFIX;
 
 // ID CỦA BOSS (Nhà cái ôm lô)
@@ -99,7 +100,7 @@ module.exports = {
           return api.sendMessage("⚠️ Phần trăm cược không hợp lệ (phải từ 1% đến 100%).", threadID, messageID);
         }
       } else {
-        amount = parseInt(amountStr);
+        amount = parseMoneyAmount(amountStr);
       }
 
       if (isNaN(amount) || amount <= 0)

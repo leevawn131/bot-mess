@@ -165,7 +165,7 @@ module.exports = {
           return api.sendMessage("📭 Hiện tại nhóm chưa có lịch gửi tin nhắn tự động nào.", threadID, messageID);
         }
 
-        let msg = `⏰ DANH SÁCH LỊCH GỬI TỰ ĐỘNG KHU VỰC NÀY ⏰\n━━━━━━━━━━━━━━━━━━\n\n`;
+        let msg = `⏰ DANH SÁCH LỊCH GỬI TỰ ĐỘNG KHU VỰC NÀY ⏰\n━━━━━━━━━━━━━\n\n`;
         const jobList = [];
 
         for (let i = 0; i < jobs.length; i++) {
@@ -201,7 +201,7 @@ module.exports = {
           msg += `📁 Đính kèm: ${hasMedia}\n`;
           msg += `⚡ Trạng thái: ${statusText}\n`;
           msg += `💬 Nội dung: ${job.message || "(Chỉ gửi file media)"}\n`;
-          msg += `━━━━━━━━━━━━━━━━━━\n\n`;
+          msg += `━━━━━━━━━━━━━\n\n`;
         }
 
         msg += `👉 Reply số thứ tự để XÓA nhanh (ví dụ: 1 hoặc 1, 2).\n👉 Gõ STT + on/off để BẬT/TẮT nhanh (ví dụ: 1 off hoặc 1, 2 on).`;

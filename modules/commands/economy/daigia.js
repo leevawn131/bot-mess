@@ -60,7 +60,7 @@ module.exports = {
 
             // 4. Tạo message hiển thị
             let msg = "💎 TOP 10 ĐẠI GIA 💎\n";
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━\n\n";
+            msg += "━━━━━━━━━━━━━\n\n";
 
             for (let i = 0; i < rows.length; i++) {
                 const userID = String(rows[i].psid);
@@ -80,7 +80,7 @@ module.exports = {
                 msg += `${medal} ${rank}. ${userName}: ${credits.toLocaleString('vi-VN')} credits\n`;
             }
 
-            msg += "\n━━━━━━━━━━━━━━━━━━━━━━━";
+            msg += "\n━━━━━━━━━━━━━";
             return api.sendMessage(msg, threadID);
 
         } catch (e) {

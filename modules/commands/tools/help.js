@@ -19,26 +19,27 @@ const categoryNames = {
 const categoryOrder = ["adminbot", "qtv", "group", "economy", "minigame", "tools", "."];
 
 function scheduleAutoUnsend(api, messageResult) {
-  const messageID = messageResult?.messageID;
+  const messageID = messageResult?.messageID || messageResult?.id;
   if (!messageID) return;
 
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
-      api.unsendMessage(messageID);
-    } catch (error) {
-      console.error("Lỗi tự gỡ tin nhắn help:", error);
-    }
+      if (typeof api.unsendMessage === "function") {
+        await api.unsendMessage(messageID).catch(() => {});
+      }
+    } catch (error) {}
   }, AUTO_UNSEND_MS);
 }
 
 function resolveCommand(commandName) {
   const key = String(commandName || "").trim().toLowerCase();
-  if (!key || !global.commands || !(global.commands instanceof Map)) return null;
+  const cmds = (global.commands instanceof Map) ? global.commands : (global.client?.commands instanceof Map ? global.client.commands : null);
+  if (!key || !cmds) return null;
 
-  const direct = global.commands.get(commandName) || global.commands.get(key);
+  const direct = cmds.get(commandName) || cmds.get(key);
   if (direct) return direct;
 
-  for (const command of global.commands.values()) {
+  for (const command of cmds.values()) {
     const names = [command?.name, command?.config?.name]
       .concat(command?.aliases || [])
       .concat(command?.config?.aliases || [])
@@ -55,9 +56,12 @@ function resolveCommand(commandName) {
 
 function getCategoriesMap() {
   const uniqueCommands = new Map();
-  for (const [key, command] of global.commands.entries()) {
-    const name = command.name || command.config?.name || key;
-    uniqueCommands.set(name, command);
+  const cmds = (global.commands instanceof Map) ? global.commands : (global.client?.commands instanceof Map ? global.client.commands : null);
+  if (cmds) {
+    for (const [key, command] of cmds.entries()) {
+      const name = command.name || command.config?.name || key;
+      uniqueCommands.set(name, command);
+    }
   }
 
   const categories = {};
@@ -98,14 +102,14 @@ function buildCategoryPageMessage(selectedCategoryKey, page, categories) {
   let msg = `📂 DANH SÁCH LỆNH\n`;
   msg += `📌 Danh mục: ${displayName}\n`;
   msg += `📊 Trang: [${currentPage}/${totalPages}] (Tổng ${commandList.length} lệnh)\n`;
-  msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `━━━━━━━━━━━━━\n`;
 
   const pad = (n) => (n < 10 ? `0${n}` : String(n));
   pageCommands.forEach((cmd, idx) => {
     const globalIdx = startIndex + idx + 1;
     msg += `[${pad(globalIdx)}] ${cmd.name} ➔ ${cmd.description || "Không có mô tả"}\n`;
   });
-  msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `━━━━━━━━━━━━━\n`;
   msg += `💬 Hướng dẫn:\n`;
   msg += `  • Reply số thứ tự lệnh (1-${commandList.length}) để xem chi tiết.\n`;
   if (totalPages > 1) {
@@ -128,7 +132,7 @@ module.exports = {
     const cooldown = checkCooldown({
       command: "help",
       key: senderID,
-      durationMs: 10000,
+      durationMs: 5000,
     });
     if (!cooldown.allowed) {
       return api.sendMessage(
@@ -155,30 +159,30 @@ module.exports = {
       // 1. Nếu không truyền đối số -> hiển thị danh sách danh mục
       if (!args[0]) {
         let msg = `📜 DANH MỤC LỆNH BOT\n`;
-        msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        msg += `━━━━━━━━━━━━━\n`;
         sortedKeys.forEach((key, index) => {
           const displayName = categoryNames[key] || `📂 ${key.toUpperCase()}`;
           const count = categories[key].length;
           msg += `[${index + 1}] ${displayName} ➔ ${count} lệnh\n`;
         });
-        msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        msg += `━━━━━━━━━━━━━\n`;
         msg += `💬 Hướng dẫn: Reply số thứ tự danh mục để xem danh sách lệnh.\n`;
         msg += `⏱️ Tự động ẩn menu sau 60s.`;
 
-        const sentMessage = await api.sendMessage(msg, threadID, messageID);
-
-        if (!global.client) global.client = {};
-        if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
-        global.client.handleReply.push({
-          name: "help",
-          messageID: sentMessage.messageID,
-          author: senderID,
-          type: "select_category",
-          categories: sortedKeys,
-        });
-
-        scheduleAutoUnsend(api, sentMessage);
-        return sentMessage;
+        const info = await api.sendMessage(msg, threadID);
+        if (info && info.messageID) {
+          if (!global.client) global.client = {};
+          if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
+          global.client.handleReply.push({
+            name: "help",
+            messageID: info.messageID,
+            author: senderID,
+            type: "select_category",
+            categories: sortedKeys,
+          });
+          scheduleAutoUnsend(api, info);
+        }
+        return;
       }
 
       // 2. Nếu truyền đối số -> Tra cứu trực tiếp lệnh
@@ -200,86 +204,125 @@ module.exports = {
 
       let detailMsg = `ℹ️ CHI TIẾT LỆNH: ${resolvedName.toUpperCase()}\n`;
       detailMsg += `📝 Mô tả: ${command.description || "Chưa có mô tả chi tiết."}\n`;
-      detailMsg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+      detailMsg += `━━━━━━━━━━━━━\n`;
       detailMsg += `🛠️ HƯỚNG DẪN SỬ DỤNG:\n`;
       if (formattedUsage) {
         detailMsg += formattedUsage.trim();
       } else {
         detailMsg += `${cmdPrefix}${resolvedName}`;
       }
-      detailMsg += `\n━━━━━━━━━━━━━━━━━━━━━━\n`;
+      detailMsg += `\n━━━━━━━━━━━━━\n`;
       detailMsg += `⏱️ Tự động ẩn hướng dẫn sau 60s.`;
 
-      const sentMessage = await api.sendMessage(detailMsg, threadID, messageID);
-      scheduleAutoUnsend(api, sentMessage);
-      return sentMessage;
+      const info = await api.sendMessage(detailMsg, threadID);
+      if (info) {
+        scheduleAutoUnsend(api, info);
+      }
+      return;
     } catch (e) {
       console.error("Lỗi Help execute:", e);
     }
   },
-  handleReply: async ({ api, event, config }) => {
+  handleReply: async ({ api, event, config, handleReply }) => {
     const { threadID, senderID, messageID, body, messageReply } = event;
     const cmdPrefix = config?.prefix || prefix;
     if (!messageReply) return;
 
-    const list = global.client && Array.isArray(global.client.handleReply) ? global.client.handleReply : [];
-    const handleReplyContext = list.find(h => String(h.messageID) === String(messageReply.messageID) && h.name === "help");
-    if (!handleReplyContext) return;
+    const repliedText = String(messageReply.body || "");
+    const isCategoryMenu = repliedText.includes("DANH MỤC LỆNH BOT");
+    const isCommandList = repliedText.includes("DANH SÁCH LỆNH");
+
+    if (!isCategoryMenu && !isCommandList && (!handleReply || handleReply.name !== "help")) {
+      return;
+    }
 
     const input = String(body || "").trim();
 
     try {
       const categories = getCategoriesMap();
+      const sortedKeys = Object.keys(categories).sort((a, b) => {
+        const indexA = categoryOrder.indexOf(a);
+        const indexB = categoryOrder.indexOf(b);
+        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+        if (indexA !== -1) return -1;
+        if (indexB !== -1) return 1;
+        return a.localeCompare(b);
+      });
 
-      // Bước 2: User chọn danh mục -> Hiển thị danh sách các lệnh trong danh mục (Trang 1, 10 lệnh/trang)
-      if (handleReplyContext.type === "select_category") {
-        const choice = parseInt(input);
-        if (isNaN(choice) || choice < 1 || choice > handleReplyContext.categories.length) {
-          return api.sendMessage(`⚠️ Vui lòng reply số thứ tự hợp lệ từ 1 đến ${handleReplyContext.categories.length}.`, threadID, messageID);
+      // Bước 2: User chọn danh mục từ menu danh mục
+      if (isCategoryMenu || (handleReply && handleReply.type === "select_category")) {
+        const choice = parseInt(input, 10);
+        if (isNaN(choice) || choice < 1 || choice > sortedKeys.length) {
+          return api.sendMessage(`⚠️ Vui lòng reply số thứ tự hợp lệ từ 1 đến ${sortedKeys.length}.`, threadID, messageID);
         }
 
-        const selectedCategoryKey = handleReplyContext.categories[choice - 1];
+        const selectedCategoryKey = sortedKeys[choice - 1];
         const { msg, totalPages, currentPage, commandList } = buildCategoryPageMessage(selectedCategoryKey, 1, categories);
 
-        const sent = await api.sendMessage(msg, threadID, messageID);
-
-        // Gỡ tin nhắn cũ của bước 1
+        // Gỡ tin nhắn menu cũ
         try {
-          await api.unsendMessage(messageReply.messageID);
-        } catch (e) { }
+          if (messageReply.messageID && typeof api.unsendMessage === "function") {
+            await api.unsendMessage(messageReply.messageID).catch(() => {});
+          }
+        } catch (e) {}
 
-        // Dọn dẹp context handleReply cũ
-        const index = list.findIndex(h => h.messageID === messageReply.messageID);
-        if (index > -1) list.splice(index, 1);
+        // Dọn dẹp context cũ trong global.client.handleReply nếu có
+        if (global.client && Array.isArray(global.client.handleReply)) {
+          const index = global.client.handleReply.findIndex(h => String(h.messageID) === String(messageReply.messageID));
+          if (index > -1) global.client.handleReply.splice(index, 1);
+        }
 
-        // Đẩy context mới cho bước tiếp theo
-        global.client.handleReply.push({
-          name: "help",
-          messageID: sent.messageID,
-          author: senderID,
-          type: "select_command",
-          categoryKey: selectedCategoryKey,
-          currentPage: currentPage,
-          totalPages: totalPages,
-          commands: commandList.map(cmd => cmd.name),
-        });
-
-        scheduleAutoUnsend(api, sent);
+        // Gửi danh sách lệnh
+        const sent = await api.sendMessage(msg, threadID);
+        if (sent && sent.messageID) {
+          if (!global.client) global.client = {};
+          if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
+          global.client.handleReply.push({
+            name: "help",
+            messageID: sent.messageID,
+            author: senderID,
+            type: "select_command",
+            categoryKey: selectedCategoryKey,
+            currentPage: currentPage,
+            totalPages: totalPages,
+            commands: commandList.map(cmd => cmd.name),
+          });
+          scheduleAutoUnsend(api, sent);
+        }
         return;
       }
 
       // Bước 3: User chọn lệnh HOẶC đổi trang trong danh mục
-      if (handleReplyContext.type === "select_command") {
-        const selectedCategoryKey = handleReplyContext.categoryKey;
-        const totalPages = handleReplyContext.totalPages || 1;
-        const currentPage = handleReplyContext.currentPage || 1;
+      if (isCommandList || (handleReply && handleReply.type === "select_command")) {
+        // Xác định categoryKey hiện tại
+        let selectedCategoryKey = handleReply?.categoryKey;
+        if (!selectedCategoryKey) {
+          for (const key of sortedKeys) {
+            const catName = categoryNames[key] || key;
+            if (repliedText.includes(catName) || repliedText.toLowerCase().includes(key)) {
+              selectedCategoryKey = key;
+              break;
+            }
+          }
+        }
+        if (!selectedCategoryKey) selectedCategoryKey = "adminbot";
 
-        // 3.1 Kiểm tra xem người dùng có muốn ĐỔI TRANG không (vd: trang 2, p 2, t 2, next, prev)
+        const commandList = categories[selectedCategoryKey] || [];
+        const totalPages = Math.ceil(commandList.length / COMMANDS_PER_PAGE) || 1;
+
+        // Trích xuất trang hiện tại từ văn bản menu (Trang: [x/y])
+        let currentPage = 1;
+        const pageHeaderMatch = repliedText.match(/Trang:\s*\[(\d+)\/(\d+)\]/i);
+        if (pageHeaderMatch) {
+          currentPage = parseInt(pageHeaderMatch[1], 10);
+        }
+
+        // 3.1 Kiểm tra xem người dùng có muốn ĐỔI TRANG không
         const pageMatch = input.match(/^(?:trang|page|p|t)\s*(\d+)$/i);
         let targetPage = null;
 
         if (pageMatch) {
-          targetPage = parseInt(pageMatch[1]);
+          targetPage = parseInt(pageMatch[1], 10);
         } else if (/^(?:next|sau|tiep|tiếp)$/i.test(input)) {
           targetPage = currentPage + 1;
         } else if (/^(?:prev|truoc|trước|back)$/i.test(input)) {
@@ -292,36 +335,41 @@ module.exports = {
           }
 
           const { msg, currentPage: newCurrentPage } = buildCategoryPageMessage(selectedCategoryKey, targetPage, categories);
-          const sent = await api.sendMessage(msg, threadID, messageID);
 
-          // Gỡ tin nhắn trang cũ
           try {
-            await api.unsendMessage(messageReply.messageID);
-          } catch (e) { }
+            if (messageReply.messageID && typeof api.unsendMessage === "function") {
+              await api.unsendMessage(messageReply.messageID).catch(() => {});
+            }
+          } catch (e) {}
 
-          // Dọn dẹp context cũ và lưu context mới
-          const index = list.findIndex(h => h.messageID === messageReply.messageID);
-          if (index > -1) list.splice(index, 1);
+          if (global.client && Array.isArray(global.client.handleReply)) {
+            const index = global.client.handleReply.findIndex(h => String(h.messageID) === String(messageReply.messageID));
+            if (index > -1) global.client.handleReply.splice(index, 1);
+          }
 
-          global.client.handleReply.push({
-            name: "help",
-            messageID: sent.messageID,
-            author: senderID,
-            type: "select_command",
-            categoryKey: selectedCategoryKey,
-            currentPage: newCurrentPage,
-            totalPages: totalPages,
-            commands: handleReplyContext.commands,
-          });
-
-          scheduleAutoUnsend(api, sent);
+          const sent = await api.sendMessage(msg, threadID);
+          if (sent && sent.messageID) {
+            if (!global.client) global.client = {};
+            if (!Array.isArray(global.client.handleReply)) global.client.handleReply = [];
+            global.client.handleReply.push({
+              name: "help",
+              messageID: sent.messageID,
+              author: senderID,
+              type: "select_command",
+              categoryKey: selectedCategoryKey,
+              currentPage: newCurrentPage,
+              totalPages: totalPages,
+              commands: commandList.map(c => c.name),
+            });
+            scheduleAutoUnsend(api, sent);
+          }
           return;
         }
 
-        // 3.2 Người dùng chọn SỐ THỨ TỰ LỆNH (1 đến tổng số lệnh)
-        const choice = parseInt(input);
-        if (isNaN(choice) || choice < 1 || choice > handleReplyContext.commands.length) {
-          let warnMsg = `⚠️ Vui lòng reply số thứ tự lệnh từ 1 đến ${handleReplyContext.commands.length}`;
+        // 3.2 Người dùng chọn SỐ THỨ TỰ LỆNH
+        const choice = parseInt(input, 10);
+        if (isNaN(choice) || choice < 1 || choice > commandList.length) {
+          let warnMsg = `⚠️ Vui lòng reply số thứ tự lệnh từ 1 đến ${commandList.length}`;
           if (totalPages > 1) {
             warnMsg += ` hoặc "trang <số>" để chuyển trang.`;
           } else {
@@ -330,7 +378,8 @@ module.exports = {
           return api.sendMessage(warnMsg, threadID, messageID);
         }
 
-        const selectedCommandName = handleReplyContext.commands[choice - 1];
+        const selectedCommandObj = commandList[choice - 1];
+        const selectedCommandName = selectedCommandObj?.name;
         const command = resolveCommand(selectedCommandName);
 
         if (!command) {
@@ -344,28 +393,31 @@ module.exports = {
 
         let detailMsg = `ℹ️ CHI TIẾT LỆNH: ${resolvedName.toUpperCase()}\n`;
         detailMsg += `📝 Mô tả: ${command.description || "Chưa có mô tả chi tiết."}\n`;
-        detailMsg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        detailMsg += `━━━━━━━━━━━━━\n`;
         detailMsg += `🛠️ HƯỚNG DẪN SỬ DỤNG:\n`;
         if (formattedUsage) {
           detailMsg += formattedUsage.trim();
         } else {
           detailMsg += `${cmdPrefix}${resolvedName}`;
         }
-        detailMsg += `\n━━━━━━━━━━━━━━━━━━━━━━\n`;
+        detailMsg += `\n━━━━━━━━━━━━━\n`;
         detailMsg += `⏱️ Tự động ẩn hướng dẫn sau 60s.`;
 
-        const sent = await api.sendMessage(detailMsg, threadID, messageID);
-
-        // Gỡ tin nhắn danh sách lệnh cũ của bước 2
         try {
-          await api.unsendMessage(messageReply.messageID);
-        } catch (e) { }
+          if (messageReply.messageID && typeof api.unsendMessage === "function") {
+            await api.unsendMessage(messageReply.messageID).catch(() => {});
+          }
+        } catch (e) {}
 
-        // Dọn dẹp context handleReply cũ
-        const index = list.findIndex(h => h.messageID === messageReply.messageID);
-        if (index > -1) list.splice(index, 1);
+        if (global.client && Array.isArray(global.client.handleReply)) {
+          const index = global.client.handleReply.findIndex(h => String(h.messageID) === String(messageReply.messageID));
+          if (index > -1) global.client.handleReply.splice(index, 1);
+        }
 
-        scheduleAutoUnsend(api, sent);
+        const sent = await api.sendMessage(detailMsg, threadID);
+        if (sent && sent.messageID) {
+          scheduleAutoUnsend(api, sent);
+        }
         return;
       }
     } catch (e) {

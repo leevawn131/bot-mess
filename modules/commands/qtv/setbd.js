@@ -5,7 +5,7 @@ const prefix = process.env.BOT_PREFIX || "!";
 module.exports = {
     name: "setbd",
     description: "Đổi biệt danh & Cài đặt ký tự riêng cho nhóm",
-    usage: `\n${prefix}setbd [tên mới] → Đổi biệt danh cho bản thân\n${prefix}setbd @tag [tên mới] → Đổi cho người được tag\n${prefix}setbd (reply) [tên mới] → Đổi cho người được reply\n${prefix}setbd setkitu [ký tự] → Cài ký tự biệt danh riêng cho nhóm (VD: SK- hoặc SK.)\n${prefix}setbd setkitu off → Xóa ký tự biệt danh riêng của nhóm\n━━━━━━━━━━━━━━━━━━\n📌 Tối đa 64 ký tự | Bỏ trống = xóa biệt danh\n⚠️ Bot cần quyền QTV nhóm\n🔒 Chỉ QTV mới được đổi cho người khác hoặc cài setkitu`,
+    usage: `\n${prefix}setbd [tên mới] → Đổi biệt danh cho bản thân\n${prefix}setbd @tag [tên mới] → Đổi cho người được tag\n${prefix}setbd (reply) [tên mới] → Đổi cho người được reply\n${prefix}setbd setkitu [ký tự] → Cài ký tự biệt danh riêng cho nhóm (VD: SK- hoặc SK.)\n${prefix}setbd setkitu off → Xóa ký tự biệt danh riêng của nhóm\n━━━━━━━━━━━━━\n📌 Tối đa 64 ký tự | Bỏ trống = xóa biệt danh\n⚠️ Bot cần quyền QTV nhóm\n🔒 Chỉ QTV mới được đổi cho người khác hoặc cài setkitu`,
     execute: async ({ api, event, args, config }) => {
         await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;
@@ -60,9 +60,9 @@ module.exports = {
             if (!trimmedSymbol || trimmedSymbol.toLowerCase() === "check" || trimmedSymbol.toLowerCase() === "info") {
                 const currentPrefix = await getThreadPrefix(threadID);
                 if (currentPrefix) {
-                    return api.sendMessage(`📌 Ký tự biệt danh hiện tại của nhóm: "${currentPrefix}"\n━━━━━━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setbd setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setbd setkitu SK-)\n• ${cmdPrefix}setbd setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
+                    return api.sendMessage(`📌 Ký tự biệt danh hiện tại của nhóm: "${currentPrefix}"\n━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setbd setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setbd setkitu SK-)\n• ${cmdPrefix}setbd setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
                 } else {
-                    return api.sendMessage(`📌 Nhóm chưa cài đặt ký tự biệt danh riêng.\n━━━━━━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setbd setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setbd setkitu SK- hoặc SK.)\n• ${cmdPrefix}setbd setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
+                    return api.sendMessage(`📌 Nhóm chưa cài đặt ký tự biệt danh riêng.\n━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setbd setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setbd setkitu SK- hoặc SK.)\n• ${cmdPrefix}setbd setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
                 }
             }
 

@@ -116,7 +116,7 @@ module.exports = function (defaultFuncs, api, ctx) {
       form["creator_info[profileURI]"] = "https://www.facebook.com/profile.php?id=" + ctx.userID;
     }
 
-    if (global.Fca.Require.FastConfig.AntiSendAppState == true) {
+    if (global.Fca?.Require?.FastConfig?.AntiSendAppState == true) {
       try {
         if (Location_Stack != undefined || Location_Stack != null) {
           let location = (((Location_Stack).replace("Error", '')).split('\n')[7]).split(' ');
@@ -245,7 +245,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         return cb();
       }
 
-      if (global.Fca.Require.FastConfig.AntiSendAppState) {
+      if (global.Fca?.Require?.FastConfig?.AntiSendAppState) {
         try {
           const AllowList = [".png", ".mp3", ".mp4", ".wav", ".gif", ".jpg", ".tff"];
           const CheckList = [".json", ".js", ".txt", ".docx", '.php'];
@@ -354,6 +354,58 @@ module.exports = function (defaultFuncs, api, ctx) {
     var disallowedProperties = Object.keys(msg).filter(prop => !allowedProperties[prop]);
     if (disallowedProperties.length > 0) return callback({ error: "Dissallowed props: `" + disallowedProperties.join(", ") + "`" });
 
+    function sendWithHttpMercury() {
+      if (msg.effect) delete msg.effect;
+      var messageAndOTID = utils.generateOfflineThreadingID();
+
+      var form = {
+        client: "mercury",
+        action_type: "ma-type:user-generated-message",
+        author: "fbid:" + ctx.userID,
+        timestamp: Date.now(),
+        timestamp_absolute: "Today",
+        timestamp_relative: utils.generateTimestampRelative(),
+        timestamp_time_passed: "0",
+        is_unread: false,
+        is_cleared: false,
+        is_forward: false,
+        is_filtered_content: false,
+        is_filtered_content_bh: false,
+        is_filtered_content_account: false,
+        is_filtered_content_quasar: false,
+        is_filtered_content_invalid_app: false,
+        is_spoof_warning: false,
+        source: "source:chat:web",
+        "source_tags[0]": "source:chat",
+        body: msg.body ? msg.body.toString().replace(/\ufe0f{70,}/g, '   ') : "",
+        html_body: false,
+        ui_push_phase: "V3",
+        status: "0",
+        offline_threading_id: messageAndOTID,
+        message_id: messageAndOTID,
+        threading_id: utils.generateThreadingID(ctx.clientID),
+        "ephemeral_ttl_mode:": "0",
+        manual_retry_cnt: "0",
+        has_attachment: !!(msg.attachment || msg.url || msg.sticker),
+        signatureID: utils.getSignatureID(),
+        replied_to_message_id: replyToMessage
+      };
+
+      handleLocation(msg, form, callback, () =>
+        handleSticker(msg, form, callback, () =>
+          handleAttachment(msg, form, callback, () =>
+            handleUrl(msg, form, callback, () =>
+              handleEmoji(msg, form, callback, () =>
+                handleMention(msg, form, callback, () =>
+                  send(form, threadID, messageAndOTID, callback, isGroup)
+                )
+              )
+            )
+          )
+        )
+      );
+    }
+
     if (msg.effect) {
       if (threadIDType === "Array") return callback({ error: "Sending messages with effects to multiple users at once is not supported." });
 
@@ -371,58 +423,33 @@ module.exports = function (defaultFuncs, api, ctx) {
         return callback({ error: `Invalid effect style: '${msg.effect}'. Allowed values: GIFTWRAP, FIRE, CELEBRATION, LOVE` });
       }
 
-      return api.sendMqttMessageEffect(msg.body || "", threadID, replyToMessage, style, callback);
+      var sendEffectFunc = (typeof api.sendMqttMessageEffect === "function")
+        ? api.sendMqttMessageEffect
+        : (typeof api.sendMqttMessage === "function" ? api.sendMqttMessage : null);
+
+      if (sendEffectFunc) {
+        try {
+          var p = sendEffectFunc(msg.body || "", threadID, replyToMessage, style, function (err, data) {
+            if (err) {
+              log.warn("sendMessageEffect", "MQTT send effect failed (" + (err.message || err) + "), falling back to HTTP Mercury...");
+              return sendWithHttpMercury();
+            }
+            callback(null, data);
+          });
+          if (p && typeof p.catch === "function") p.catch(function () {});
+        } catch (syncErr) {
+          log.warn("sendMessageEffect", "MQTT send effect exception (" + syncErr.message + "), falling back to HTTP Mercury...");
+          sendWithHttpMercury();
+        }
+        return returnPromise;
+      } else {
+        log.warn("sendMessageEffect", "No MQTT effect function available on api, falling back to HTTP Mercury...");
+        sendWithHttpMercury();
+        return returnPromise;
+      }
     }
 
-    var messageAndOTID = utils.generateOfflineThreadingID();
-
-    var form = {
-      client: "mercury",
-      action_type: "ma-type:user-generated-message",
-      author: "fbid:" + ctx.userID,
-      timestamp: Date.now(),
-      timestamp_absolute: "Today",
-      timestamp_relative: utils.generateTimestampRelative(),
-      timestamp_time_passed: "0",
-      is_unread: false,
-      is_cleared: false,
-      is_forward: false,
-      is_filtered_content: false,
-      is_filtered_content_bh: false,
-      is_filtered_content_account: false,
-      is_filtered_content_quasar: false,
-      is_filtered_content_invalid_app: false,
-      is_spoof_warning: false,
-      source: "source:chat:web",
-      "source_tags[0]": "source:chat",
-      body: msg.body ? msg.body.toString().replace("\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f\ufe0f", '   ') : "",
-      html_body: false,
-      ui_push_phase: "V3",
-      status: "0",
-      offline_threading_id: messageAndOTID,
-      message_id: messageAndOTID,
-      threading_id: utils.generateThreadingID(ctx.clientID),
-      "ephemeral_ttl_mode:": "0",
-      manual_retry_cnt: "0",
-      has_attachment: !!(msg.attachment || msg.url || msg.sticker),
-      signatureID: utils.getSignatureID(),
-      replied_to_message_id: replyToMessage
-    };
-
-    handleLocation(msg, form, callback, () =>
-      handleSticker(msg, form, callback, () =>
-        handleAttachment(msg, form, callback, () =>
-          handleUrl(msg, form, callback, () =>
-            handleEmoji(msg, form, callback, () =>
-              handleMention(msg, form, callback, () =>
-                send(form, threadID, messageAndOTID, callback, isGroup)
-              )
-            )
-          )
-        )
-      )
-    );
-
+    sendWithHttpMercury();
     return returnPromise;
   };
 };

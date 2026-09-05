@@ -121,7 +121,7 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
             headers: {
                 'Cookie': cookies,
                 'Origin': 'https://www.facebook.com',
-                'User-Agent': (ctx.globalOptions.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.64 Safari/537.36'),
+                'User-Agent': (ctx.globalOptions.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'),
                 'Referer': 'https://www.facebook.com/',
                 'Host': new URL(host).hostname //'edge-chat.facebook.com'
             },
@@ -143,13 +143,13 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
 
     global.mqttClient.on('error', function (err) {
         log.error("listenMqtt", err);
-        global.mqttClient.end();
+        try { global.mqttClient.end(true); } catch (_) {}
 
-        if (ctx.globalOptions.autoReconnect) getSeqID();
-        else {
-            globalCallback({ type: "stop_listen", error: "Server Đã Sập - Auto Restart" }, null);
-            return process.exit(1);
-        }
+        setTimeout(() => {
+            if (typeof getSeqID === 'function') {
+                getSeqID();
+            }
+        }, 3000);
     });
 
     global.mqttClient.on('connect', function () {
@@ -257,9 +257,18 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
             const request_ID = jsonMessage.request_id;
             if (ctx.callback_Task[request_ID] != undefined) {
                 const { callback, type } = ctx.callback_Task[request_ID];
+
+                let apiError = null;
+                if (payload && payload.step) {
+                    apiError = findRemoveTaskError(payload.step);
+                }
+
                 const Data = new getRespData(type, payload);
 
-                if (!Data) {
+                if (apiError) {
+                    callback({ error: apiError, errorCode: apiError }, null);
+                }
+                else if (!Data) {
                     callback("Something went wrong 🐳", null);
                 }
                 else {
@@ -312,24 +321,52 @@ function getRespData(Type, payload) {
             case "sendMqttMessage": {
                 return {
                     type: Type,
-                    threadID: payload.step[1][2][2][1][2], //this is sick bro
-                    messageID: payload.step[1][2][2][1][3],
-                    payload: payload.step[1][2]
+                    threadID: payload.step?.[1]?.[2]?.[2]?.[1]?.[2] || null,
+                    messageID: payload.step?.[1]?.[2]?.[2]?.[1]?.[3] || null,
+                    payload: payload.step?.[1]?.[2] || payload
                 };
             }
-            default: { //!very LAZY :> cook yourself
+            case "shareContact": {
                 return {
-                    Data: payload.step[1][2][2][1],
                     type: Type,
-                    payload: payload.step[1][2] 
+                    threadID: payload.step?.[1]?.[2]?.[2]?.[1]?.[2] || null,
+                    messageID: payload.step?.[1]?.[2]?.[2]?.[1]?.[3] || null,
+                    payload: payload.step?.[1]?.[2] || payload
+                };
+            }
+            default: {
+                return {
+                    Data: payload.step?.[1]?.[2]?.[2]?.[1] || null,
+                    type: Type,
+                    payload: payload.step?.[1]?.[2] || payload 
                 };
             }
         }
     }
     catch (e) {
-        return null;
+        return {
+            type: Type,
+            payload: payload
+        };
     }
 }
+function findRemoveTaskError(step) {
+    if (!Array.isArray(step)) return null;
+    if (step[0] === 5 && step[1] === "removeTask" && Array.isArray(step[2]) && Array.isArray(step[3])) {
+        if (step[3].length === 1 && step[3][0] === 9) {
+            return null;
+        }
+        return step[3][1] || "Unknown LightSpeed Error";
+    }
+    for (let i = 0; i < step.length; i++) {
+        if (Array.isArray(step[i])) {
+            const err = findRemoveTaskError(step[i]);
+            if (err) return err;
+        }
+    }
+    return null;
+}
+
 
 function LogUptime() {
     var uptime = process.uptime();
@@ -348,39 +385,54 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
         //Not tested for pages
         if (ctx.globalOptions.pageID && ctx.globalOptions.pageID != v.queue) return;
 
-        (function resolveAttachmentUrl(i) {
-            if (v.delta.attachments && (i == v.delta.attachments.length) || utils.getType(v.delta.attachments) !== "Array") {
-                var fmtMsg;
-                try {
-                    fmtMsg = utils.formatDeltaMessage(v);
-                } catch (err) {
-                    return log.error("Lỗi Nhẹ", err);
-                }
-                global.Fca.Data.event = fmtMsg;
-                try {
-                    var { updateMessageCount,getData,hasData } = require('../Extra/ExtraGetThread');
-                    if (hasData(fmtMsg.threadID)) {
-                        var x = getData(fmtMsg.threadID);
-                        x.messageCount+=1;
-                        updateMessageCount(fmtMsg.threadID,x);
-                    }   
-                }
-                catch (e) {
-                    //temp
-                }
-                if (fmtMsg)
-                    if (ctx.globalOptions.autoMarkDelivery) markDelivery(ctx, api, fmtMsg.threadID, fmtMsg.messageID);
-
-                return !ctx.globalOptions.selfListen && fmtMsg.senderID === ctx.userID ? undefined : (function () { globalCallback(null, fmtMsg); })();
-            } else {
-                if (v.delta.attachments && (v.delta.attachments[i].mercury.attach_type == "photo")) {
-                    api.resolvePhotoUrl(v.delta.attachments[i].fbid, (err, url) => {
-                        if (!err) v.delta.attachments[i].mercury.metadata.url = url;
-                        return resolveAttachmentUrl(i + 1);
-                    });
-                } else return resolveAttachmentUrl(i + 1);
+        function dispatchFormattedMessage() {
+            var fmtMsg;
+            try {
+                fmtMsg = utils.formatDeltaMessage(v);
+            } catch (err) {
+                return log.error("Lỗi Nhẹ", err);
             }
-        })(0);
+            global.Fca.Data.event = fmtMsg;
+            try {
+                var { updateMessageCount, getData, hasData } = require('../Extra/ExtraGetThread');
+                if (hasData(fmtMsg.threadID)) {
+                    var x = getData(fmtMsg.threadID);
+                    x.messageCount += 1;
+                    updateMessageCount(fmtMsg.threadID, x);
+                }   
+            }
+            catch (e) {
+                //temp
+            }
+            if (fmtMsg)
+                if (ctx.globalOptions.autoMarkDelivery) markDelivery(ctx, api, fmtMsg.threadID, fmtMsg.messageID);
+
+            return !ctx.globalOptions.selfListen && fmtMsg.senderID === ctx.userID ? undefined : (function () { globalCallback(null, fmtMsg); })();
+        }
+
+        if (!v.delta.attachments || !Array.isArray(v.delta.attachments) || v.delta.attachments.length === 0) {
+            dispatchFormattedMessage();
+        } else {
+            var photoPromises = v.delta.attachments.map(function(att) {
+                if (att && att.mercury && att.mercury.attach_type == "photo" && att.fbid) {
+                    return new Promise(function(resolve) {
+                        api.resolvePhotoUrl(att.fbid, function(err, url) {
+                            if (!err && url && att.mercury.metadata) {
+                                att.mercury.metadata.url = url;
+                            }
+                            resolve();
+                        });
+                    });
+                }
+                return Promise.resolve();
+            });
+
+            Promise.all(photoPromises).then(function() {
+                dispatchFormattedMessage();
+            }).catch(function() {
+                dispatchFormattedMessage();
+            });
+        }
     }
 
     if (v.delta.class == "ClientPayload") {
@@ -587,6 +639,17 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                         console.log(v.delta);
                         return log.error("Lỗi Nhẹ", err);
                     }
+                    if (v.delta.type === 'change_thread_theme' && v.delta.untypedData) {
+                        try {
+                            var themeData = v.delta.untypedData;
+                            if (themeData.theme_id && themeData.theme_name_with_subtitle) {
+                                var cleanName = themeData.theme_name_with_subtitle.replace(/[^a-zA-Z0-9]/g, "");
+                                if (cleanName.length > 0 && api.threadColors) {
+                                    api.threadColors[cleanName] = themeData.theme_id.toString();
+                                }
+                            }
+                        } catch (e) {}
+                    }
                     return (function () { globalCallback(null, fmtMsg); })();
                 }
             break;
@@ -648,6 +711,14 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                                         })();
                                     break;
                                 case "UserMessage":
+                                    var mobj = {};
+                                    if (fetchData.message && fetchData.message.ranges) {
+                                        for (var n in fetchData.message.ranges) {
+                                            if (fetchData.message.ranges[n] && fetchData.message.ranges[n].entity && fetchData.message.ranges[n].entity.id) {
+                                                mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || "").substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                                            }
+                                        }
+                                    }
                                     log.info("ff-Return", {
                                         type: "message",
                                         senderID: utils.formatID(fetchData.message_sender.id),
@@ -672,7 +743,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                                             subattachments: fetchData.extensible_attachment.subattachments,
                                             properties: fetchData.extensible_attachment.story_attachment.properties,
                                         }],
-                                        mentions: {},
+                                        mentions: mobj,
                                         timestamp: parseInt(fetchData.timestamp_precise),
                                         isGroup: (fetchData.message_sender.id != tid.toString())
                                     });
@@ -700,7 +771,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                                             subattachments: fetchData.extensible_attachment.subattachments,
                                             properties: fetchData.extensible_attachment.story_attachment.properties,
                                         }],
-                                        mentions: {},
+                                        mentions: mobj,
                                         timestamp: parseInt(fetchData.timestamp_precise),
                                         isGroup: (fetchData.message_sender.id != tid.toString())
                                     });

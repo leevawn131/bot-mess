@@ -516,23 +516,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
           };
           globalCallback(null, messageUnsend);
         } else if (delta.deltaMessageReply) {
-          const mdata =
-            delta.deltaMessageReply.message === undefined ?
-            [] :
-            delta.deltaMessageReply.message.data === undefined ?
-            [] :
-            delta.deltaMessageReply.message.data.prng === undefined ?
-            [] :
-            JSON.parse(delta.deltaMessageReply.message.data.prng);
-
-          const m_id = mdata.map((u) => u.i);
-          const m_offset = mdata.map((u) => u.o);
-          const m_length = mdata.map((u) => u.l);
-
-          const mentions = {};
-          for (let i = 0; i < m_id.length; i++) {
-            mentions[m_id[i]] = (delta.deltaMessageReply.message.body || '').substring(m_offset[i], m_offset[i] + m_length[i]);
-          }
+          const mentions = utils.getMentions(delta.deltaMessageReply.message);
 
           const callbackToReturn = {
             type: 'message_reply',
@@ -565,23 +549,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
           };
 
           if (delta.deltaMessageReply.repliedToMessage) {
-            const mdata =
-              delta.deltaMessageReply.repliedToMessage === undefined ?
-              [] :
-              delta.deltaMessageReply.repliedToMessage.data === undefined ?
-              [] :
-              delta.deltaMessageReply.repliedToMessage.data.prng === undefined ?
-              [] :
-              JSON.parse(delta.deltaMessageReply.repliedToMessage.data.prng);
-
-            const m_id = mdata.map((u) => u.i);
-            const m_offset = mdata.map((u) => u.o);
-            const m_length = mdata.map((u) => u.l);
-
-            const rmentions = {};
-            for (let i = 0; i < m_id.length; i++) {
-              rmentions[m_id[i]] = (delta.deltaMessageReply.repliedToMessage.body || '').substring(m_offset[i], m_offset[i] + m_length[i]);
-            }
+            const rmentions = utils.getMentions(delta.deltaMessageReply.repliedToMessage);
 
             callbackToReturn.messageReply = {
               threadID: (delta.deltaMessageReply.repliedToMessage.messageMetadata.threadKey.threadFbId ? delta.deltaMessageReply.repliedToMessage.messageMetadata.threadKey.threadFbId : delta.deltaMessageReply.repliedToMessage.messageMetadata.threadKey.otherUserFbId).toString(),
@@ -636,10 +604,14 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
                 };
                 const fetchData = resData[0].o0.data.message;
                 const mobj = {};
-
-                for (const n in fetchData.message.ranges) {
-                  mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || '').substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                if (fetchData.message && fetchData.message.ranges) {
+                  for (const n in fetchData.message.ranges) {
+                    if (fetchData.message.ranges[n] && fetchData.message.ranges[n].entity && fetchData.message.ranges[n].entity.id) {
+                      mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || '').substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                    }
+                  }
                 }
+
                 callbackToReturn.messageReply = {
                   type: 'Message',
                   threadID: callbackToReturn.threadID,
@@ -774,6 +746,14 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
                   });
                   break;
                 case 'UserMessage': {
+                  const mobj = {};
+                  if (fetchData.message && fetchData.message.ranges) {
+                    for (const n in fetchData.message.ranges) {
+                      if (fetchData.message.ranges[n] && fetchData.message.ranges[n].entity && fetchData.message.ranges[n].entity.id) {
+                        mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || '').substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                      }
+                    }
+                  }
                   const event = {
                     type: 'message',
                     senderID: utils.formatID(fetchData.message_sender.id),
@@ -795,7 +775,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
                       subattachments: fetchData.extensible_attachment.subattachments,
                       properties: fetchData.extensible_attachment.story_attachment.properties,
                       }],
-                    mentions: {},
+                    mentions: mobj,
                     timestamp: parseInt(fetchData.timestamp_precise),
                     isGroup: (fetchData.message_sender.id !== tid.toString()),
                   };

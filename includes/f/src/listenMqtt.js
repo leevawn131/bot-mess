@@ -135,7 +135,7 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
       headers: {
         Cookie: cookies,
         Origin: 'https://www.facebook.com',
-        'User-Agent': ctx.globalOptions.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.64 Safari/537.36',
+        'User-Agent': ctx.globalOptions.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
         Referer: 'https://www.facebook.com/',
         Host: new URL(host).hostname,
       },
@@ -158,17 +158,13 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
 
   global.mqttClient.on('error', (err) => {
     log.error('listenMqtt', err);
-    global.mqttClient.end();
+    try { global.mqttClient.end(true); } catch (_) {}
 
-    if (ctx.globalOptions.autoReconnect) {
-      getSeqID();
-    } else {
-      globalCallback({
-        type: 'stop_listen',
-        error: 'Server Đã Sập - Auto Restart'
-      }, null);
-      return process.exit(1);
-    }
+    setTimeout(() => {
+      if (typeof getSeqID === 'function') {
+        getSeqID();
+      }
+    }, 3000);
   });
 
   global.mqttClient.on('connect', () => {
@@ -293,11 +289,20 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
           callback,
           type
         } = ctx.callback_Task[request_ID];
+        delete ctx.callback_Task[request_ID];
+        
+        let apiError = null;
+        if (payload && payload.step) {
+          apiError = findRemoveTaskError(payload.step);
+        }
+
         const Data = new getRespData(type, payload);
         if (!callback) {
           return;
         }
-        else if (!Data) {
+        if (apiError) {
+          callback({ error: apiError, errorCode: apiError }, null);
+        } else if (!Data) {
           callback("Something went wrong 🐳", null);
         } else {
           callback(null, Data);
@@ -353,23 +358,51 @@ function getRespData(Type, payload) {
       case "sendMqttMessage": {
         return {
           type: Type,
-          threadID: payload.step[1][2][2][1][2], //this is sick bro
-          messageID: payload.step[1][2][2][1][3],
-          payload: payload.step[1][2]
+          threadID: payload.step?.[1]?.[2]?.[2]?.[1]?.[2] || null,
+          messageID: payload.step?.[1]?.[2]?.[2]?.[1]?.[3] || null,
+          payload: payload.step?.[1]?.[2] || payload
         };
       }
-      default: { //!very LAZY :> cook yourself
+      case "shareContact": {
         return {
-          Data: payload.step[1][2][2][1],
           type: Type,
-          payload: payload.step[1][2]
+          threadID: payload.step?.[1]?.[2]?.[2]?.[1]?.[2] || null,
+          messageID: payload.step?.[1]?.[2]?.[2]?.[1]?.[3] || null,
+          payload: payload.step?.[1]?.[2] || payload
+        };
+      }
+      default: {
+        return {
+          Data: payload.step?.[1]?.[2]?.[2]?.[1] || null,
+          type: Type,
+          payload: payload.step?.[1]?.[2] || payload
         };
       }
     }
   } catch (e) {
-    return null;
+    return {
+      type: Type,
+      payload: payload
+    };
   }
 }
+function findRemoveTaskError(step) {
+  if (!Array.isArray(step)) return null;
+  if (step[0] === 5 && step[1] === "removeTask" && Array.isArray(step[2]) && Array.isArray(step[3])) {
+    if (step[3].length === 1 && step[3][0] === 9) {
+      return null;
+    }
+    return step[3][1] || "Unknown LightSpeed Error";
+  }
+  for (let i = 0; i < step.length; i++) {
+    if (Array.isArray(step[i])) {
+      const err = findRemoveTaskError(step[i]);
+      if (err) return err;
+    }
+  }
+  return null;
+}
+
 
 function LogUptime() {
   const uptime = process.uptime();
@@ -421,51 +454,61 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
   if (delta.class === 'NewMessage') {
     if (ctx.globalOptions.pageID && ctx.globalOptions.pageID !== delta.queue) return;
 
-    const resolveAttachmentUrl = (i) => {
-      if (!delta.attachments || i === delta.attachments.length || utils.getType(delta.attachments) !== 'Array') {
-        let fmtMsg;
-        try {
-          fmtMsg = utils.formatDeltaMessage(delta);
-        } catch (err) {
-          return log.error('Lỗi Nhẹ', err);
-        }
-        
-        if (fmtMsg) {
-            const isGroup = fmtMsg.isGroup;
-            const threadID = fmtMsg.threadID;
-            const messageID = fmtMsg.messageID;
-            
-            global.Fca.Data.event.set("Data", {
-                isGroup,
-                threadID,
-                messageID
-            });
-
-            if (global.Fca.Require.FastConfig.AntiGetInfo.AntiGetThreadInfo) {
-                global.Fca.Data.MsgCount.set(fmtMsg.threadID, ((global.Fca.Data.MsgCount.get(fmtMsg.threadID)) + 1 || 1));
-            }    
-
-          if (ctx.globalOptions.autoMarkDelivery) {
-            markDelivery(ctx, api, fmtMsg.threadID, fmtMsg.messageID);
-          }
-
-          if (!ctx.globalOptions.selfListen && fmtMsg.senderID === ctx.userID) return;
-          globalCallback(null, fmtMsg);
-        }
-      } else {
-        const attachment = delta.attachments[i];
-        if (attachment.mercury.attach_type === 'photo') {
-          api.resolvePhotoUrl(attachment.fbid, (err, url) => {
-            if (!err) attachment.mercury.metadata.url = url;
-            resolveAttachmentUrl(i + 1);
-          });
-        } else {
-          resolveAttachmentUrl(i + 1);
-        }
+    function dispatchFormattedMessage() {
+      let fmtMsg;
+      try {
+        fmtMsg = utils.formatDeltaMessage(delta);
+      } catch (err) {
+        return log.error('Lỗi Nhẹ', err);
       }
-    };
+      
+      if (fmtMsg) {
+          const isGroup = fmtMsg.isGroup;
+          const threadID = fmtMsg.threadID;
+          const messageID = fmtMsg.messageID;
+          
+          global.Fca.Data.event.set("Data", {
+              isGroup,
+              threadID,
+              messageID
+          });
 
-    resolveAttachmentUrl(0);
+          if (global.Fca.Require.FastConfig.AntiGetInfo.AntiGetThreadInfo) {
+              global.Fca.Data.MsgCount.set(fmtMsg.threadID, ((global.Fca.Data.MsgCount.get(fmtMsg.threadID)) + 1 || 1));
+          }    
+
+        if (ctx.globalOptions.autoMarkDelivery) {
+          markDelivery(ctx, api, fmtMsg.threadID, fmtMsg.messageID);
+        }
+
+        if (!ctx.globalOptions.selfListen && fmtMsg.senderID === ctx.userID) return;
+        globalCallback(null, fmtMsg);
+      }
+    }
+
+    if (!delta.attachments || !Array.isArray(delta.attachments) || delta.attachments.length === 0) {
+      dispatchFormattedMessage();
+    } else {
+      var photoPromises = delta.attachments.map(function(att) {
+        if (att && att.mercury && att.mercury.attach_type === 'photo' && att.fbid) {
+          return new Promise(function(resolve) {
+            api.resolvePhotoUrl(att.fbid, function(err, url) {
+              if (!err && url && att.mercury.metadata) {
+                att.mercury.metadata.url = url;
+              }
+              resolve();
+            });
+          });
+        }
+        return Promise.resolve();
+      });
+
+      Promise.all(photoPromises).then(function() {
+        dispatchFormattedMessage();
+      }).catch(function(err) {
+        dispatchFormattedMessage();
+      });
+    }
   } else if (delta.class === 'ClientPayload') {
     const clientPayload = utils.decodeClientPayload(delta.payload);
     if (clientPayload && clientPayload.deltas) {
@@ -491,23 +534,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
           };
           globalCallback(null, messageUnsend);
         } else if (delta.deltaMessageReply) {
-          const mdata =
-            delta.deltaMessageReply.message === undefined ?
-            [] :
-            delta.deltaMessageReply.message.data === undefined ?
-            [] :
-            delta.deltaMessageReply.message.data.prng === undefined ?
-            [] :
-            JSON.parse(delta.deltaMessageReply.message.data.prng);
-
-          const m_id = mdata.map((u) => u.i);
-          const m_offset = mdata.map((u) => u.o);
-          const m_length = mdata.map((u) => u.l);
-
-          const mentions = {};
-          for (let i = 0; i < m_id.length; i++) {
-            mentions[m_id[i]] = (delta.deltaMessageReply.message.body || '').substring(m_offset[i], m_offset[i] + m_length[i]);
-          }
+          const mentions = utils.getMentions(delta.deltaMessageReply.message);
 
           const callbackToReturn = {
             type: 'message_reply',
@@ -540,23 +567,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
           };
 
           if (delta.deltaMessageReply.repliedToMessage) {
-            const mdata =
-              delta.deltaMessageReply.repliedToMessage === undefined ?
-              [] :
-              delta.deltaMessageReply.repliedToMessage.data === undefined ?
-              [] :
-              delta.deltaMessageReply.repliedToMessage.data.prng === undefined ?
-              [] :
-              JSON.parse(delta.deltaMessageReply.repliedToMessage.data.prng);
-
-            const m_id = mdata.map((u) => u.i);
-            const m_offset = mdata.map((u) => u.o);
-            const m_length = mdata.map((u) => u.l);
-
-            const rmentions = {};
-            for (let i = 0; i < m_id.length; i++) {
-              rmentions[m_id[i]] = (delta.deltaMessageReply.repliedToMessage.body || '').substring(m_offset[i], m_offset[i] + m_length[i]);
-            }
+            const rmentions = utils.getMentions(delta.deltaMessageReply.repliedToMessage);
 
             callbackToReturn.messageReply = {
               threadID: (delta.deltaMessageReply.repliedToMessage.messageMetadata.threadKey.threadFbId ? delta.deltaMessageReply.repliedToMessage.messageMetadata.threadKey.threadFbId : delta.deltaMessageReply.repliedToMessage.messageMetadata.threadKey.otherUserFbId).toString(),
@@ -611,10 +622,14 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
                 };
                 const fetchData = resData[0].o0.data.message;
                 const mobj = {};
-
-                for (const n in fetchData.message.ranges) {
-                  mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || '').substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                if (fetchData.message && fetchData.message.ranges) {
+                  for (const n in fetchData.message.ranges) {
+                    if (fetchData.message.ranges[n] && fetchData.message.ranges[n].entity && fetchData.message.ranges[n].entity.id) {
+                      mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || '').substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                    }
+                  }
                 }
+
                 callbackToReturn.messageReply = {
                   type: 'Message',
                   threadID: callbackToReturn.threadID,
@@ -686,6 +701,17 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
             console.log(delta);
             return log.error('Lỗi Nhẹ', err);
           }
+          if (delta.type === 'change_thread_theme' && delta.untypedData) {
+            try {
+              var themeData = delta.untypedData;
+              if (themeData.theme_id && themeData.theme_name_with_subtitle) {
+                var cleanName = themeData.theme_name_with_subtitle.replace(/[^a-zA-Z0-9]/g, "");
+                if (cleanName.length > 0 && api.threadColors) {
+                  api.threadColors[cleanName] = themeData.theme_id.toString();
+                }
+              }
+            } catch (e) {}
+          }
           globalCallback(null, fmtMsg);
           break;
         }
@@ -749,6 +775,14 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
                   });
                   break;
                 case 'UserMessage': {
+                  const mobj = {};
+                  if (fetchData.message && fetchData.message.ranges) {
+                    for (const n in fetchData.message.ranges) {
+                      if (fetchData.message.ranges[n] && fetchData.message.ranges[n].entity && fetchData.message.ranges[n].entity.id) {
+                        mobj[fetchData.message.ranges[n].entity.id] = (fetchData.message.text || '').substr(fetchData.message.ranges[n].offset, fetchData.message.ranges[n].length);
+                      }
+                    }
+                  }
                   const event = {
                     type: 'message',
                     senderID: utils.formatID(fetchData.message_sender.id),
@@ -770,7 +804,7 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, {
                       subattachments: fetchData.extensible_attachment.subattachments,
                       properties: fetchData.extensible_attachment.story_attachment.properties,
                       }],
-                    mentions: {},
+                    mentions: mobj,
                     timestamp: parseInt(fetchData.timestamp_precise),
                     isGroup: (fetchData.message_sender.id !== tid.toString()),
                   };
@@ -923,6 +957,44 @@ module.exports = function(defaultFuncs, api, ctx) {
       if (error) return msgEmitter.emit("error", error);
       msgEmitter.emit("message", message);
     });
+
+    if (ctx.e2eeClient && !ctx.e2eeListenerRegistered) {
+      ctx.e2eeListenerRegistered = true;
+      ctx.e2eeClient.onEvent(function(e2eeEvent) {
+        if (!e2eeEvent) return;
+        if (e2eeEvent.type === "e2ee_message") {
+          var data = e2eeEvent.data || {};
+          var threadID = (data.threadId || "").toString();
+          var senderID = (data.senderJid || "").split(".")[0] || data.senderId || threadID;
+
+          if (ctx.e2eeThreads) {
+            ctx.e2eeThreads.add(threadID);
+            ctx.e2eeThreads.add(senderID);
+          }
+          if (ctx.threadToUserMap && threadID && senderID) {
+            ctx.threadToUserMap.set(threadID, senderID);
+          }
+
+          var formattedEvent = {
+            type: "e2ee_message",
+            senderID: senderID,
+            body: data.text || data.body || "",
+            threadID: threadID,
+            messageID: data.messageId || data.mid || utils.generateOfflineThreadingID(),
+            timestamp: data.timestamp || Date.now(),
+            isGroup: false,
+            isE2EE: true,
+            data: data
+          };
+
+          if (typeof globalCallback === "function") {
+            globalCallback(null, formattedEvent);
+          }
+        } else if (e2eeEvent.type === "e2ee_connected") {
+          log.info("listenMqtt", "[E2EE] Stream E2EE đã sẵn sàng");
+        }
+      });
+    }
 
     //Reset some stuff
     if (!ctx.firstListen) ctx.lastSeqId = null;

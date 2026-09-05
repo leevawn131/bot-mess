@@ -228,7 +228,7 @@ function runModeSchedulerTick(api) {
                     safeSendMessage(
                         api,
                         threadID,
-                        `⏰ Nhắc lịch mode\n━{13}\n🕒 Còn 15 phút nữa sẽ tự đổi mode\n🎛️ Mode đích: ${targetMode.toUpperCase()}\n🕓 Giờ chuyển: ${targetTime}`,
+                        `⏰ Nhắc lịch mode\n━━━━━━━━━━━━━\n🕒 Còn 15 phút nữa sẽ tự đổi mode\n🎛️ Mode đích: ${targetMode.toUpperCase()}\n🕓 Giờ chuyển: ${targetTime}`,
                         "cảnh báo trước 15 phút"
                     );
                 }
@@ -253,7 +253,7 @@ function runModeSchedulerTick(api) {
             safeSendMessage(
                 api,
                 threadID,
-                `⏰ Tự động đổi mode theo lịch\n━{13}\n🕒 Thời gian: ${targetTime}\n🎛️ Mode mới: ${targetMode.toUpperCase()}`,
+                `⏰ Tự động đổi mode theo lịch\n━━━━━━━━━━━━━\n🕒 Thời gian: ${targetTime}\n🎛️ Mode mới: ${targetMode.toUpperCase()}`,
                 "thông báo đổi mode"
             );
         });
@@ -271,7 +271,7 @@ function runModeSchedulerTick(api) {
                 safeSendMessage(
                     api,
                     threadID,
-                    `⏰ Nhắc lịch mode tạm thời\n━{13}\n🕒 Còn khoảng ${formatCountdown(inMsLeft)} nữa sẽ quay về mode cũ\n🔄 Từ ${inTask.temporaryMode.toUpperCase()} về ${inTask.restoreMode.toUpperCase()}\n🕓 Dự kiến: ${formatDateTimeVN(inTask.restoreAt)}`,
+                    `⏰ Nhắc lịch mode tạm thời\n━━━━━━━━━━━━━\n🕒 Còn khoảng ${formatCountdown(inMsLeft)} nữa sẽ quay về mode cũ\n🔄 Từ ${inTask.temporaryMode.toUpperCase()} về ${inTask.restoreMode.toUpperCase()}\n🕓 Dự kiến: ${formatDateTimeVN(inTask.restoreAt)}`,
                     "cảnh báo lịch in"
                 );
             }
@@ -291,7 +291,7 @@ function runModeSchedulerTick(api) {
             safeSendMessage(
                 api,
                 threadID,
-                `⏰ Hết thời gian mode tạm thời\n━{13}\n🔄 Đã quay về mode cũ: ${inTask.restoreMode.toUpperCase()}\n🕓 Thời điểm: ${formatDateTimeVN(inTask.restoreAt)}`,
+                `⏰ Hết thời gian mode tạm thời\n━━━━━━━━━━━━━\n🔄 Đã quay về mode cũ: ${inTask.restoreMode.toUpperCase()}\n🕓 Thời điểm: ${formatDateTimeVN(inTask.restoreAt)}`,
                 "thông báo hoàn tác mode in"
             );
 
@@ -311,7 +311,7 @@ function runModeSchedulerTick(api) {
             safeSendMessage(
                 api,
                 threadID,
-                `⏰ Nhắc lịch mode\n━{13}\n🕒 Còn khoảng ${formatCountdown(inMsLeft)} nữa sẽ tự đổi mode\n🎛️ Mode đích: ${inTask.mode.toUpperCase()}\n🕓 Dự kiến: ${formatDateTimeVN(inTask.executeAt)}`,
+                `⏰ Nhắc lịch mode\n━━━━━━━━━━━━━\n🕒 Còn khoảng ${formatCountdown(inMsLeft)} nữa sẽ tự đổi mode\n🎛️ Mode đích: ${inTask.mode.toUpperCase()}\n🕓 Dự kiến: ${formatDateTimeVN(inTask.executeAt)}`,
                 "cảnh báo lịch in cũ"
             );
         }
@@ -330,7 +330,7 @@ function runModeSchedulerTick(api) {
             safeSendMessage(
                 api,
                 threadID,
-                `⏰ Đã đổi mode theo lịch 'in' (kiểu cũ)\n━{13}\n🎛️ Mode mới: ${inTask.mode.toUpperCase()}\n🕓 Thời điểm: ${formatDateTimeVN(inTask.executeAt)}`,
+                `⏰ Đã đổi mode theo lịch 'in' (kiểu cũ)\n━━━━━━━━━━━━━\n🎛️ Mode mới: ${inTask.mode.toUpperCase()}\n🕓 Thời điểm: ${formatDateTimeVN(inTask.executeAt)}`,
                 "thông báo đổi mode in kiểu cũ"
             );
         }

@@ -55,8 +55,13 @@ async function sendRentedList(api, threadID, senderID, page) {
 
       let groupName = "Không rõ";
       try {
-        const tInfo = await getThreadInfoCached(api, rThreadID);
-        if (tInfo && tInfo.threadName) groupName = tInfo.threadName;
+        const cachedGroup = await execute("SELECT thread_name FROM thread_info_cache WHERE thread_id = ? LIMIT 1", [rThreadID]);
+        if (cachedGroup && cachedGroup[0] && cachedGroup[0].thread_name) {
+          groupName = cachedGroup[0].thread_name;
+        } else {
+          const tRows = await execute("SELECT thread_name FROM threads WHERE thread_id = ? LIMIT 1", [rThreadID]);
+          if (tRows && tRows[0] && tRows[0].thread_name) groupName = tRows[0].thread_name;
+        }
       } catch (e) { }
 
       let renterName = "Không rõ";
@@ -82,17 +87,7 @@ async function sendRentedList(api, threadID, senderID, page) {
               if (global.data?.userName) global.data.userName.set(id, dbRows[0].name);
               renterName = `${dbRows[0].name} (${id})`;
             } else {
-              try {
-                const uInfo = await api.getUserInfo(id);
-                if (uInfo && uInfo[id] && uInfo[id].name) {
-                  if (global.data?.userName) global.data.userName.set(id, uInfo[id].name);
-                  renterName = `${uInfo[id].name} (${id})`;
-                } else {
-                  renterName = id;
-                }
-              } catch (_) {
-                renterName = id;
-              }
+              renterName = id;
             }
           }
         }
@@ -282,7 +277,7 @@ module.exports = {
     `\n${botPrefix}thuebot doigoi → Đổi gói thuê (THƯỜNG ⇄ ADMIN-BOT)` +
     `\n${botPrefix}thuebot doigoi xacnhan → Xác nhận thực hiện chuyển đổi gói` +
     `\n${botPrefix}thuebot huy → Hủy giao dịch thuê bot đang chờ thanh toán` +
-    `\n━━━━━━━━━━━━━━━━━━━━━━━` +
+    `\n━━━━━━━━━━━━━` +
     `\n👑 CÁC LỆNH DÀNH CHO ADMIN BOT:` +
     `\n${botPrefix}thuebot list → Xem danh sách tất cả các nhóm đang thuê bot` +
     `\n${botPrefix}thuebot lichsu → Xem lịch sử đơn hàng thuê bot` +
@@ -728,13 +723,13 @@ module.exports = {
     }
   },
 
-  async handleReply({ api, event, config }) {
+  async handleReply({ api, event, config, handleReply: passedHandleReply }) {
     const { threadID, messageID, senderID, body, messageReply } = event;
     const prefix = config?.prefix || "!";
     if (!messageReply || !messageReply.messageID) return;
 
     const list = global.client && Array.isArray(global.client.handleReply) ? global.client.handleReply : [];
-    const handleReply = list.find(h => String(h.messageID) === String(messageReply.messageID) && h.name === "thuebot");
+    const handleReply = passedHandleReply || list.find(h => String(h.messageID) === String(messageReply.messageID) && h.name === "thuebot");
     if (!handleReply) return;
 
     // 1. XỬ LÝ PHẢN HỒI CHO MENU THUÊ BOT (BẢNG GIÁ THUÊ BOT)

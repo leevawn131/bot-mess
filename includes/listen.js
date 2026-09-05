@@ -145,7 +145,7 @@ module.exports = function ({ api, models }) {
 }());
   
   const admin = config.ADMINBOT; 
-logger("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓", "[ DGK ]");
+logger("┏━━━━━━━━━━━━━┓", "[ DGK ]");
   for(let i = 0; i <= admin.length -1; i++){
     dem = i + 1
     logger(` ID ADMIN ${dem}: ${(!admin[i]) ? "Trống" : admin[i]}`, "[ GKHANH ]");
@@ -153,7 +153,7 @@ logger("┏━━━━━━━━━━━━━━━━━━━━━━━
   logger(` ID BOT: ${api.getCurrentUserID()}`, "[ GKhanh ]");
   logger(` PREFIX: ${global.config.PREFIX}`, "[ GKhanh ]");
   logger(` NAME BOT: ${(!global.config.BOTNAME) ? "Qindy Gkhanh" : global.config.BOTNAME}`, "[ Gkhanh ]");
-  logger("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛", "[ Gkhanh ]");
+  logger("┗━━━━━━━━━━━━━┛", "[ Gkhanh ]");
   /////////////////////////////////////////////
   //========= Require all handle need =========//  /////////////////////////////////////////////
   const handleCommand = require("./handle/handleCommand")({ api, models, Users, Threads, Currencies });
@@ -441,6 +441,7 @@ switch (event.type) {
             case "message":
             case "message_reply":
             case "message_unsend":
+            case "e2ee_message":
             if (event.senderID && event.threadID) {
               checkAndRestoreOldMemberNickname(api, event.threadID, event.senderID);
             }

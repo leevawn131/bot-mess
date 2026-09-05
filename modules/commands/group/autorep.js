@@ -134,7 +134,7 @@ function parseKeywordOnly(args) {
 module.exports = {
     name: "autorep",
     description: "Tạo autorep theo từ khóa trong nhóm",
-    usage: `\n${prefix}autorep [cụm từ] | [nội dung autorep] → Lưu autorep cho nhóm\n${prefix}autorep [cụm từ] | → Lưu chỉ media nếu bạn reply ảnh/video\n${prefix}autorep list → Xem danh sách autorep\n${prefix}autorep del [cụm từ] → Xóa autorep\n${prefix}autorep clear → Xóa hết autorep của nhóm (chỉ chủ bot/adminBot)\nVí dụ: ${prefix}autorep @Ngân Hà | Đúng rồi em\n━━━━━━━━━━━━━━━━━━\n💬 Khi tin nhắn chứa cụm từ, bot sẽ tự nhắn lại nội dung đã cài\n🖼️ Nếu reply ảnh/video khi cài, bot sẽ gửi kèm media đó`,
+    usage: `\n${prefix}autorep [cụm từ] | [nội dung autorep] → Lưu autorep cho nhóm\n${prefix}autorep [cụm từ] | → Lưu chỉ media nếu bạn reply ảnh/video\n${prefix}autorep list → Xem danh sách autorep\n${prefix}autorep del [cụm từ] → Xóa autorep\n${prefix}autorep clear → Xóa hết autorep của nhóm (chỉ chủ bot/adminBot)\nVí dụ: ${prefix}autorep @Ngân Hà | Đúng rồi em\n━━━━━━━━━━━━━\n💬 Khi tin nhắn chứa cụm từ, bot sẽ tự nhắn lại nội dung đã cài\n🖼️ Nếu reply ảnh/video khi cài, bot sẽ gửi kèm media đó`,
 
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;

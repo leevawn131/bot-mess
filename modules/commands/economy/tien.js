@@ -19,7 +19,7 @@ function getBossID() {
 module.exports = {
   name: "tien",
   description: "Xem tiền & chuyển tiền",
-  usage: `\n${prefix}tien → Xem số dư & hạn mức chuyển tiền\n${prefix}tien chuyen [số_tiền] @tag → Chuyển tiền cho người được tag\n${prefix}tien chuyen [số_tiền] (reply) → Chuyển cho người được reply\n━━━━━━━━━━━━━━━━━━\n📌 Phí chuyển: 2% | Hạn mức/ngày có giới hạn (Hỗ trợ k, tr, m)\n💡 Hoặc dùng tắt: ${prefix}chuyentien [số_tiền] @tag`,
+  usage: `\n${prefix}tien → Xem số dư & hạn mức chuyển tiền\n${prefix}tien chuyen [số_tiền] @tag → Chuyển tiền cho người được tag\n${prefix}tien chuyen [số_tiền] (reply) → Chuyển cho người được reply\n━━━━━━━━━━━━━\n📌 Phí chuyển: 2% | Hạn mức/ngày có giới hạn (Hỗ trợ k, tr, m)\n💡 Hoặc dùng tắt: ${prefix}chuyentien [số_tiền] @tag`,
   execute: async ({ api, event, args, config, transferMode = false }) => {
     await ensureMentionsFromHistory(api, event);
     const { threadID, messageID, senderID, mentions, type, messageReply } = event;
@@ -203,7 +203,7 @@ module.exports = {
               (now - dueDate) / (1000 * 60 * 60 * 24),
             );
             return api.sendMessage(
-              `❌ NGƯỜI NHẬN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━━━━━━\n👤 ${await getName(stringTargetID)}\n⚠️ Nợ quá hạn: ${daysOverdue} ngày\n🚫 Không thể chuyển tiền cho người đang nợ!`,
+              `❌ NGƯỜI NHẬN ĐANG NỢ TIỀN!\n━━━━━━━━━━━━━\n👤 ${await getName(stringTargetID)}\n⚠️ Nợ quá hạn: ${daysOverdue} ngày\n🚫 Không thể chuyển tiền cho người đang nợ!`,
               threadID,
               messageID,
             );
@@ -335,7 +335,7 @@ module.exports = {
 
           if (stringSenderID === bossID) {
             return api.sendMessage(
-              `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName} 👑\n📥 Nhận: ${targetName}\n💰 Tiền chuyển: ${amount.toLocaleString('vi-VN')}\n🧾 Thuế chuyển (2%): ${taxAmount.toLocaleString('vi-VN')}\n💸 Tổng trừ: ${totalDebit.toLocaleString('vi-VN')}\n━━━━━━━━━━━━━━━━━━\n🔓 Không giới hạn (Boss)`,
+              `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName} 👑\n📥 Nhận: ${targetName}\n💰 Tiền chuyển: ${amount.toLocaleString('vi-VN')}\n🧾 Thuế chuyển (2%): ${taxAmount.toLocaleString('vi-VN')}\n💸 Tổng trừ: ${totalDebit.toLocaleString('vi-VN')}\n━━━━━━━━━━━━━\n🔓 Không giới hạn (Boss)`,
               threadID,
               messageID,
             );
@@ -343,7 +343,7 @@ module.exports = {
             const newTransferred = transferredToday + amount;
             const remaining = dailyLimit - newTransferred;
             return api.sendMessage(
-              `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName}\n📥 Nhận: ${targetName}\n💰 Tiền chuyển: ${amount.toLocaleString('vi-VN')}\n🧾 Thuế chuyển (2%): ${taxAmount.toLocaleString('vi-VN')}\n💸 Tổng trừ: ${totalDebit.toLocaleString('vi-VN')}\n━━━━━━━━━━━━━━━━━━\n💳 Hạn mức còn lại: ${remaining.toLocaleString('vi-VN')}/${dailyLimit.toLocaleString('vi-VN')}`,
+              `✅ GIAO DỊCH THÀNH CÔNG!\n📤 Gửi: ${senderName}\n📥 Nhận: ${targetName}\n💰 Tiền chuyển: ${amount.toLocaleString('vi-VN')}\n🧾 Thuế chuyển (2%): ${taxAmount.toLocaleString('vi-VN')}\n💸 Tổng trừ: ${totalDebit.toLocaleString('vi-VN')}\n━━━━━━━━━━━━━\n💳 Hạn mức còn lại: ${remaining.toLocaleString('vi-VN')}/${dailyLimit.toLocaleString('vi-VN')}`,
               threadID,
               messageID,
             );
@@ -361,7 +361,7 @@ module.exports = {
       else if (["hanmuc", "limit", "hm"].includes(command)) {
         if (stringSenderID === bossID) {
           return api.sendMessage(
-            `👑 HẠN MỨC BOSS\n━━━━━━━━━━━━━━━━━━\n🔓 KHÔNG GIỚI HẠN\n━━━━━━━━━━━━━━━━━━\n💎 Boss có đặc quyền chuyển tiền không giới hạn`,
+            `👑 HẠN MỨC BOSS\n━━━━━━━━━━━━━\n🔓 KHÔNG GIỚI HẠN\n━━━━━━━━━━━━━\n💎 Boss có đặc quyền chuyển tiền không giới hạn`,
             threadID,
             messageID,
           );
@@ -413,11 +413,11 @@ module.exports = {
         const gamesUntilNextBonus = 5 - (gamesPlayed % 5);
 
         let msg = `💳 HẠN MỨC CHUYỂN TIỀN (THẾ GIỚI NÀY)\n`;
-        msg += `━━━━━━━━━━━━━━━━━━\n`;
+        msg += `━━━━━━━━━━━━━\n`;
         msg += `📊 Hạn mức hôm nay: ${dailyLimit.toLocaleString('vi-VN')}\n`;
         msg += `📤 Đã chuyển: ${transferredToday.toLocaleString('vi-VN')}\n`;
         msg += `💰 Còn lại: ${remaining.toLocaleString('vi-VN')}\n`;
-        msg += `━━━━━━━━━━━━━━━━━━\n`;
+        msg += `━━━━━━━━━━━━━\n`;
         msg += `🎮 Games đã chơi: ${gamesPlayed} lần\n`;
         msg += `📈 Mỗi 5 games: +${bonusPerFiveGames.toLocaleString('vi-VN')}\n`;
         msg += `⏭️ Còn ${gamesUntilNextBonus} games nữa -> +${bonusPerFiveGames.toLocaleString('vi-VN')}\n`;
@@ -425,10 +425,10 @@ module.exports = {
         if (hasVIP) {
           const vipExpire = new Date(userRows[0].vip_until);
           const daysLeft = Math.ceil((vipExpire - now) / (1000 * 60 * 60 * 24));
-          msg += `━━━━━━━━━━━━━━━━━━\n`;
+          msg += `━━━━━━━━━━━━━\n`;
           msg += `👑 VIP (Nhóm này): Đang hoạt động (${daysLeft} ngày)\n`;
         } else {
-          msg += `━━━━━━━━━━━━━━━━━━\n`;
+          msg += `━━━━━━━━━━━━━\n`;
           msg += `💡 Mua VIP ở nhóm này để gấp đôi hạn mức!\n`;
         }
 

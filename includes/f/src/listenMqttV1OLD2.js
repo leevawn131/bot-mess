@@ -613,6 +613,17 @@ function parseDelta(defaultFuncs, api, ctx, globalCallback, v) {
                         console.log(v.delta);
                         return log.error("Lỗi Nhẹ", err);
                     }
+                    if (v.delta.type === 'change_thread_theme' && v.delta.untypedData) {
+                        try {
+                            var themeData = v.delta.untypedData;
+                            if (themeData.theme_id && themeData.theme_name_with_subtitle) {
+                                var cleanName = themeData.theme_name_with_subtitle.replace(/[^a-zA-Z0-9]/g, "");
+                                if (cleanName.length > 0 && api.threadColors) {
+                                    api.threadColors[cleanName] = themeData.theme_id.toString();
+                                }
+                            }
+                        } catch (e) {}
+                    }
                     return (function () { globalCallback(null, fmtMsg); })();
                 }
             break;

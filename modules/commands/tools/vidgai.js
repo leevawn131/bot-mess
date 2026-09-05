@@ -414,11 +414,12 @@ module.exports = {
 
             const filePath = path.join(VIDEO_DIR, randomFileName);
 
-            // Thử lấy token đã được upload trước từ pool
+            // Thử lấy token đã được upload trước từ pool (Chỉ cho chat thường, luồng E2EE dùng stream file trực tiếp)
             let attachmentPayload;
             let isPreuploaded = false;
+            const isE2EE = event.isE2EE || (api.e2eeThreads && api.e2eeThreads.has(String(threadID))) || (global.api_instance?.e2eeThreads && global.api_instance.e2eeThreads.has(String(threadID)));
 
-            const pool = attachmentIdPools.get(filePath) || [];
+            const pool = !isE2EE ? (attachmentIdPools.get(filePath) || []) : [];
             if (pool.length > 0) {
                 const token = pool.shift();
                 attachmentIdPools.set(filePath, pool);
@@ -445,7 +446,7 @@ module.exports = {
                 // Xóa video sau 60 giây
                 setTimeout(() => {
                     try {
-                        api.unsendMessage(videoMsg.messageID);
+                        api.unsendMessage(videoMsg.messageID, threadID);
                     } catch (e) {
                         console.error("Lỗi xóa video:", e);
                     }

@@ -307,8 +307,12 @@ function formatMessagesGraphQLResponse(data) {
         }
 
         var mentionsObj = {};
-        if (d.message !== null) {
-          d.message.ranges.forEach(e => mentionsObj[e.entity.id] = d.message.text.substr(e.offset, e.length));
+        if (d.message !== null && d.message.ranges) {
+          d.message.ranges.forEach(e => {
+            if (e && e.entity && e.entity.id) {
+              mentionsObj[e.entity.id] = (d.message.text || '').substr(e.offset, e.length);
+            }
+          });
         }
 
         return {

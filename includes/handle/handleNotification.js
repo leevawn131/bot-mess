@@ -31,10 +31,10 @@ api.httpPost("https://www.facebook.com/api/graphql/", form, (error, response) =>
 
                 if (getMinutesOfTime(new Date(timestamp * 1000), new Date()) <= 1) {
                     const msg = `===〘『 𝗡𝗢𝗧𝗜𝗙𝗜𝗖𝗔𝗧𝗜𝗢𝗡 』〙===
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 [⏰] → 𝗧𝗶𝗺𝗲: ${time}
 [💬] → 𝗠𝗲𝘀𝘀𝗮𝗴𝗲: ${body}
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 [🔗] → 𝗟𝗶𝗻𝗸 𝗯𝗮̀𝗶: ${link}`;
 
       api.sendMessage(msg, global.config.NDH[0]);

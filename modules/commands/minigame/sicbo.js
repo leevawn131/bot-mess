@@ -7,6 +7,7 @@ const {
   recordMinigameSuccess,
 } = require("../../utils/minigameLimiter");
 const { recordAction } = require("../../utils/questSystem");
+const { parseMoneyAmount } = require("../../utils/parseMoney");
 const prefix = process.env.BOT_PREFIX || "!";
 
 const TAX_RATE = 0.05;
@@ -627,7 +628,7 @@ module.exports = {
 Cú pháp cược: [Cửa_cược] [Số_tiền]
 (Mẹo: Bạn có thể cược nhiều cửa cùng lúc bằng cách dùng dấu "|" hoặc ",")
 
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 📝 CÁC CỬA CƯỢC & VÍ DỤ CỤ THỂ:
 
 1. TÀI / XỈU (Tỷ lệ 1:1 - Bão thua)
@@ -648,7 +649,7 @@ Cú pháp cược: [Cửa_cược] [Số_tiền]
    👉 Gõ: Điểm từ 7 đến 17 (Ví dụ: 10 20000 - cược tổng 10)
    👉 Với tổng 4, 5, 6: Gõ t4, t5, t6 (Ví dụ: t4 10000)
 
-━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 💡 Ví dụ cược nhiều cửa cùng lúc:
 Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
 
@@ -793,7 +794,7 @@ Reply sòng gõ: tai 50000 | 12 20000 | doi6 10000
             );
           }
         } else {
-          betAmount = parseInt(amountStr);
+          betAmount = parseMoneyAmount(amountStr);
         }
 
         if (isNaN(betAmount) || betAmount <= 0) {

@@ -6,7 +6,7 @@ const prefix = process.env.BOT_PREFIX || "!";
 module.exports = {
     name: "setkitu",
     description: "Cài đặt ký tự biệt danh riêng cho nhóm",
-    usage: `\n${prefix}setkitu [ký tự] → Cài đặt ký tự biệt danh cho nhóm (VD: SK- hoặc SK.)\n${prefix}setkitu off → Xóa ký tự biệt danh riêng của nhóm\n━━━━━━━━━━━━━━━━━━\n🔒 Chỉ QTV nhóm hoặc Admin Bot mới được sử dụng`,
+    usage: `\n${prefix}setkitu [ký tự] → Cài đặt ký tự biệt danh cho nhóm (VD: SK- hoặc SK.)\n${prefix}setkitu off → Xóa ký tự biệt danh riêng của nhóm\n━━━━━━━━━━━━━\n🔒 Chỉ QTV nhóm hoặc Admin Bot mới được sử dụng`,
 
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;
@@ -40,9 +40,9 @@ module.exports = {
         if (!trimmedSymbol || trimmedSymbol.toLowerCase() === "check" || trimmedSymbol.toLowerCase() === "info") {
             const currentPrefix = await getThreadPrefix(threadID);
             if (currentPrefix) {
-                return api.sendMessage(`📌 Ký tự biệt danh hiện tại của nhóm: "${currentPrefix}"\n━━━━━━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setkitu SK-)\n• ${cmdPrefix}setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
+                return api.sendMessage(`📌 Ký tự biệt danh hiện tại của nhóm: "${currentPrefix}"\n━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setkitu SK-)\n• ${cmdPrefix}setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
             } else {
-                return api.sendMessage(`📌 Nhóm chưa cài đặt ký tự biệt danh riêng.\n━━━━━━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setkitu SK- hoặc SK.)\n• ${cmdPrefix}setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
+                return api.sendMessage(`📌 Nhóm chưa cài đặt ký tự biệt danh riêng.\n━━━━━━━━━━━━━\n👉 Cách dùng:\n• ${cmdPrefix}setkitu [ký tự] → Cài ký tự mới cho nhóm (VD: ${cmdPrefix}setkitu SK- hoặc SK.)\n• ${cmdPrefix}setkitu off → Xóa ký tự biệt danh của nhóm`, threadID, messageID);
             }
         }
 

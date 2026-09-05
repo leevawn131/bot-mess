@@ -155,7 +155,7 @@ module.exports = {
 
           return api.sendMessage(
             `🧰 BẠN VỪA VỚT ĐƯỢC MỘT RƯƠNG BÁU BIỂN CỔ!\n` +
-            `━━━━━━━━━━━━━━━━━━\n` +
+            `━━━━━━━━━━━━━\n` +
             `💰 Bên trong chứa: +${goldBonus.toLocaleString('vi-VN')} xu!\n` +
             `⚡ Thể lực: -8 (${energyUse.energy}/${energyUse.maxEnergy})\n` +
             `🎒 Cần câu: ${remainingRodUses} lượt | Mồi: ${remainingBaitUses} lượt`,
@@ -171,7 +171,7 @@ module.exports = {
 
           return api.sendMessage(
             `👟 Ẹp... Bạn vừa kéo lên được một chiếc... LỐP XE CŨ PHẾ LIỆU!\n` +
-            `━━━━━━━━━━━━━━━━━━\n` +
+            `━━━━━━━━━━━━━\n` +
             `💵 Giá ve ve phế liệu: 500 xu.\n` +
             `⚡ Thể lực: -8 (${energyUse.energy}/${energyUse.maxEnergy})\n` +
             `🎒 Cần câu: ${remainingRodUses} lượt | Mồi: ${remainingBaitUses} lượt`,
@@ -223,7 +223,7 @@ module.exports = {
       );
 
       let msg = `🎣 BẠN VỪA GIẬT CẦU THÀNH CÔNG (THẾ GIỚI NÀY)!\n`;
-      msg += `━━━━━━━━━━━━━━━━━━\n`;
+      msg += `━━━━━━━━━━━━━\n`;
       if (isKing) {
         msg += `👑👑 CÁ KỶ LỤC (KING SIZE)! 👑👑\n`;
       }
@@ -232,7 +232,7 @@ module.exports = {
       msg += `📏 Kích thước: ${sizeCm} cm | ⚖️ Cân nặng: ${weightKg} kg\n`;
       msg += `💰 Giá ước tính: ${finalPrice.toLocaleString('vi-VN')} xu\n`;
       msg += `⚡ Thể lực: -8 (${energyUse.energy}/${energyUse.maxEnergy})\n`;
-      msg += `━━━━━━━━━━━━━━━━━━\n`;
+      msg += `━━━━━━━━━━━━━\n`;
       msg += `🎒 Cần (${rod.name}): Còn ${remainingRodUses} lượt\n`;
       msg += `🎒 Mồi (${bait.name}): Còn ${remainingBaitUses} lượt\n`;
       msg += `👉 Gõ ${prefix}shop banca để bán toàn bộ cá thu về xu!`;

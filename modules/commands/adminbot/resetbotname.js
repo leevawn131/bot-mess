@@ -87,7 +87,7 @@ module.exports = {
 
         return api.sendMessage(
             `📊 **KẾT QUẢ ĐẶT LẠI BIỆT DANH BOT**\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `━━━━━━━━━━━━━\n` +
             `• Tổng số nhóm đã xử lý: ${total}\n` +
             `• Đổi thành công: ${success}\n` +
             `• Thất bại: ${fail} (Có thể do bot thiếu quyền QTV hoặc FB chặn)`,

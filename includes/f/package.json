@@ -49,7 +49,8 @@
     "totp-generator": "^0.0.14",
     "tough-cookie": "^4.1.2",
     "uuid": "^9.0.0",
-    "ws": "^8.13.0"
+    "ws": "^8.13.0",
+    "fb-messenger-e2ee": "^0.1.7"
   },
   "engines": {
     "node": ">=14.x"

@@ -45,9 +45,11 @@ function getYtDlpCookieArg() {
 }
 
 function getYtDlpJsRuntimeArg() {
-  const nodeBin = String(process.env.YTDLP_NODE_BIN || process.execPath || "").trim();
-  if (nodeBin && fs.existsSync(nodeBin)) return `--js-runtimes "node:${nodeBin}"`;
-  return "";
+  const envNode = String(process.env.YTDLP_NODE_BIN || "").trim();
+  if (envNode && fs.existsSync(envNode)) return `--js-runtimes "node:${envNode}"`;
+  const execPath = String(process.execPath || "").trim();
+  if (execPath && fs.existsSync(execPath)) return `--js-runtimes "node:${execPath}"`;
+  return `--js-runtimes node`;
 }
 
 function buildYtDlpCommand(mainArgs, cacheDir) {
@@ -195,7 +197,8 @@ async function downloadYouTubeTomusic(url, cacheDir) {
   // 1. Tải MP3 trực tiếp (FFmpeg extract)
   try {
     const cmd = buildYtDlpCommand(
-      `-x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" -o "${mp3Path}" "${url}"`,
+      `-x --audio-format mp3 --audio-quality 128K --print "title:%(title)s" -o "${videoId}.%(ext)s" "${url}"`,
+      cacheDir
     );
     const out = await execYtDlpCommand(cmd);
     const title = extractPrintedTitle(out) || (await getYouTubeTitle(url));
@@ -211,7 +214,8 @@ async function downloadYouTubeTomusic(url, cacheDir) {
   // 2. Fallback: Fast M4A download rồi tự convert sang MP3
   try {
     const cmd = buildYtDlpCommand(
-      `-f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" -o "${m4aPath}" "${url}"`,
+      `-f "bestaudio[ext=m4a]/bestaudio" --print "title:%(title)s" -o "${videoId}.%(ext)s" "${url}"`,
+      cacheDir
     );
     const out = await execYtDlpCommand(cmd);
     const title = extractPrintedTitle(out) || (await getYouTubeTitle(url));
@@ -239,7 +243,8 @@ async function getSoundCloudTitle(url) {
 
 async function downloadSoundCloudTomusic(url, cacheDir) {
   const safeId = Buffer.from(url).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 24);
-  const outputBase = path.join(cacheDir, `sc_${safeId}`);
+  const filenameBase = `sc_${safeId}`;
+  const outputBase = path.join(cacheDir, filenameBase);
 
   const cached = findFirstExistingAudio(outputBase);
   if (cached) {
@@ -250,7 +255,8 @@ async function downloadSoundCloudTomusic(url, cacheDir) {
 
   console.log("📥 Tải audio từ SoundCloud...");
   const cmd = buildYtDlpCommand(
-    `-f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -x --audio-format mp3 --print "title:%(title)s" -o "${outputBase}.%(ext)s" "${url}"`,
+    `-f "http_mp3/hls_mp3/bestaudio[ext=mp3]/bestaudio" -x --audio-format mp3 --print "title:%(title)s" -o "${filenameBase}.%(ext)s" "${url}"`,
+    cacheDir
   );
   const out = await execYtDlpCommand(cmd);
   const title = extractPrintedTitle(out) || (await getSoundCloudTitle(url));
@@ -471,10 +477,10 @@ module.exports = {
   usage: "!music [tên bài hát | link YouTube/SoundCloud]",
 
   execute: async ({ api, event, args, config }) => {
-    const { threadID, messageID, senderID } = event;
+    const { threadID, messageID, senderID } = event || {};
     const prefix = config?.prefix || "!";
 
-    if (args.length === 0) {
+    if (!args || args.length === 0) {
       return api.sendMessage(
         `🎧 Dùng: ${prefix}music [tên bài hát]\nVí dụ: ${prefix}music See You Again`,
         threadID,
@@ -557,8 +563,8 @@ module.exports = {
   },
 
   handleReply: async ({ api, event, config }) => {
+    const { threadID, body, messageReply, senderID } = event || {};
     try {
-      const { threadID, body, messageReply, senderID } = event;
       if (!messageReply) return;
 
       global.musicSearchSessions = global.musicSearchSessions || {};
@@ -600,9 +606,13 @@ module.exports = {
       await sendAudioResult({ api, threadID, result, energyUse });
     } catch (err) {
       console.error("❌ Lỗi music.handleReply:", err);
-      api.sendMessage(`❌ Lỗi: ${err.message || "Không thể tải bài hát"}`, threadID);
+      if (threadID) {
+        api.sendMessage(`❌ Lỗi: ${err.message || "Không thể tải bài hát"}`, threadID);
+      }
     } finally {
-      try { delete global.musicSearchSessions[threadID]; } catch (_) {}
+      try {
+        if (threadID) delete global.musicSearchSessions[threadID];
+      } catch (_) {}
     }
   },
 };

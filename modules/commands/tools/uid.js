@@ -73,7 +73,7 @@ async function resolveUIDFromLink(api, link) {
 module.exports = {
     name: "uid",
     description: "Lấy ID người dùng (hỗ trợ tag, reply, link Facebook hoặc UID bản thân)",
-    usage: "\n!uid → Lấy UID của bản thân\n!uid @tag → Lấy UID người được tag\n!uid (reply) → Lấy UID người được reply\n!uid [link/username FB] → Lấy UID từ link Facebook\n━━━━━━━━━━━━━━━━━━\n🆔 Trả về Facebook User ID dạng số",
+    usage: "\n!uid → Lấy UID của bản thân\n!uid @tag → Lấy UID người được tag\n!uid (reply) → Lấy UID người được reply\n!uid [link/username FB] → Lấy UID từ link Facebook\n━━━━━━━━━━━━━\n🆔 Trả về Facebook User ID dạng số",
 
     execute: async ({ api, event, args }) => {
         const { threadID, messageID, senderID } = event;

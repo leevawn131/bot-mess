@@ -702,7 +702,7 @@ function formatMatchBoard(match, config) {
   return `${titleEmoji} [ID: ${match.id}] ${match.league}
 ⚔️ ${match.home_team} 🆚 ${match.away_team}
 ${clockText}
-${scoreText}━━━━━━━━━━━━━━
+${scoreText}━━━━━━━━━━━━━
 🏆 KÈO TRẬN ĐẤU (1X2)
 ① ${match.home_team} thắng: ${match.odds_1.toFixed(2)}
 ② Hòa: ${match.odds_2.toFixed(2)}
@@ -727,7 +727,7 @@ ${scoreText}━━━━━━━━━━━━━━
 ⑮ 1-1: ${match.odds_15.toFixed(2)} | ⑯ 0-1: ${match.odds_16.toFixed(2)}
 ⑰ 0-2: ${match.odds_17.toFixed(2)} | ⑱ 1-2: ${match.odds_18.toFixed(2)}
 ⑲ Khác: ${match.odds_19.toFixed(2)}
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 💰 Hướng dẫn đặt cược:
 Reply tin nhắn này theo cú pháp: [Số_Kèo] [Số_Tiền]
 
@@ -941,7 +941,7 @@ async function settleMatch(api, match, resultHome, resultAway, firstScorer) {
 🏆 ${match.league}
 👉 ${match.home_team} ${resultHome} 🆚 ${resultAway} ${match.away_team}
 🎯 Đội ghi bàn đầu: ${firstScorer === "home" ? match.home_team : (firstScorer === "away" ? match.away_team : "Không có")}
-━━━━━━━━━━━━━━\n`;
+━━━━━━━━━━━━━\n`;
 
       if (data.wins.length > 0) {
         msg += `🎉 THẮNG CƯỢC:\n${data.wins.join("\n")}\n\n`;
@@ -952,7 +952,7 @@ async function settleMatch(api, match, resultHome, resultAway, firstScorer) {
       if (data.refunds.length > 0) {
         msg += `🤝 HOÀN TIỀN:\n${data.refunds.join("\n")}\n`;
       }
-      msg += `━━━━━━━━━━━━━━\nSố tiền thắng/thua đã được cộng/trừ trực tiếp vào tài khoản ví của bạn!`;
+      msg += `━━━━━━━━━━━━━\nSố tiền thắng/thua đã được cộng/trừ trực tiếp vào tài khoản ví của bạn!`;
 
       api.sendMessage(msg, threadId);
     }
@@ -1022,7 +1022,7 @@ module.exports = {
         if (stats.max_streak >= 20) achievements.push("🔥 Tiên Tri Vũ Trụ (Thắng liên tiếp 20 trận)");
 
         const msg = `👤 THÔNG TIN CÁ CƯỢC: @${uName}
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 💰 Số dư hiện tại: ${credits.toLocaleString('vi-VN')}$
 🎫 Số vé đã đặt: ${stats.total_bets} trận
 📈 Tỷ lệ thắng: ${winRate}% (${stats.won_bets} thắng / ${stats.lost_bets} thua)
@@ -1056,7 +1056,7 @@ ${achievements.length > 0 ? achievements.map(a => `• ${a}`).join("\n") : "• 
         }
 
         let msg = `📊 BẢNG XẾP HẠNG ĐẠI GIA CÁ ĐỘ (TOP LỢI NHUẬN)
-━━━━━━━━━━━━━━\n`;
+━━━━━━━━━━━━━\n`;
         topPlayers.forEach((p, idx) => {
           const name = p.name || `Người chơi ${p.psid.slice(-6)}`;
           const roi = p.total_wagered > 0 ? ((p.total_profit / p.total_wagered) * 100).toFixed(1) : "0.0";
@@ -1179,7 +1179,7 @@ ${achievements.length > 0 ? achievements.map(a => `• ${a}`).join("\n") : "• 
     try {
       if (args.length === 0) {
         const helpMsg = `⚽ CÁ ĐỘ BÓNG ĐÁ REAL-TIME ⚽
-━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 Hệ thống cược bóng đá thực tế tự động lấy Odds nhà cái DraftKings từ ESPN & hỗ trợ cược Rung Live trong trận!
 
 👉 Hướng dẫn xem danh sách trận đấu:
@@ -1461,7 +1461,7 @@ Ví dụ: "1 50k" hoặc "6 all" hoặc "4 half"
 📉 Tỷ lệ Odds: ${selectedOdds.toFixed(2)}
 💰 Tiền cược: ${betAmount.toLocaleString('vi-VN')}$
 🔮 Có thể thắng: ${possiblePayout.toLocaleString('vi-VN')}$ (chưa trừ thuế 5% nếu thắng)
-━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 Chúc bạn may mắn! 🍀`;
 
       return api.sendMessage(successMsg, threadID, messageID);

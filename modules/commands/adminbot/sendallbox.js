@@ -120,7 +120,7 @@ async function processBroadcast(api) {
         const { adminThreadID, adminMessageID, content, tempFilePaths, shouldPin, noUnsend, allTargetIDs, sentGroups, kickedGroups, failedGroupsList } = state;
 
         const notifyMsg = content 
-            ? `📢 **THÔNG BÁO TỪ ADMIN BOT** 📢\n━━━━━━━━━━━━━━━━━━━━\n${content}`
+            ? `📢 **THÔNG BÁO TỪ ADMIN BOT** 📢\n━━━━━━━━━━━━━\n${content}`
             : `📢 **THÔNG BÁO TỪ ADMIN BOT** 📢`;
 
         let isInterrupted = false;
@@ -237,7 +237,7 @@ async function processBroadcast(api) {
             const successCount = Object.keys(sentGroups).length;
             const kickedCount = Object.keys(kickedGroups).length;
 
-            let report = `📊 **KẾT QUẢ GỬI THÔNG BÁO HOÀN TẤT**\n━━━━━━━━━━━━━━━━━━━━\n` +
+            let report = `📊 **KẾT QUẢ GỬI THÔNG BÁO HOÀN TẤT**\n━━━━━━━━━━━━━\n` +
                 `• Tổng số nhóm đã quét: ${total}\n` +
                 `• Gửi thành công: ${successCount} nhóm\n` +
                 `• Đã kick bot / Bỏ qua: ${kickedCount} nhóm`;
@@ -463,7 +463,7 @@ module.exports = {
             }
 
             const forwardMsg = `📩 **PHẢN HỒI THÔNG BÁO** 📩\n` +
-                               `━━━━━━━━━━━━━━━━━━━━\n` +
+                               `━━━━━━━━━━━━━\n` +
                                `👤 **Người gửi**: ${senderName} (ID: ${senderID})\n` +
                                `👥 **Nhóm**: ${threadName} (ID: ${threadID})\n` +
                                `💬 **Nội dung phản hồi**:\n${event.body || "[Chỉ gửi kèm tệp đính kèm]"}`;

@@ -74,7 +74,7 @@ async function getUserName(api, userID, fallback = 'Người dùng', threadID = 
 module.exports = {
     name: 'đấm',
     description: 'Đấm người được reply hoặc tag và gửi GIF',
-    usage: "\n!đấm @tag → Đấm người được tag\n!đấm (reply) → Đấm người được reply\n━━━━━━━━━━━━━━━━━━\n🥊 Gửi kèm GIF đấm và tin nhắn vui\n⚡ Tốn năng lượng mỗi lần dùng",
+    usage: "\n!đấm @tag → Đấm người được tag\n!đấm (reply) → Đấm người được reply\n━━━━━━━━━━━━━\n🥊 Gửi kèm GIF đấm và tin nhắn vui\n⚡ Tốn năng lượng mỗi lần dùng",
     execute: async ({ api, event, config }) => {
         await ensureMentionsFromHistory(api, event);
         const { threadID, messageID, senderID, mentions, messageReply } = event;

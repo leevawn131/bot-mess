@@ -180,12 +180,12 @@ module.exports = {
           }
         }
 
-        let msg = `🛡️ [ DANH SÁCH BỊ CẤM VĨNH VIỄN ] 🛡️\n📖 Trang ${page}/${totalPages} (Tổng: ${totalItems} thành viên)\n━━━━━━━━━━━━━━━━━━\n`;
+        let msg = `🛡️ [ DANH SÁCH BỊ CẤM VĨNH VIỄN ] 🛡️\n📖 Trang ${page}/${totalPages} (Tổng: ${totalItems} thành viên)\n━━━━━━━━━━━━━\n`;
 
         pageUsers.forEach((user, index) => {
           const name = user.name || "Người dùng Facebook";
           const date = new Date(user.blocked_at).toLocaleString("vi-VN");
-          msg += `${index + 1}. 👤 ${name}\n   🆔 UID: ${user.user_id}\n   ⏰ Ngày cấm: ${date}\n━━━━━━━━━━━━━━━━━━\n`;
+          msg += `${index + 1}. 👤 ${name}\n   🆔 UID: ${user.user_id}\n   ⏰ Ngày cấm: ${date}\n━━━━━━━━━━━━━\n`;
         });
 
         msg += "\n💬 Reply tin nhắn này kèm số thứ tự (ví dụ: 1 2) để gỡ cấm vĩnh viễn.";

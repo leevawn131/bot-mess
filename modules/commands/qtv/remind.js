@@ -334,7 +334,7 @@ async function downloadAttachment(attachment, targetPath) {
 module.exports = {
     name: "remind",
     description: "Hẹn giờ nhắc nhở cố định",
-    usage: `\n${prefix}remind [hh:mm] [nội dung] → Cài nhắc nhở 1 lần (có thể reply đính kèm media)\n${prefix}remind [hh:mm] [nội dung] -daily → Cài nhắc nhở hàng ngày\n${prefix}remind list → Xem danh sách nhắc nhở của nhóm\n${prefix}remind del [số thứ tự] → Xóa nhắc nhở theo số thứ tự\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⏰ Hẹn giờ nhắc nhở vào các khung giờ cố định trong ngày.\n🖼️ Trả lời (reply) ảnh/video/audio để đính kèm tệp tin tự động.`,
+    usage: `\n${prefix}remind [hh:mm] [nội dung] → Cài nhắc nhở 1 lần (có thể reply đính kèm media)\n${prefix}remind [hh:mm] [nội dung] -daily → Cài nhắc nhở hàng ngày\n${prefix}remind list → Xem danh sách nhắc nhở của nhóm\n${prefix}remind del [số thứ tự] → Xóa nhắc nhở theo số thứ tự\n━━━━━━━━━━━━━\n⏰ Hẹn giờ nhắc nhở vào các khung giờ cố định trong ngày.\n🖼️ Trả lời (reply) ảnh/video/audio để đính kèm tệp tin tự động.`,
     
     execute: async ({ api, event, args, config }) => {
         const { threadID, senderID, messageID } = event;

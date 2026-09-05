@@ -31,14 +31,24 @@ function toAdminIdList(threadInfo) {
     .filter(Boolean);
 }
 
+const {
+  getBotUID,
+  isBotUID,
+  getAllBotUIDs,
+  getStoredBotInfo,
+  saveBotIdentity,
+} = require("./botIdentity");
+
 /**
- * Get admin bot UIDs from config
+ * Lấy danh sách UID của Admin Bot (người quản trị thực tế)
+ * Tách biệt hoàn toàn với UID của bot
+ * @param {object} [api] - Optional API instance để loại trừ bot UID nếu có trong config cũ
+ * @returns {string[]}
  */
-function getAdminBotUIDs() {
+function getAdminBotUIDs(api) {
   try {
     let adminIDs = [];
-    // Prefer reading adminIDs from config.json (persisted file) so runtime updates
-    // written by the webhook (granting admin) are respected immediately.
+    // Đọc adminIDs từ config.json
     try {
       const cfgPath = path.join(__dirname, '../../config.json');
       if (fs.existsSync(cfgPath)) {
@@ -46,6 +56,8 @@ function getAdminBotUIDs() {
         const cfg = JSON.parse(raw || '{}');
         if (Array.isArray(cfg.adminIDs)) {
           adminIDs = cfg.adminIDs.map(String);
+        } else if (Array.isArray(cfg.ADMINBOT)) {
+          adminIDs = cfg.ADMINBOT.map(String);
         }
       }
     } catch (e) {
@@ -54,21 +66,40 @@ function getAdminBotUIDs() {
       adminIDs = (config?.adminIDs || []).map(String);
     }
 
-    // Always include the currently logged-in bot UID
-    if (global.botID && !adminIDs.includes(String(global.botID))) {
-      adminIDs.push(String(global.botID));
-    } else if (global.api_instance && typeof global.api_instance.getCurrentUserID === 'function') {
-      const botID = String(global.api_instance.getCurrentUserID());
-      if (botID && !adminIDs.includes(botID)) {
-        adminIDs.push(botID);
+    if (global.config) {
+      if (Array.isArray(global.config.ADMINBOT) && global.config.ADMINBOT.length > 0) {
+        adminIDs = Array.from(new Set([...adminIDs, ...global.config.ADMINBOT.map(String)]));
+      }
+      if (Array.isArray(global.config.adminIDs) && global.config.adminIDs.length > 0) {
+        adminIDs = Array.from(new Set([...adminIDs, ...global.config.adminIDs.map(String)]));
       }
     }
 
-    return adminIDs;
+    // Làm sạch và LOẠI BỎ hoàn toàn tất cả các UID bot đã từng lưu/chạy
+    const allBotUIDs = getAllBotUIDs();
+    const currentBot = getBotUID(api);
+    const cleanedAdminIDs = adminIDs
+      .map((id) => String(id || '').trim())
+      .filter((id) => Boolean(id) && !allBotUIDs.includes(id) && (!currentBot || id !== currentBot));
+
+    return Array.from(new Set(cleanedAdminIDs));
   } catch (error) {
     console.error('Error getting admin bot UIDs:', error);
     return [];
   }
+}
+
+/**
+ * Kiểm tra xem 1 UID có phải là Admin Bot hay không
+ * @param {string|number} uid 
+ * @param {object} [api]
+ * @returns {boolean}
+ */
+function isAdminBot(uid, api) {
+  const target = String(uid || "").trim();
+  if (!target) return false;
+  const adminList = getAdminBotUIDs(api);
+  return adminList.includes(target);
 }
 
 /**
@@ -96,19 +127,36 @@ async function checkPermission(threadID, senderID, api, commandName = "") {
   const settings = await readSettings();
   const mode = normalizeMode(settings[threadID] || "qtv");
 
-  // Chủ bot luôn được dùng tất cả các lệnh
-  const adminBotUIDs = getAdminBotUIDs();
-  if (adminBotUIDs.includes(String(senderID))) {
-    return { allowed: true, reason: "Bot admin" };
-  }
-
-  // Bot tự dùng lệnh ngang hàng với admin
-  const botUID = String(api.getCurrentUserID());
-  if (String(senderID) === botUID) {
+  // 1. Bot tự dùng lệnh nội bộ (Bot UID riêng)
+  if (isBotUID(senderID, api)) {
     return { allowed: true, reason: "Bot self-command" };
   }
 
-  // 1. Kiểm tra nếu người dùng bị cấm riêng trong nhóm này (Group Ban)
+  // 2. Chủ bot / Admin bot (Admin UID riêng) luôn được dùng tất cả các lệnh
+  if (isAdminBot(senderID, api)) {
+    return { allowed: true, reason: "Bot admin" };
+  }
+
+  // 3. Xử lý riêng khi chat 1-1 với Bot (Inbox cá nhân - Không áp dụng Mode QTV của nhóm)
+  const isInbox = String(threadID) === String(senderID);
+  if (isInbox) {
+    let commandPermission = 0;
+    if (commandName && global.commands && typeof global.commands.get === "function") {
+      const command = global.commands.get(commandName.toLowerCase());
+      if (command) {
+        commandPermission = command.hasPermssion ?? command.hasPermission ?? command.config?.hasPermssion ?? command.config?.hasPermission ?? 0;
+      }
+    }
+    if (commandPermission >= 2) {
+      return { allowed: false, reason: "Lệnh này chỉ dành cho Admin Bot!" };
+    }
+    if (commandPermission === 1) {
+      return { allowed: false, reason: "Lệnh này chỉ dùng trong nhóm chat có Quản trị viên!" };
+    }
+    return { allowed: true, reason: "Inbox 1-1 chat" };
+  }
+
+  // 4. Kiểm tra nếu người dùng bị cấm riêng trong nhóm này (Group Ban)
   try {
     const { isGroupBanned } = require("./groupBannedUsers");
     if (isGroupBanned(threadID, senderID)) {
@@ -116,7 +164,7 @@ async function checkPermission(threadID, senderID, api, commandName = "") {
     }
   } catch (e) {}
 
-  // 2. Xác định vai trò của người gửi: QTV nhóm, Người thuê bot (Renter), và gói thuê Admin
+  // 5. Xác định vai trò của người gửi: QTV nhóm, Người thuê bot (Renter), và gói thuê Admin
   let isQtv = false;
   let isRenter = false;
   let isAdminRental = false;
@@ -180,12 +228,20 @@ async function checkPermission(threadID, senderID, api, commandName = "") {
     }
   }
 
-  // 6. Mode QTV: Chỉ QTV nhóm hoặc Người thuê bot mới được dùng bot
+  // 6. Mode QTV: Chỉ QTV nhóm, Người thuê bot hoặc thành viên VIP mới được dùng bot
   if (mode === "qtv") {
     if (isQtv || isRenter) {
       return { allowed: true, reason: "Group admin / Renter in QTV mode" };
     }
-    return { allowed: false, reason: "Mode qtv - Chỉ Quản trị viên nhóm mới được dùng bot!" };
+    try {
+      const { isVipUser } = require("./vipManager");
+      const isVip = await isVipUser(senderID);
+      if (isVip) {
+        return { allowed: true, reason: "Thành viên VIP (Được phép dùng bot trong Mode QTV)" };
+      }
+    } catch (e) {}
+
+    return { allowed: false, reason: "Mode qtv - Chỉ Quản trị viên nhóm / VIP mới được dùng bot!" };
   }
 
   // 7. Mode USER: Mọi thành viên trong nhóm đều được dùng
@@ -209,6 +265,9 @@ module.exports = {
   checkPermission,
   getGroupMode,
   getAdminBotUIDs,
+  getBotUID,
+  isBotUID,
+  isAdminBot,
   readSettings,
   toAdminIdList
 };

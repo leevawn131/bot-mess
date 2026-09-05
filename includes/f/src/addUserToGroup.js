@@ -12,17 +12,20 @@ module.exports = function (defaultFuncs, api, ctx) {
       rejectFunc = reject;
     });
 
-    if (!callback && (utils.getType(threadID) === "Function" || utils.getType(threadID) === "AsyncFunction")) throw { error: "please pass a threadID as a second argument." };
+    if (!callback && (utils.getType(threadID) === "Function" || utils.getType(threadID) === "AsyncFunction")) {
+      throw { error: "please pass a threadID as a second argument." };
+    }
 
     if (!callback) {
-      callback = function (err) {
+      callback = function (err, data) {
         if (err) return rejectFunc(err);
-        resolveFunc();
+        resolveFunc(data);
       };
     }
-    
-    if (utils.getType(threadID) !== "Number" && utils.getType(threadID) !== "String") throw { error: "ThreadID should be of type Number or String and not " + utils.getType(threadID) + "." };
 
+    if (utils.getType(threadID) !== "Number" && utils.getType(threadID) !== "String") {
+      throw { error: "ThreadID should be of type Number or String and not " + utils.getType(threadID) + "." };
+    }
 
     if (utils.getType(userID) !== "Array") userID = [userID];
 
@@ -55,7 +58,9 @@ module.exports = function (defaultFuncs, api, ctx) {
     };
 
     for (var i = 0; i < userID.length; i++) {
-      if (utils.getType(userID[i]) !== "Number" && utils.getType(userID[i]) !== "String") throw { error: "Elements of userID should be of type Number or String and not " + utils.getType(userID[i]) + "." };
+      if (utils.getType(userID[i]) !== "Number" && utils.getType(userID[i]) !== "String") {
+        throw { error: "Elements of userID should be of type Number or String and not " + utils.getType(userID[i]) + "." };
+      }
       form["log_message_data[added_participants][" + i + "]"] = "fbid:" + userID[i];
     }
 
@@ -63,11 +68,29 @@ module.exports = function (defaultFuncs, api, ctx) {
       .post("https://www.facebook.com/messaging/send/", ctx.jar, form)
       .then(utils.parseAndCheckLogin(ctx, defaultFuncs))
       .then(function (resData) {
-        if (!resData) throw { error: "Add to group failed." };
-        if (resData.error) throw resData;
+        if (!resData) throw { error: "Add to group failed: No response from Facebook." };
 
+        if (resData.error) {
+          switch (resData.error) {
+            case 1545052:
+            case 154504:
+              throw {
+                error: "Không thể thêm người dùng vào cuộc trò chuyện (Lỗi 1545052/154504). Nguyên nhân: Người dùng chưa phải bạn bè với bot, hoặc quyền riêng tư của người dùng ngăn chặn việc thêm vào nhóm chat.",
+                errorCode: resData.error,
+                rawResponse: resData
+              };
+            case 1357031:
+              throw {
+                error: "Không thể thêm thành viên: Cuộc trò chuyện này không phải là nhóm chat.",
+                errorCode: resData.error,
+                rawResponse: resData
+              };
+            default:
+              throw resData;
+          }
+        }
 
-        return callback();
+        return callback(null, resData);
       })
       .catch(function (err) {
         log.error("addUserToGroup", err);

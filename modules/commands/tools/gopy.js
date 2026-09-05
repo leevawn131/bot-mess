@@ -121,13 +121,13 @@ module.exports = {
 
     // 5. Tạo tin nhắn góp ý để gửi tới nhóm admin
     const targetAdminThreadID = "844251878447942";
-    const feedbackMsg = `📩 **GÓP Ý TỪ NGƯỜI DÙNG** 📩\n━━━━━━━━━━━━━━━━━━━━\n` +
+    const feedbackMsg = `📩 **GÓP Ý TỪ NGƯỜI DÙNG** 📩\n━━━━━━━━━━━━━\n` +
       `👤 **Người góp ý:** ${senderName}\n` +
       `🆔 **UID:** ${senderID}\n` +
       `👥 **Nhóm:** ${groupName}\n` +
       `🆔 **TID:** ${threadID}\n` +
       `📝 **Nội dung:** ${content}\n` +
-      `━━━━━━━━━━━━━━━━━━━━`;
+      `━━━━━━━━━━━━━`;
 
     try {
       await api.sendMessage(feedbackMsg, targetAdminThreadID);

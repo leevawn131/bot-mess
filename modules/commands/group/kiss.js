@@ -134,7 +134,7 @@ async function getUserName(api, userID, fallback = "Người ấy", threadID = n
 module.exports = {
   name: "kiss",
   description: "Hôn người được tag hoặc reply bằng GIF",
-  usage: "\n!kiss @tag → Hôn người được tag\n!kiss (reply) → Hôn người được reply\n━━━━━━━━━━━━━━━━━━\n💋 Gửi kèm GIF hôn và tin nhắn ngọt ngào\n😘 Không thể hôn chính mình",
+  usage: "\n!kiss @tag → Hôn người được tag\n!kiss (reply) → Hôn người được reply\n━━━━━━━━━━━━━\n💋 Gửi kèm GIF hôn và tin nhắn ngọt ngào\n😘 Không thể hôn chính mình",
   execute: async ({ api, event }) => {
     const { ensureMentionsFromHistory } = require("../../utils/mentionResolver");
     try {

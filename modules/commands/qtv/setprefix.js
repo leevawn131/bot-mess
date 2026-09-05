@@ -7,7 +7,7 @@ module.exports = {
     name: "setprefix",
     aliases: ["setfrefix"],
     description: "Đổi prefix (tiền tố lệnh) riêng cho nhóm",
-    usage: "\n/setprefix [ký tự mới] → Đổi prefix của nhóm (VD: /setprefix !)\n/setprefix reset → Đặt lại prefix mặc định của Bot\n━━━━━━━━━━━━━━━━━━\n🔒 Chỉ QTV nhóm hoặc Admin Bot mới được sử dụng\n⏳ Giới hạn: Chỉ đổi được tối đa 7 ngày 1 lần",
+    usage: "\n/setprefix [ký tự mới] → Đổi prefix của nhóm (VD: /setprefix !)\n/setprefix reset → Đặt lại prefix mặc định của Bot\n━━━━━━━━━━━━━\n🔒 Chỉ QTV nhóm hoặc Admin Bot mới được sử dụng\n⏳ Giới hạn: Chỉ đổi được tối đa 7 ngày 1 lần",
 
     execute: async ({ api, event, args, config }) => {
         const { threadID, senderID, messageID } = event;
@@ -49,7 +49,7 @@ module.exports = {
         if (args.length === 0) {
             return api.sendMessage(
                 `📌 Prefix hiện tại của nhóm: "${currentPrefix}"\n` +
-                `━━━━━━━━━━━━━━━━━━\n` +
+                `━━━━━━━━━━━━━\n` +
                 `👉 Cách dùng:\n` +
                 `• ${currentPrefix}setprefix [ký tự mới] → Đổi prefix nhóm (VD: ${currentPrefix}setprefix ! hoặc ${currentPrefix}setprefix .)\n` +
                 `• ${currentPrefix}setprefix reset → Khôi phục prefix mặc định của Bot ("${defaultPrefix}")\n` +

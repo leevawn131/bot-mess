@@ -25,9 +25,13 @@ function initializePool() {
             console.error('❌ Failed to open SQLite database:', err.message);
         } else {
             console.log('✅ SQLite database connected at:', DB_PATH);
-            // Optimization for SQLite performance
-            db.run('PRAGMA journal_mode=WAL;');
-            db.run('PRAGMA foreign_keys=ON;');
+            // Optimization for SQLite high concurrency and low-resource VPS
+            db.run('PRAGMA journal_mode = WAL;');
+            db.run('PRAGMA busy_timeout = 5000;');
+            db.run('PRAGMA synchronous = NORMAL;');
+            db.run('PRAGMA foreign_keys = ON;');
+            db.run('PRAGMA cache_size = -2000;'); // ~2MB cache
+            db.run('PRAGMA temp_store = MEMORY;');
         }
     });
 

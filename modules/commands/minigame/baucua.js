@@ -8,6 +8,7 @@ const {
   recordMinigameSuccess,
 } = require("../../utils/minigameLimiter");
 const { recordAction } = require("../../utils/questSystem");
+const { parseMoneyAmount } = require("../../utils/parseMoney");
 const prefix = process.env.BOT_PREFIX;
 
 const TAX_RATE = 0.05;
@@ -339,7 +340,7 @@ module.exports = {
           return api.sendMessage("⚠️ Phần trăm cược không hợp lệ (phải từ 1% đến 100%).", threadID, messageID);
         }
       } else {
-        betAmount = parseInt(amountStr);
+        betAmount = parseMoneyAmount(amountStr);
       }
 
       if (isNaN(betAmount) || betAmount <= 0)

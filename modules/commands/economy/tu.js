@@ -38,7 +38,7 @@ module.exports = {
                     return api.sendMessage("🏛️ Không có tù nhân nào.", threadID, messageID);
                 }
 
-                let msg = "🏛️ DANH SÁCH TÙ NHÂN\n━━━━━━━━━━━━━━━━━━\n";
+                let msg = "🏛️ DANH SÁCH TÙ NHÂN\n━━━━━━━━━━━━━\n";
                 rows.forEach((row, index) => {
                     const remainingMs = new Date(row.jail_until) - new Date();
 
@@ -95,10 +95,10 @@ module.exports = {
 
                return api.sendMessage(
                     `🔒 BẠN ĐANG TRONG TÙ!
-            ━━━━━━━━━━━━━━━━━━
+            ━━━━━━━━━━━━━
             ⏰ Còn lại: ${timeStr}
             ⚠️ Lý do: ${jail.reason}
-            ━━━━━━━━━━━━━━━━━━
+            ━━━━━━━━━━━━━
              💡 Dùng ${prefix}tu cuu để xin tại ngoại`,
                     threadID,
                     messageID
@@ -149,7 +149,7 @@ module.exports = {
 
                 if (credits < fee) {
                     return api.sendMessage(
-                        `💸 KHÔNG ĐỦ TIỀN CỨU TÙ!\n━━━━━━━━━━━━━━━━━━\n💰 Phí: ${fee.toLocaleString('vi-VN')}\n💵 Bạn có: ${credits.toLocaleString('vi-VN')}\n💔 Thiếu: ${(fee - credits).toLocaleString('vi-VN')}`,
+                        `💸 KHÔNG ĐỦ TIỀN CỨU TÙ!\n━━━━━━━━━━━━━\n💰 Phí: ${fee.toLocaleString('vi-VN')}\n💵 Bạn có: ${credits.toLocaleString('vi-VN')}\n💔 Thiếu: ${(fee - credits).toLocaleString('vi-VN')}`,
                         threadID,
                         messageID
                     );
@@ -166,7 +166,7 @@ module.exports = {
                     await connection.commit();
 
                     return api.sendMessage(
-                        `✅ CỨU TÙ THÀNH CÔNG!\n━━━━━━━━━━━━━━━━━━\n👤 Người được cứu: ${targetName}\n💰 Phí: ${fee.toLocaleString('vi-VN')}\n🔓 Đã được thả\n━━━━━━━━━━━━━━━━━━\n⚠️ Đừng phạm lỗi nữa nhé!`,
+                        `✅ CỨU TÙ THÀNH CÔNG!\n━━━━━━━━━━━━━\n👤 Người được cứu: ${targetName}\n💰 Phí: ${fee.toLocaleString('vi-VN')}\n🔓 Đã được thả\n━━━━━━━━━━━━━\n⚠️ Đừng phạm lỗi nữa nhé!`,
                         threadID,
                         messageID
                     );
@@ -177,7 +177,7 @@ module.exports = {
             }
 
             return api.sendMessage(
-                `🏛️ NHÀ TÙ - HƯỚNG DẪN\n━━━━━━━━━━━━━━━━━━\n🔍 ${prefix}tu check - Kiểm tra thời gian tù\n👥 ${prefix}tu check all - Xem danh sách tù nhân\n🔓 ${prefix}tu cuu @tag|reply - Bảo lãnh ra tù\n━━━━━━━━━━━━━━━━━━\n💰 Phí cứu tù: 200k - 500k`,
+                `🏛️ NHÀ TÙ - HƯỚNG DẪN\n━━━━━━━━━━━━━\n🔍 ${prefix}tu check - Kiểm tra thời gian tù\n👥 ${prefix}tu check all - Xem danh sách tù nhân\n🔓 ${prefix}tu cuu @tag|reply - Bảo lãnh ra tù\n━━━━━━━━━━━━━\n💰 Phí cứu tù: 200k - 500k`,
                 threadID,
                 messageID
             );

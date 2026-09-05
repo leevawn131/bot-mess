@@ -241,7 +241,7 @@ function setOptions(globalOptions, options) {
                         break;
                     }
                     case 'userAgent': {
-                        globalOptions.userAgent = (options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36');
+                        globalOptions.userAgent = (options.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36');
                         break;
                     }
                     case 'proxy': {
@@ -526,7 +526,10 @@ function buildAPI(globalOptions, html, jar, bypass_region) {
             firstListen: true,
             req_ID: 0,
             callback_Task: {},
-            fb_dtsg //i love u
+            fb_dtsg, //i love u
+            e2eeClient: undefined,
+            e2eeThreads: new Set(),
+            threadToUserMap: new Map()
         };
 
         var api = {
@@ -1187,7 +1190,7 @@ try {
                         let Regex_Via = /MPageLoadClientMetrics/gs; //default for normal account, can easily get region, without this u can't get region in some case but u can run normal
                         if (!Regex_Via.test(res.body)) {
                             //www.facebook.com
-                            globalOptions.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.2849.68";
+                            globalOptions.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
                             return utils.get('https://www.facebook.com/', jar, null, globalOptions, { noRef: true })
                         }
                         else return res
@@ -1239,6 +1242,52 @@ try {
                     logger.Normal(getText(Language.CountTime,global.Fca.Data.CountTime()))   
                         logger.Normal(Language.WishMessage[Math.floor(Math.random()*Language.WishMessage.length)]);
                     require('./Extra/ExtraUptimeRobot')();
+
+                try {
+                    const { FBClient } = require('fb-messenger-e2ee');
+                    const targetUid = String(ctx.userID || "default");
+                    const dbDir = join(process.cwd(), 'Horizon_Database', targetUid);
+                    if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+
+                    let rawAppState = utils.getAppState(jar, false);
+                    if (typeof rawAppState === "string") {
+                        try {
+                            const Security = require("./Extra/Security/Base");
+                            rawAppState = JSON.parse(Security(rawAppState, process.env['FBKEY'], "Decrypt"));
+                        } catch (_) {}
+                    }
+                    if (Array.isArray(rawAppState)) {
+                        rawAppState = rawAppState.map(c => ({
+                            key: c.key || c.name,
+                            value: c.value,
+                            domain: c.domain || "facebook.com",
+                            path: c.path || "/"
+                        }));
+                    }
+                    const e2eeClient = new FBClient({
+                        appState: rawAppState,
+                        sessionStorePath: join(dbDir, 'session.json'),
+                        platform: 'facebook'
+                    });
+
+                    const connRes = await e2eeClient.connect();
+                    const userId = (connRes && connRes.userId) ? String(connRes.userId) : targetUid;
+                    const actualDbDir = join(process.cwd(), 'Horizon_Database', userId);
+                    if (!fs.existsSync(actualDbDir)) fs.mkdirSync(actualDbDir, { recursive: true });
+
+                    await e2eeClient.connectE2EE(join(actualDbDir, 'device-store.json'), userId);
+
+                    ctx.e2eeClient = e2eeClient;
+                    ctx.e2eeThreads = ctx.e2eeThreads || new Set();
+                    api.e2eeClient = e2eeClient;
+                    api.connectE2EE = async function(storePath, uid) {
+                        return await e2eeClient.connectE2EE(storePath || join(actualDbDir, 'device-store.json'), uid || userId);
+                    };
+                    logger.Success('[ FCA-E2EE ] • Kết nối E2EE và đăng ký thiết bị thành công cho UID ' + userId + '!');
+                } catch (e2eeErr) {
+                    logger.Warning('[ FCA-E2EE ] • Không thể khởi tạo E2EE: ' + (e2eeErr.message || e2eeErr));
+                }
+
                 callback(null, api);
             }).catch(function(/** @type {{ error: any; }} */e) {
             log.error("login", e.error || e);
@@ -1314,7 +1363,7 @@ function login(loginData, options, callback) {
         logRecordSize: 100,
         online: false,
         emitReady: false,
-        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/603.3.8 (KHTML, like Gecko) Version/10.1.2 Safari/603.3.8"
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
     };
     
     var prCallback = null;

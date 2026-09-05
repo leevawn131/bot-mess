@@ -17,7 +17,7 @@ async function resolveUserName(api, uid) {
       if (global.data?.userName) global.data.userName.set(id, rows[0].name);
       return rows[0].name;
     }
-  } catch {}
+  } catch { }
 
   try {
     const info = await api.getUserInfo(id);
@@ -40,7 +40,7 @@ async function resolveUserName(api, uid) {
       if (global.data?.userName) global.data.userName.set(id, foundName);
       return foundName;
     }
-  } catch {}
+  } catch { }
 
   return null;
 }
@@ -67,7 +67,7 @@ module.exports = {
       );
     }
 
-    const adminBotUIDs = getAdminBotUIDs();
+    const adminBotUIDs = getAdminBotUIDs(api);
     const adminIds = Array.from(
       new Set(
         (Array.isArray(adminBotUIDs) ? adminBotUIDs : []).map((id) => String(id).trim()).filter(Boolean),
@@ -87,14 +87,34 @@ module.exports = {
         adminIds.map((id) => resolveUserName(api, id)),
       );
 
-      let msg = `👑 DANH SÁCH ADMIN BOT (${adminIds.length})\n━━━━━━━━━━━━━\n`;
+      if (typeof api.shareContact === "function") {
+        for (let i = 0; i < adminIds.length; i++) {
+          const id = adminIds[i];
+          const name = names[i] || "Admin";
+          const cardText = `👑 [ THÔNG TIN ADMIN BOT ] 👑\n━━━━━━━━━━━━━━━━━━\n👤 Tên: ${name}\n🆔 UID: ${id}\n━━━━━━━━━━━━━━━━━━\n👉 Bấm vào thẻ bên dưới để xem Profile hoặc nhắn tin trực tiếp!`;
 
+          try {
+            await new Promise((resolve, reject) => {
+              api.shareContact(cardText, id, threadID, (err, data) => {
+                if (err) return reject(err);
+                resolve(data);
+              });
+            });
+          } catch (shareErr) {
+            console.warn(`[adminbot] Lỗi gửi shareContact cho ${id}, chuyển sang gửi tin nhắn thường:`, shareErr.message || shareErr);
+            await api.sendMessage(cardText, threadID, messageID);
+          }
+        }
+        return;
+      }
+
+      // Fallback nếu api.shareContact không khả dụng
+      let msg = `👑 DANH SÁCH ADMIN BOT (${adminIds.length})\n━━━━━━━━━━━━━━━━━━\n`;
       adminIds.forEach((id, index) => {
         const name = names[index] || "Không lấy được tên";
-        const profileLink = `https://www.facebook.com/${id}`;
+        const profileLink = `https://www.messenger.com/e2ee/t/${id}`;
         msg += `${index + 1}. ${name}\n🔗 ${profileLink}\n`;
       });
-
       return api.sendMessage(msg.trim(), threadID, messageID);
     } catch (e) {
       console.error("Lỗi adminbot:", e);

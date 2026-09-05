@@ -18,27 +18,49 @@ module.exports = function (defaultFuncs, api, ctx) {
       };
     }
 
-    var form = {
-      nickname: nickname,
-      participant_id: participantID,
-      thread_or_other_fbid: threadID
+    if (!ctx.mqttClient) {
+      var err = { error: "Not connected to MQTT." };
+      log.error("changeNickname", err);
+      return callback(err);
+    }
+
+    var numThreadID = Number(threadID) || threadID;
+    var numParticipantID = Number(participantID) || participantID;
+
+    const Payload = {
+      thread_key: numThreadID,
+      contact_id: numParticipantID,
+      nickname: nickname || "",
+      sync_group: 1,
+      offline_threading_id: null
     };
 
-    defaultFuncs
-      .post("https://www.facebook.com/messaging/save_thread_nickname/?source=thread_settings&dpr=1", ctx.jar, form)
-      .then(utils.parseAndCheckLogin(ctx, defaultFuncs))
-      .then(function (resData) {
-        if (resData.error === 1545014) throw { error: "Trying to change nickname of user isn't in thread" };
-        if (resData.error === 1357031) throw { error: "Trying to change user nickname of a thread that doesn't exist. Have at least one message in the thread before trying to change the user nickname." };
+    const Form = JSON.stringify({
+      app_id: "2220391788200892",
+      payload: JSON.stringify({
+        tasks: [{
+          label: "44",
+          payload: JSON.stringify(Payload),
+          queue_name: "thread_participant_nickname",
+          task_id: Math.floor(Math.random() * 1001),
+          failure_count: null,
+        }],
+        epoch_id: utils.generateOfflineThreadingID(),
+        version_id: "25487397054291303"
+      }),
+      request_id: ++ctx.req_ID,
+      type: 3
+    });
 
-        if (resData.error) throw resData;
+    ctx.mqttClient.publish('/ls_req', Form, {
+      qos: 1,
+      retain: false,
+    });
 
-        return callback();
-      })
-      .catch(function (err) {
-        log.error("changeNickname", err);
-        return callback(err);
-      });
+    ctx.callback_Task[ctx.req_ID] = {
+      callback: callback,
+      type: "changeNickname"
+    };
 
     return returnPromise;
   };

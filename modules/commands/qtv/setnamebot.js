@@ -1,7 +1,7 @@
 module.exports = {
     name: "setnamebot",
     description: "Đổi biệt danh của bot trong nhóm chat",
-    usage: "\n!setnamebot [tên mới] → Thay đổi biệt danh của bot\n━━━━━━━━━━━━━━━━━━\n🔒 Chỉ QTV nhóm hoặc Admin Bot mới được sử dụng",
+    usage: "\n!setnamebot [tên mới] → Thay đổi biệt danh của bot\n━━━━━━━━━━━━━\n🔒 Chỉ QTV nhóm hoặc Admin Bot mới được sử dụng",
 
     execute: async ({ api, event, args, config }) => {
         const { threadID, messageID, senderID } = event;

@@ -13,7 +13,7 @@ const BOSS_ID = "100037351338722";
 module.exports = {
   name: "cuop",
   description: "Cướp tiền người khác hoặc ngân hàng",
-  usage: `\n${prefix}cuop @tag → Cướp tiền người được tag\n${prefix}cuop (reply) → Cướp tiền người được reply\n${prefix}cuop nganhang → Cướp ngân hàng (rủi ro cao)\n━━━━━━━━━━━━━━━━━━\n⚠️ Thất bại sẽ bị phạt tiền + có thể vào tù\n💰 Thuế cướp: 8%\n⚡ Tốn 20 thể lực mỗi lần dùng`,
+  usage: `\n${prefix}cuop @tag → Cướp tiền người được tag\n${prefix}cuop (reply) → Cướp tiền người được reply\n${prefix}cuop nganhang → Cướp ngân hàng (rủi ro cao)\n━━━━━━━━━━━━━\n⚠️ Thất bại sẽ bị phạt tiền + có thể vào tù\n💰 Thuế cướp: 8%\n⚡ Tốn 20 thể lực mỗi lần dùng`,
 
   execute: async ({ api, event, config, args }) => {
     await ensureMentionsFromHistory(api, event);
@@ -95,7 +95,7 @@ module.exports = {
         const remainingMs = new Date(jailRows[0].jail_until) - new Date();
         const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
         return api.sendMessage(
-          `🔒 BẠN ĐANG TRONG TÙ!\n━━━━━━━━━━━━━━━━━━\n⏰ Còn lại: ${remainingHours} giờ\n⚠️ Lý do: ${jailRows[0].reason}\n❌ Không thể cướp`,
+          `🔒 BẠN ĐANG TRONG TÙ!\n━━━━━━━━━━━━━\n⏰ Còn lại: ${remainingHours} giờ\n⚠️ Lý do: ${jailRows[0].reason}\n❌ Không thể cướp`,
           threadID,
           messageID,
         );

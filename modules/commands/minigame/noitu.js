@@ -437,7 +437,7 @@ module.exports = {
                 return api.sendMessage(`⚠️ Nhóm này đang có một phòng nối từ rồi! Gõ ${prefix}noitu start để bắt đầu hoặc ${prefix}noitu stop để kết thúc.`, threadID, messageID);
             }
 
-            const info = await api.sendMessage(`🎮 MINIGAME NỐI TỪ TIẾNG VIỆT 🎮\n━━━━━━━━━━━━━━━━━━━━\n👉 Hãy reply (trả lời) tin nhắn này để đăng ký tham gia!\n\n👑 Chủ phòng gõ ${prefix}noitu start để bắt đầu khi đã đủ người chơi.`, threadID);
+            const info = await api.sendMessage(`🎮 MINIGAME NỐI TỪ TIẾNG VIỆT 🎮\n━━━━━━━━━━━━━\n👉 Hãy reply (trả lời) tin nhắn này để đăng ký tham gia!\n\n👑 Chủ phòng gõ ${prefix}noitu start để bắt đầu khi đã đủ người chơi.`, threadID);
 
             global.noituSessions[threadID] = {
                 status: "registering",
@@ -488,11 +488,11 @@ module.exports = {
             session.lastWord = normalizeVietnamese(starterWord);
             session.usedWords.push(session.lastWord);
 
-            const startMsg = `🎮 **TRẬN NỐI TỪ BẮT ĐẦU** 🎮\n━━━━━━━━━━━━━━━━━━━━\n` +
+            const startMsg = `🎮 **TRẬN NỐI TỪ BẮT ĐẦU** 🎮\n━━━━━━━━━━━━━\n` +
                 `👥 Thứ tự lượt chơi:\n` +
                 `1. 🤖 Bot (Đầu)\n` +
                 shuffled.map((p, idx) => `${idx + 2}. @${p.name}`).join("\n") +
-                `\n━━━━━━━━━━━━━━━━━━━━\n` +
+                `\n━━━━━━━━━━━━━\n` +
                 `🤖 Lượt đi đầu của Bot: **${starterWord}**`;
 
             const mentions = shuffled.map(p => ({ id: p.id, tag: `@${p.name}` }));
