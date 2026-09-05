@@ -1,8 +1,13 @@
+const { Worker, isMainThread, workerData, parentPort } = require('worker_threads');
+if (isMainThread && typeof process.chdir === 'function') {
+  try {
+    process.chdir(__dirname);
+  } catch (_) {}
+}
 process.env.TZ = "Asia/Ho_Chi_Minh";
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[⚠️] Unhandled Promise Rejection caught:', reason?.message || reason);
 });
-const { Worker, isMainThread, workerData, parentPort } = require('worker_threads');
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
@@ -32,12 +37,7 @@ if (global.Fca && global.Fca.Require && global.Fca.Require.logger) {
   const handleFcaFailure = (msg) => {
     const isFatal = msg.includes('Appstate') || 
                     msg.includes('Cookie Của Bạn Đã Bị Lỗi') || 
-                    msg.includes('ErrAppState') ||
-                    msg.includes('CANT NOT GET THREADINFO') ||
-                    msg.includes('MAYBE U HAS BEEN BLOCKED') ||
-                    msg.includes('1357001') ||
-                    msg.includes('1357004') ||
-                    msg.includes('1390008');
+                    msg.includes('ErrAppState');
 
     if (isFatal) {
       const activeProf = global.current_logging_profile || (!isMainThread && workerData && workerData.profileName ? workerData.profileName : 'Default');
@@ -141,6 +141,24 @@ if (!global.client.handleReaction) global.client.handleReaction = [];
 if (!global.data) global.data = { threadData: new Map(), threadInfo: new Map(), allThreadID: [], allUserID: [], userBanned: new Map(), threadBanned: new Map(), commandBanned: new Map() };
 if (!global.data.threadData) global.data.threadData = new Map();
 
+// 🧹 TTL Eviction Cleaner: Quét và dọn dẹp context reply/reaction quá hạn (TTL = 10 phút) định kỳ mỗi 5 phút để chống rò rỉ RAM
+const HANDLE_CONTEXT_TTL_MS = 10 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  if (Array.isArray(global.client.handleReply)) {
+    global.client.handleReply = global.client.handleReply.filter((item) => {
+      const createdAt = item.createdAt || item.timestamp || (item.time ? new Date(item.time).getTime() : 0);
+      return !createdAt || (now - createdAt < HANDLE_CONTEXT_TTL_MS);
+    });
+  }
+  if (Array.isArray(global.client.handleReaction)) {
+    global.client.handleReaction = global.client.handleReaction.filter((item) => {
+      const createdAt = item.createdAt || item.timestamp || 0;
+      return !createdAt || (now - createdAt < HANDLE_CONTEXT_TTL_MS);
+    });
+  }
+}, 5 * 60 * 1000);
+
 // 2. LOAD APPSTATE
 const APPSTATE_PATH = path.join(__dirname, "runtime", "appstate.json");
 const LEGACY_APPSTATE_PATH = path.join(__dirname, "appstate.json");
@@ -178,16 +196,23 @@ const runAutoExtractor = (profileName = "") => {
 
     spawnSync("node", args, { stdio: "inherit" });
 
-    const checkPath = fs.existsSync(APPSTATE_PATH) ? APPSTATE_PATH : LEGACY_APPSTATE_PATH;
+    let checkPath = null;
+    if (profileName) {
+      checkPath = path.join(__dirname, "runtime", "appstates", `appstate_${profileName}.json`);
+    } else {
+      checkPath = fs.existsSync(APPSTATE_PATH) ? APPSTATE_PATH : LEGACY_APPSTATE_PATH;
+    }
     if (fs.existsSync(checkPath)) {
       const content = fs.readFileSync(checkPath, "utf8").trim();
       if (content && content !== "[]" && content !== "{}") {
-        JSON.parse(content);
         try {
-          const lastCheckPath = path.join(__dirname, "cache", "top_reports_last_check.json");
-          if (fs.existsSync(lastCheckPath)) fs.unlinkSync(lastCheckPath);
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const lastCheckPath = path.join(__dirname, "cache", "top_reports_last_check.json");
+            if (fs.existsSync(lastCheckPath)) fs.unlinkSync(lastCheckPath);
+            return true;
+          }
         } catch (ex) {}
-        return true;
       }
     }
   } catch (e) {
@@ -357,6 +382,7 @@ try {
 // 🚀 QUẢN LÝ TIẾN TRÌNH MASTER & WORKER THREADS
 // =================================================================
 const activeWorkers = {};
+const activeClusterUids = new Map(); // clusterId -> { uid, profileName }
 
 if (isMainThread) {
   console.log("👑 [MASTER] Đang khởi động luồng Tổng Quản...");
@@ -465,80 +491,271 @@ if (isMainThread) {
     console.log(`🌐 Webhook Server đang chạy ở cổng ${WEBHOOK_PORT}`);
   });
 
-  // 🚀 KHỞI ĐỘNG CÁC WORKER (CÁC CỤM)
+  // 🎮 KHỞI ĐỘNG WEB GAME HUB & API BACKEND (CHỈ CHẠY TRÊN MASTER THREAD)
+  try {
+    const webApp = require(path.resolve(__dirname, "web/backend/app"));
+    const webDb = require(path.resolve(__dirname, "web/backend/config/db"));
+    const WEB_PORT = process.env.WEB_PORT || 3001;
+    const WEB_HOST = process.env.WEB_HOST || "0.0.0.0";
+
+    webDb.getDatabase();
+    const webServer = webApp.listen(WEB_PORT, WEB_HOST, () => {
+      console.log(`🎮 [Web Game Hub] Đang chạy tại: http://${WEB_HOST === "0.0.0.0" ? "localhost" : WEB_HOST}:${WEB_PORT}`);
+    });
+
+    webServer.on("error", (err) => {
+      console.error("❌ [Web Game Hub] Lỗi khởi động Web Server:", err.message);
+    });
+  } catch (webErr) {
+    console.error("❌ [Web Game Hub] Không thể nạp module Web Backend:", webErr.message);
+  }
+
+  // 🚀 KHỞI ĐỘNG CÁC WORKER (CÁC CỤM) CÓ GIÃN CÁCH (STAGGERED SPAWN)
+  const TARGET_ALERT_THREAD = '1523319575522034';
+  const PENDING_ALERTS_PATH = path.join(__dirname, 'runtime', 'pending_alerts.json');
+
+  function savePendingAlert(body, threadID = TARGET_ALERT_THREAD) {
+    try {
+      let alerts = [];
+      if (fs.existsSync(PENDING_ALERTS_PATH)) {
+        alerts = JSON.parse(fs.readFileSync(PENDING_ALERTS_PATH, 'utf8') || '[]');
+      }
+      alerts.push({ body, threadID, createdAt: Date.now() });
+      const dir = path.dirname(PENDING_ALERTS_PATH);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(PENDING_ALERTS_PATH, JSON.stringify(alerts, null, 2), 'utf8');
+    } catch (e) {}
+  }
+
+  function flushPendingAlerts(worker) {
+    if (!fs.existsSync(PENDING_ALERTS_PATH)) return;
+    try {
+      const raw = fs.readFileSync(PENDING_ALERTS_PATH, 'utf8');
+      const alerts = JSON.parse(raw || '[]');
+      if (Array.isArray(alerts) && alerts.length > 0) {
+        alerts.forEach(item => {
+          worker.postMessage({
+            type: "send_message",
+            threadID: item.threadID || TARGET_ALERT_THREAD,
+            body: item.body
+          });
+        });
+        fs.unlinkSync(PENDING_ALERTS_PATH);
+        console.log(`[MASTER 🚀] Đã gửi vét ${alerts.length} cảnh báo tồn đọng qua luồng vừa online!`);
+      }
+    } catch (e) {}
+  }
+
+  function dispatchAlertMessage(alertBody, threadID = TARGET_ALERT_THREAD, failedClusterId = null) {
+    let sent = false;
+    for (const [cId, worker] of Object.entries(activeWorkers)) {
+      if (worker && String(cId) !== String(failedClusterId)) {
+        worker.postMessage({ type: "send_message", threadID, body: alertBody });
+        console.log(`[MASTER 📢] Đã gửi thông báo Checkpoint qua Cụm ${cId} tới nhóm ${threadID}`);
+        sent = true;
+        break;
+      }
+    }
+    if (!sent) {
+      for (const [cId, worker] of Object.entries(activeWorkers)) {
+        if (worker) {
+          worker.postMessage({ type: "send_message", threadID, body: alertBody });
+          console.log(`[MASTER 📢] Đã gửi thông báo Checkpoint qua Cụm ${cId} tới nhóm ${threadID}`);
+          sent = true;
+          break;
+        }
+      }
+    }
+    if (!sent) {
+      savePendingAlert(alertBody, threadID);
+      console.log(`[MASTER ⏳] Đã lưu cảnh báo Checkpoint vào hàng đợi chờ Cụm online để gửi tới nhóm ${threadID}.`);
+    }
+  }
+
+  const clusterRestartAttempts = new Map();
   const activeProfiles = accountProfilesManager.getActiveProfilesToRun();
   accountProfilesManager.loadConfig();
   const clusters = accountProfilesManager.config.clusters || [];
 
   function spawnWorkerForCluster(clusterId, profileName) {
+    if (activeWorkers[clusterId]) {
+      console.warn(`[MASTER] ⚠️ Cụm ${clusterId} đã có luồng con đang chạy, không khởi tạo thêm luồng trùng lặp.`);
+      return;
+    }
     console.log(`[MASTER] Đang khởi tạo luồng con cho Cụm ${clusterId} (Profile: ${profileName})...`);
     const worker = new Worker(__filename, { workerData: { clusterId, profileName } });
 
     activeWorkers[clusterId] = worker;
 
-    worker.on('message', (msg) => {
+    worker.on('message', async (msg) => {
       if (msg.type === "log") console.log(`[WORKER CỤM ${clusterId}] ${msg.text}`);
+      if (msg.type === "checkpoint_alert") {
+        dispatchAlertMessage(msg.alertBody, msg.threadID || TARGET_ALERT_THREAD, msg.clusterId);
+      }
       if (msg.type === "restart_worker") {
         console.log(`[MASTER] 🔄 Nhận yêu cầu khởi động lại RIÊNG cho Cụm ${clusterId} (Profile: ${msg.profileName || profileName})...`);
         if (activeWorkers[clusterId]) {
           activeWorkers[clusterId].terminate();
         }
       }
+      if (msg.type === "worker_login_verify") {
+        const { clusterId: cId, profileName: pName, botUid } = msg;
+        const botUidStr = String(botUid);
+
+        // 1. Kiểm tra xem UID này có đang chạy ở Cụm khác không
+        let conflictCluster = null;
+        let conflictProfile = null;
+        for (const [existingCId, info] of activeClusterUids.entries()) {
+          if (existingCId !== cId && String(info.uid) === botUidStr) {
+            conflictCluster = existingCId;
+            conflictProfile = info.profileName;
+            break;
+          }
+        }
+
+        if (conflictCluster) {
+          console.error(`\n[MASTER 🚨 LỖI TRÙNG TÀI KHOẢN] Cụm ${cId} (Profile: ${pName}) vừa đăng nhập trùng UID ${botUidStr} với Cụm ${conflictCluster} (Profile: ${conflictProfile})!`);
+          console.error(`[MASTER 🛑] Đã từ chối kết nối Cụm ${cId} để tránh xung đột session và Facebook khóa spam!`);
+          worker.postMessage({
+            type: "login_rejected",
+            reason: "duplicate_uid",
+            botUid: botUidStr,
+            conflictCluster,
+            conflictProfile
+          });
+          return;
+        }
+
+        // 2. Kiểm tra xem UID này có đúng với Cụm phân công không
+        const validation = await accountProfilesManager.verifyAccountCluster(pName, botUidStr, cId);
+        if (!validation.valid) {
+          console.error(`\n[MASTER ⚠️ SAI CỤM PHÂN CÔNG] Cụm ${cId} (Profile: ${pName}) đăng nhập UID ${botUidStr} nhưng tài khoản này thuộc Cụm ${validation.registeredCluster}! (${validation.message || ""})`);
+          worker.postMessage({
+            type: "login_rejected",
+            reason: "wrong_cluster",
+            botUid: botUidStr,
+            expectedCluster: validation.registeredCluster,
+            message: validation.message
+          });
+          return;
+        }
+
+        // 3. Hợp lệ -> Đăng ký vào Master và reset bộ đếm thử lại
+        activeClusterUids.set(cId, { uid: botUidStr, profileName: pName });
+        clusterRestartAttempts.delete(cId);
+        console.log(`[MASTER ✅ XÁC THỰC THÀNH CÔNG] Cụm ${cId} (Profile: ${pName}) ➡️ UID: ${botUidStr}`);
+        worker.postMessage({
+          type: "login_approved",
+          clusterId: cId,
+          profileName: pName,
+          botUid: botUidStr
+        });
+        flushPendingAlerts(worker);
+      }
     });
 
     worker.on('exit', (code) => {
-      console.log(`[MASTER] ⚠️ Worker Cụm ${clusterId} đã thoát (code ${code}). Tự động khởi động lại sau 5s...`);
+      activeClusterUids.delete(clusterId);
       delete activeWorkers[clusterId];
+      const attempts = (clusterRestartAttempts.get(clusterId) || 0) + 1;
+      clusterRestartAttempts.set(clusterId, attempts);
+      // Exponential backoff + random jitter: min 4s, max 60s
+      const baseDelay = Math.min(60000, 3000 * Math.pow(1.4, Math.min(attempts, 8)));
+      const jitter = Math.floor(Math.random() * 2000);
+      const delay = Math.floor(baseDelay + jitter);
+      console.log(`[MASTER] ⚠️ Worker Cụm ${clusterId} đã thoát (code ${code}). Tự động khởi động lại sau ${(delay / 1000).toFixed(1)}s (lần thử ${attempts})...`);
       setTimeout(() => {
-        // Lấy lại cấu hình phòng trường hợp Master đã cập nhật lại active_profile qua tính năng Xoay vòng (nếu có, tuy nhiên worker sẽ tự xử lý xoay vòng)
+        // Lấy lại cấu hình phòng trường hợp Master đã cập nhật lại active_profile qua tính năng Xoay vòng
         accountProfilesManager.loadConfig();
-        const currentConfig = accountProfilesManager.config.clusters.find(c => c.cluster_id === clusterId);
-        if (currentConfig) spawnWorkerForCluster(clusterId, currentConfig.active_profile);
-      }, 5000);
+        const currentConfig = accountProfilesManager.config.clusters?.find(c => c.cluster_id === clusterId);
+        if (currentConfig && currentConfig.enabled !== false && currentConfig.status !== 'paused') {
+          spawnWorkerForCluster(clusterId, currentConfig.active_profile);
+        }
+      }, delay);
     });
   }
 
-  // 🚀 BỘ ĐẾM GIỜ LUÂN PHIÊN CA LÀM VIỆC
-  const clusterTimers = {};
-  
-  function scheduleClusterRotation(clusterId) {
-    // Sinh số ngẫu nhiên từ 3,600,000 ms (1h) đến 10,800,000 ms (3h)
-    const MIN_MS = 3600000;
-    const MAX_MS = 10800000;
-    const delay = Math.floor(Math.random() * (MAX_MS - MIN_MS + 1)) + MIN_MS;
-    
-    const h = Math.floor(delay / 3600000);
-    const m = Math.floor((delay % 3600000) / 60000);
-    const s = Math.floor((delay % 60000) / 1000);
-    console.log(`[MASTER] ⏳ Cụm ${clusterId} sẽ đổi ca làm việc sau: ${h}h ${m}m ${s}s`);
-
-    clusterTimers[clusterId] = setTimeout(() => {
-       console.log(`[MASTER] ⏰ Đã đến giờ xoay ca làm việc cho Cụm ${clusterId}!`);
-       const newProfile = accountProfilesManager.rotateClusterProfile(clusterId);
-       if (newProfile) {
-         if (activeWorkers[clusterId]) {
-           console.log(`[MASTER] Đang tắt luồng Cụm ${clusterId} để nhường phiên cho ${newProfile}...`);
-           activeWorkers[clusterId].terminate(); 
-           // Sự kiện 'exit' của worker sẽ tự động khởi động lại luồng với profile mới sau 5s
-         }
-       }
-       // Tiếp tục hẹn giờ cho lần đổi ca tiếp theo
-       scheduleClusterRotation(clusterId);
-    }, delay);
+  // Khởi động các Cụm theo thứ tự giãn cách 3.5s - 5s
+  let spawnDelayMs = 0;
+  for (const c of clusters) {
+    if (c.enabled !== false && c.status !== 'paused') {
+      const clusterIdToRun = c.cluster_id;
+      const profileNameToRun = c.active_profile;
+      const curDelay = spawnDelayMs;
+      setTimeout(() => {
+        spawnWorkerForCluster(clusterIdToRun, profileNameToRun);
+      }, curDelay);
+      const jitter = Math.floor(Math.random() * 1500);
+      spawnDelayMs += 3500 + jitter;
+    }
   }
 
-  const spawnedProfiles = new Set();
-  for (const c of clusters) {
-    if (activeProfiles.includes(c.active_profile)) {
-      if (!spawnedProfiles.has(c.active_profile)) {
-        spawnedProfiles.add(c.active_profile);
+  // 🚀 BỘ ĐẾM GIỜ LUÂN PHIÊN CA LÀM VIỆC (LƯU VẾT TRÊN Ổ CỨNG, KHÔNG BỊ MẤT KHI RESTART PM2)
+  const ROTATE_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 tiếng đổi ca 1 lần
+
+  function checkAndRotateClusters() {
+    accountProfilesManager.loadConfig();
+    const now = Date.now();
+    const clusters = accountProfilesManager.config.clusters || [];
+
+    for (const c of clusters) {
+      // 1. Kiểm tra hẹn giờ tự động bật lại (enable_at)
+      if ((c.enabled === false || c.status === 'paused' || c.status === 'disabled') && c.enable_at) {
+        if (now >= new Date(c.enable_at).getTime()) {
+          console.log(`[MASTER ⏰] Đã đến giờ hẹn bật lại cho Cụm ${c.cluster_id} ("${c.name}"). Tự động khôi phục hoạt động...`);
+          c.enabled = true;
+          c.status = 'active';
+          delete c.enable_at;
+          accountProfilesManager.saveConfig();
+        }
+      }
+
+      // Nếu cụm vẫn đang bị tạm ngưng -> Tự động dừng luồng con nếu đang chạy
+      if (c.enabled === false || c.status === 'paused' || c.status === 'disabled') {
+        if (activeWorkers[c.cluster_id]) {
+          console.log(`[MASTER ⏸️] Cụm ${c.cluster_id} ("${c.name}") đang TẠM NGƯNG. Đang tắt luồng con...`);
+          activeWorkers[c.cluster_id].terminate();
+        }
+        continue;
+      }
+
+      // 2. Nếu cụm được bật lại (enabled: true) mà chưa chạy -> Tự động khởi tạo luồng con ngay mà không cần restart
+      if (!activeWorkers[c.cluster_id] && c.active_profile) {
+        console.log(`[MASTER 🚀] Phát hiện Cụm ${c.cluster_id} ("${c.name}") được BẬT LẠI (enabled: true). Tự động khởi tạo luồng con cho Profile "${c.active_profile}"...`);
         spawnWorkerForCluster(c.cluster_id, c.active_profile);
-        scheduleClusterRotation(c.cluster_id);
-      } else {
-        console.warn(`[MASTER] ⚠️ Bỏ qua Cụm ${c.cluster_id}: Profile "${c.active_profile}" đã được chạy bởi một Cụm khác để tránh xung đột session!`);
+      }
+
+      if (!c.profiles || c.profiles.length <= 1) continue;
+
+      const lastRotated = c.last_rotated_at ? new Date(c.last_rotated_at).getTime() : 0;
+      if (!lastRotated) {
+        c.last_rotated_at = new Date().toISOString();
+        accountProfilesManager.saveConfig();
+        const remainMins = Math.round(ROTATE_INTERVAL_MS / 60000);
+        console.log(`[MASTER] ⏳ Cụm ${c.cluster_id} (hiện chạy "${c.active_profile}") sẽ đổi ca sau: ${remainMins} phút`);
+        continue;
+      }
+
+      const elapsed = now - lastRotated;
+      if (elapsed >= ROTATE_INTERVAL_MS) {
+        console.log(`\n[MASTER ⏰] Đã đến giờ xoay ca làm việc cho Cụm ${c.cluster_id} (đã chạy liên tục ${Math.round(elapsed / 60000)} phút)!`);
+        const newProfile = accountProfilesManager.rotateClusterProfile(c.cluster_id);
+        if (newProfile) {
+          if (activeWorkers[c.cluster_id]) {
+            console.log(`[MASTER 🔄] Đang tắt luồng Cụm ${c.cluster_id} để nhường phiên cho "${newProfile}"...`);
+            activeWorkers[c.cluster_id].terminate();
+          }
+        }
       }
     }
   }
+
+  // Chạy kiểm tra ngay khi khởi động và lặp lại mỗi 60 giây (tự động spawn đúng 1 worker cho mỗi cụm enabled)
+  checkAndRotateClusters();
+  setInterval(checkAndRotateClusters, 60000);
+
+  // DỪNG MASTER Ở ĐÂY, KHÔNG CHO CHẠY CODE BOT BÊN DƯỚI
+  return;
 
 
 
@@ -558,6 +775,94 @@ if (!isMainThread) {
   });
 }
 
+
+const TARGET_ALERT_THREAD = '1523319575522034';
+
+function formatCheckpointAlert({ failedProfile, failedUid, failedName, clusterId, newProfile, reason }) {
+  const nowStr = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+  
+  let msg = `🚨 [ CẢNH BÁO TÀI KHOẢN BỊ CHECKPOINT ] 🚨\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `👤 Tên tài khoản: ${failedName && failedName.trim() ? failedName : "Chưa xác định tên"}\n`;
+  msg += `🆔 UID: ${failedUid || "Không rõ"}\n`;
+  msg += `📁 Profile: ${failedProfile}\n`;
+  msg += `🏷️ Cụm phụ trách: Cụm ${clusterId}\n`;
+  msg += `⏰ Thời gian: ${nowStr}\n`;
+  msg += `⚠️ Lý do: ${reason || "Bị checkpoint / Phiên Facebook hết hạn"}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
+  if (newProfile) {
+    msg += `🔄 Hệ thống đã tự động chuyển sang nick dự phòng: "${newProfile}" cho Cụm ${clusterId}.`;
+  } else {
+    msg += `❌ Cụm ${clusterId} hiện KHÔNG còn nick dự phòng nào khả dụng! Cụm có thể tạm ngừng hoạt động.`;
+  }
+  return msg;
+}
+
+const sendCheckpointAlert = (info) => {
+  const alertBody = formatCheckpointAlert(info);
+  if (!isMainThread && parentPort) {
+    try {
+      parentPort.postMessage({
+        type: "checkpoint_alert",
+        alertBody,
+        threadID: TARGET_ALERT_THREAD,
+        clusterId: info.clusterId
+      });
+    } catch (e) {
+      console.error("Lỗi gửi checkpoint_alert từ Worker lên Master:", e);
+    }
+  } else if (global.api_instance && typeof global.api_instance.sendMessage === "function") {
+    global.api_instance.sendMessage(alertBody, TARGET_ALERT_THREAD, () => {});
+  }
+};
+
+const handleProfileCheckpointAndRotate = async (failedProfileName, reason = "Bị khóa Checkpoint / Hết hạn phiên Facebook") => {
+  let myClusterId = (!isMainThread && workerData && workerData.clusterId) ? workerData.clusterId : 1;
+  try {
+    accountProfilesManager.loadConfig();
+    for (const c of accountProfilesManager.config?.clusters || []) {
+      if (c.profiles && c.profiles.includes(failedProfileName)) {
+        myClusterId = c.cluster_id;
+        break;
+      }
+    }
+
+    // 1. Lấy thông tin Tên và UID của tài khoản bị lỗi từ SQLite
+    let failedUid = null;
+    let failedAccName = null;
+    try {
+      const rows = await execute(
+        `SELECT uid, account_name FROM profile_accounts WHERE profile_name = ?`,
+        [failedProfileName]
+      );
+      if (rows && rows.length > 0) {
+        failedUid = rows[0].uid;
+        failedAccName = rows[0].account_name;
+      }
+    } catch (e) {}
+
+    const newProf = await accountProfilesManager.switchProfileOnCheckpoint(failedProfileName, myClusterId);
+
+    // 2. Gửi cảnh báo về nhóm 1523319575522034 kèm Tên và UID
+    sendCheckpointAlert({
+      failedProfile: failedProfileName,
+      failedUid,
+      failedName: failedAccName,
+      clusterId: myClusterId,
+      newProfile: newProf,
+      reason
+    });
+
+    if (newProf) {
+      console.log(`[🔄] Đã tự động đổi sang acc dự phòng "${newProf}" cho Cụm ${myClusterId} do "${failedProfileName}" bị lỗi/checkpoint.`);
+      requestWorkerRestart(`đổi sang acc dự phòng ${newProf}`);
+      return true;
+    }
+  } catch (e) {
+    console.error(`❌ Lỗi khi tự động xoay acc dự phòng cho Cụm ${myClusterId}:`, e.message);
+  }
+  return false;
+};
 
 const attemptLogin = () => {
   let activeProfiles = accountProfilesManager.getActiveProfilesToRun();
@@ -597,8 +902,17 @@ const attemptLogin = () => {
   if (missingProfilesList.length > 0) {
     const targetProfile = missingProfilesList[0];
     console.log(`⚠️ Profile "${targetProfile}" chưa có appstate hợp lệ. Đang khởi chạy tiến trình tự động xuất cookie từ trình duyệt...`);
-    runAutoExtractor(targetProfile);
-    scheduleLoginRetry(`đang chờ cập nhật appstate mới từ trình duyệt cho ${targetProfile}`, 10000);
+    const success = runAutoExtractor(targetProfile);
+    if (!success) {
+      (async () => {
+        const rotated = await handleProfileCheckpointAndRotate(targetProfile);
+        if (!rotated) {
+          scheduleLoginRetry(`đang chờ cập nhật appstate mới từ trình duyệt cho ${targetProfile}`, 15000);
+        }
+      })();
+      return;
+    }
+    scheduleLoginRetry(`đang nạp appstate mới cho ${targetProfile}`, 3000);
     return;
   }
 
@@ -656,7 +970,16 @@ const attemptLogin = () => {
             } catch (e) {}
 
             console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" bị hết hạn cookie / checkpoint. Tự động khởi chạy Trình duyệt lấy lại cookie mới...`);
-            runAutoExtractor(cred.profileName);
+            const success = runAutoExtractor(cred.profileName);
+            if (!success) {
+              (async () => {
+                const rotated = await handleProfileCheckpointAndRotate(cred.profileName);
+                if (!rotated) {
+                  requestWorkerRestart(`thử lại đăng nhập cho ${cred.profileName}`);
+                }
+              })();
+              return;
+            }
             requestWorkerRestart(`tự động lấy lại cookie mới cho ${cred.profileName}`);
             return;
           }
@@ -665,16 +988,186 @@ const attemptLogin = () => {
             api.setOptions(fcaOptions);
           }
 
+          // === BỌC HÀM HỖ TRỢ E2EE (REACTION, TYPING INDICATOR, UNSEND) ===
+          if (api) {
+            const origSetReaction = api.setMessageReaction;
+            api.setMessageReaction = function (reaction, messageID, callback, forceCustomReaction, threadID, senderJid) {
+              if (typeof callback !== "function") callback = () => {};
+              const threadStr = threadID ? String(threadID) : "";
+              const isE2EEThread = (api.e2eeThreads && api.e2eeThreads.has(threadStr)) || (api.e2eeClient && threadStr && (threadStr.includes("@msgr") || threadStr.includes("@g.us")));
+              if (api.e2eeClient && (isE2EEThread || (threadStr && !/^\d{15,16}$/.test(threadStr)))) {
+                const targetThread = (api.threadToUserMap && api.threadToUserMap.get(threadStr)) || threadStr;
+                return api.e2eeClient.sendReaction({
+                  threadId: targetThread,
+                  messageId: String(messageID),
+                  senderJid: senderJid || undefined,
+                  reaction: reaction
+                }).then((res) => {
+                  callback(null, res);
+                }).catch(() => {
+                  origSetReaction.call(api, reaction, messageID, callback, forceCustomReaction);
+                });
+              }
+              return origSetReaction.call(api, reaction, messageID, callback, forceCustomReaction);
+            };
+
+            const origSendTyping = api.sendTypingIndicator;
+            api.sendTypingIndicator = function (threadID, callback, isTyping = true) {
+              if (typeof callback !== "function") callback = () => {};
+              const threadStr = threadID ? String(threadID) : "";
+              const isE2EEThread = (api.e2eeThreads && api.e2eeThreads.has(threadStr)) || (api.e2eeClient && threadStr && (threadStr.includes("@msgr") || threadStr.includes("@g.us")));
+              if (api.e2eeClient && (isE2EEThread || (threadStr && !/^\d{15,16}$/.test(threadStr)))) {
+                const targetThread = (api.threadToUserMap && api.threadToUserMap.get(threadStr)) || threadStr;
+                return api.e2eeClient.sendTyping({
+                  threadId: targetThread,
+                  isTyping: !!isTyping
+                }).then((res) => {
+                  callback(null, res);
+                }).catch(() => {
+                  origSendTyping.call(api, threadID, callback, isTyping);
+                });
+              }
+              return origSendTyping.call(api, threadID, callback, isTyping);
+            };
+
+            const origUnsend = api.unsendMessage;
+            api.unsendMessage = function (messageID, arg2, arg3) {
+              let threadID = undefined;
+              let callback = null;
+              if (typeof arg2 === "function") {
+                callback = arg2;
+                threadID = arg3;
+              } else if (typeof arg3 === "function") {
+                callback = arg3;
+                threadID = arg2;
+              } else {
+                threadID = arg2;
+                callback = null;
+              }
+
+              const threadStr = threadID ? String(threadID) : "";
+              const msgIdStr = String(messageID || "");
+              const isE2EEMsg = /^\d{10,20}$/.test(msgIdStr);
+
+              if (api.e2eeClient && (isE2EEMsg || (api.e2eeThreads && api.e2eeThreads.has(threadStr)) || (threadStr && threadStr.includes("@msgr")))) {
+                const targetThread = (api.threadToUserMap && api.threadToUserMap.get(threadStr)) || threadStr;
+                const p = api.e2eeClient.unsendMessage({
+                  messageId: msgIdStr,
+                  threadId: targetThread || undefined,
+                  fromMe: true
+                }).then((res) => {
+                  if (typeof callback === "function") callback(null, res);
+                  return res;
+                }).catch((err) => {
+                  if (typeof callback === "function") callback(err);
+                  throw err;
+                });
+                return p;
+              }
+
+              if (typeof callback === "function") {
+                return origUnsend.call(api, messageID, threadID, callback);
+              } else {
+                return new Promise((resolve, reject) => {
+                  origUnsend.call(api, messageID, threadID, (err, res) => {
+                    if (err) return reject(err);
+                    resolve(res);
+                  });
+                });
+              }
+            };
+          }
+
           const botID = api.getCurrentUserID();
-          console.log(`✅ [Profile ${cred.profileName}] Đăng nhập thành công ID: ${botID}`);
+          const currentClusterId = !isMainThread && workerData?.clusterId ? workerData.clusterId : 1;
+
+          // XÁC THỰC VỚI MASTER TRÁNH TRÙNG TÀI KHOẢN VÀ SAI CỤM
+          if (!isMainThread && parentPort) {
+            const verifyPromise = new Promise((resolve) => {
+              const handler = (msg) => {
+                if (msg && msg.type === "login_approved") {
+                  parentPort.off('message', handler);
+                  resolve({ approved: true });
+                } else if (msg && msg.type === "login_rejected") {
+                  parentPort.off('message', handler);
+                  resolve({
+                    approved: false,
+                    reason: msg.reason,
+                    conflictCluster: msg.conflictCluster,
+                    conflictProfile: msg.conflictProfile,
+                    expectedCluster: msg.expectedCluster,
+                    message: msg.message
+                  });
+                }
+              };
+              parentPort.on('message', handler);
+              parentPort.postMessage({
+                type: "worker_login_verify",
+                clusterId: currentClusterId,
+                profileName: cred.profileName,
+                botUid: botID
+              });
+            });
+
+            const verifyResult = await verifyPromise;
+            if (!verifyResult.approved) {
+              console.error(`\n[WORKER CỤM ${currentClusterId} 🛑] DỪNG ĐĂNG NHẬP: Tài khoản UID ${botID} bị Master từ chối!`);
+              if (verifyResult.reason === "duplicate_uid") {
+                console.error(`[WORKER CỤM ${currentClusterId} 🚨] Tài khoản UID ${botID} đang chạy ở Cụm ${verifyResult.conflictCluster} (Profile: ${verifyResult.conflictProfile}). Không thể chạy 1 nick ở nhiều Cụm!`);
+              } else if (verifyResult.reason === "wrong_cluster") {
+                console.error(`[WORKER CỤM ${currentClusterId} ⚠️] Tài khoản UID ${botID} không thuộc Cụm ${currentClusterId}! (${verifyResult.message || ""})`);
+              }
+
+              // Xóa file appstate trùng lặp
+              const brokenAppstatePath = path.join(__dirname, 'runtime', 'appstates', `appstate_${cred.profileName}.json`);
+              try {
+                if (fs.existsSync(brokenAppstatePath)) fs.unlinkSync(brokenAppstatePath);
+                console.log(`[🗑️] Đã xóa appstate không đúng/trùng lặp của Profile "${cred.profileName}".`);
+              } catch (e) {}
+
+              // Đóng session FCA
+              try {
+                if (typeof api.logout === "function") api.logout();
+              } catch (e) {}
+
+              return; // DỪNG LUỒNG, KHÔNG CHẠY LISTENMQTT
+            }
+          } else {
+            // Trường hợp chạy đơn luồng (main thread): kiểm tra trực tiếp qua DB
+            const validation = await accountProfilesManager.verifyAccountCluster(cred.profileName, botID, currentClusterId);
+            if (!validation.valid) {
+              console.warn(`[⚠️ CẢNH BÁO PHÂN BỔ CỤM] ${validation.message}`);
+            }
+          }
+
+          console.log(`✅ [Profile ${cred.profileName}] Đăng nhập thành công ID: ${botID} (Cụm ${currentClusterId})`);
 
           if (!global.api_instance) global.api_instance = api;
           if (!global.botID) global.botID = botID;
           global.current_profile = cred.profileName;
 
+          // Lấy tên tài khoản Facebook để lưu trữ phục vụ cảnh báo Checkpoint
+          let botName = "";
+          try {
+            const uInfo = await new Promise((resolve) => {
+              if (typeof api.getUserInfo === "function") {
+                api.getUserInfo(botID, (err, ret) => {
+                  if (!err && ret && ret[botID] && ret[botID].name) {
+                    resolve(ret[botID].name);
+                  } else {
+                    resolve("");
+                  }
+                });
+              } else {
+                resolve("");
+              }
+            });
+            botName = uInfo || "";
+          } catch (e) {}
+
           // Đồng bộ phân bổ rải nhóm thuê adminbot & tự đếm/rời nhóm thừa (Slot Tracker)
           try {
-            await accountProfilesManager.registerActiveAccount(cred.profileName, botID);
+            await accountProfilesManager.registerActiveAccount(cred.profileName, botID, botName);
             await clusterGroupTracker.syncAndBalanceClusterGroups();
             await clusterGroupTracker.checkAndLeaveExcessGroups(api, botID, cred.profileName);
           } catch (clusterErr) {
@@ -731,15 +1224,7 @@ const attemptLogin = () => {
               // Xoay tua Profile ngay lập tức sang nick dự phòng trong Cụm
               (async () => {
                 try {
-                  accountProfilesManager.loadConfig();
-                  let myClusterId = 1;
-                  for (const c of accountProfilesManager.config.clusters || []) {
-                    if (c.profiles && c.profiles.includes(cred.profileName)) {
-                      myClusterId = c.cluster_id;
-                      break;
-                    }
-                  }
-                  await accountProfilesManager.switchProfileOnCheckpoint(cred.profileName, myClusterId);
+                  await handleProfileCheckpointAndRotate(cred.profileName, "Tài khoản bị Facebook khóa tính năng hoặc lỗi phiên trình duyệt (1390008 / 1357004)");
                   console.log(`[🔄] Đã tự động xoay vòng active_profile Cụm ${myClusterId} sang nick dự phòng do bị Facebook Block Action.`);
                 } catch (e) {
                   console.error("❌ Lỗi khi xoay profile do block action:", e);
@@ -810,23 +1295,38 @@ const attemptLogin = () => {
                 }
 
                 setTimeout(() => {
+                  let isFinished = false;
+                  const safeCallback = (err, messageInfo) => {
+                    if (isFinished) return;
+                    isFinished = true;
+                    if (typeof stopTyping === "function") {
+                      try { stopTyping(); } catch (e) {}
+                    } else if (typeof api.sendTypingIndicator === "function") {
+                      try { api.sendTypingIndicator(tid, false); } catch (e) {}
+                    }
+                    if (cb) cb(err, messageInfo);
+                  };
+
+                  // Fallback timeout sau 12 giây phòng trường hợp Facebook lag không trả callback
+                  const fallbackTimer = setTimeout(() => {
+                    if (!isFinished) {
+                      safeCallback(null, {
+                        threadID: tid,
+                        messageID: utils.generateOfflineThreadingID ? utils.generateOfflineThreadingID() : String(Date.now()),
+                        timestamp: Date.now()
+                      });
+                    }
+                  }, 12000);
+
                   try {
                     originalSendMessage.call(api, msg, threadID, (err, messageInfo) => {
-                      if (typeof stopTyping === "function") {
-                        try { stopTyping(); } catch (e) {}
-                      } else if (typeof api.sendTypingIndicator === "function") {
-                        try { api.sendTypingIndicator(tid, false); } catch (e) {}
-                      }
-                      if (cb) cb(err, messageInfo);
+                      clearTimeout(fallbackTimer);
+                      safeCallback(err, messageInfo);
                     }, replyToMessage);
                   } catch (e) {
-                    if (typeof stopTyping === "function") {
-                      try { stopTyping(); } catch (err) {}
-                    } else if (typeof api.sendTypingIndicator === "function") {
-                      try { api.sendTypingIndicator(tid, false); } catch (err) {}
-                    }
+                    clearTimeout(fallbackTimer);
                     if (handleAccountBlocked(e)) return;
-                    if (cb) cb(e);
+                    safeCallback(e);
                   }
                 }, delay);
               };
@@ -879,23 +1379,37 @@ const attemptLogin = () => {
                 }
 
                 setTimeout(() => {
+                  let isFinished = false;
+                  const safeCallback = (err, messageInfo) => {
+                    if (isFinished) return;
+                    isFinished = true;
+                    if (typeof stopTyping === "function") {
+                      try { stopTyping(); } catch (e) {}
+                    } else if (typeof api.sendTypingIndicator === "function") {
+                      try { api.sendTypingIndicator(tid, false); } catch (e) {}
+                    }
+                    if (cb) cb(err, messageInfo);
+                  };
+
+                  const fallbackTimer = setTimeout(() => {
+                    if (!isFinished) {
+                      safeCallback(null, {
+                        threadID: tid,
+                        messageID: utils.generateOfflineThreadingID ? utils.generateOfflineThreadingID() : String(Date.now()),
+                        timestamp: Date.now()
+                      });
+                    }
+                  }, 12000);
+
                   try {
                     originalSendMessageEffect.call(api, msg, threadID, (err, messageInfo) => {
-                      if (typeof stopTyping === "function") {
-                        try { stopTyping(); } catch (e) {}
-                      } else if (typeof api.sendTypingIndicator === "function") {
-                        try { api.sendTypingIndicator(tid, false); } catch (e) {}
-                      }
-                      if (cb) cb(err, messageInfo);
+                      clearTimeout(fallbackTimer);
+                      safeCallback(err, messageInfo);
                     }, replyToMessage);
                   } catch (e) {
-                    if (typeof stopTyping === "function") {
-                      try { stopTyping(); } catch (err) {}
-                    } else if (typeof api.sendTypingIndicator === "function") {
-                      try { api.sendTypingIndicator(tid, false); } catch (err) {}
-                    }
+                    clearTimeout(fallbackTimer);
                     if (handleAccountBlocked(e)) return;
-                    if (cb) cb(e);
+                    safeCallback(e);
                   }
                 }, delay);
               };
@@ -919,25 +1433,17 @@ const attemptLogin = () => {
             };
           }
 
-          // Tự động thêm UID đăng nhập vào adminIDs trong config.json nếu chưa có
+          // Ghi nhận và lưu trữ botID vào file runtime/bot_info.json (tách biệt hoàn toàn với adminIDs)
+          if (!global.botID) global.botID = String(botID);
           try {
-            const configPath = path.join(__dirname, "config.json");
-            if (fs.existsSync(configPath)) {
-              const configContent = fs.readFileSync(configPath, "utf8");
-              const configJson = JSON.parse(configContent);
-              if (!configJson.adminIDs) {
-                configJson.adminIDs = [];
-              }
-              if (!configJson.adminIDs.includes(botID)) {
-                configJson.adminIDs.push(botID);
-                fs.writeFileSync(configPath, JSON.stringify(configJson, null, 2), "utf8");
-                console.log(`✏️ Đã tự động thêm ID bot ${botID} vào adminIDs trong config.json`);
-                // Cập nhật lại config object trong memory
-                config.adminIDs = configJson.adminIDs;
-              }
-            }
+            const { saveBotIdentity } = require("./modules/utils/botIdentity");
+            saveBotIdentity({
+              botID,
+              clusterId: currentClusterId,
+              profileName: typeof profileName !== "undefined" ? profileName : "Default",
+            });
           } catch (err) {
-            console.error("❌ Lỗi tự động cập nhật adminIDs trong config.json:", err);
+            console.error("❌ Lỗi lưu thông tin UID bot vào bot_info.json:", err.message);
           }
 
           // Tự động kiểm tra và tiếp tục gửi thông báo sendallbox còn dở dang (nếu bot bị ngắt giữa chừng trước đó)
@@ -1174,8 +1680,45 @@ const attemptLogin = () => {
             };
           };
 
-          // --- HÀM ĐẾM TIN NHẮN & ĐỌC TRẠNG THÁI TOP ---
+          // --- HÀM ĐẾM TIN NHẮN & ĐỌC TRẠNG THÁI TOP (RAM DEBOUNCE BUFFER) ---
           const statsPath = path.join(__dirname, "message_stats.json");
+          let inMemoryMessageStats = null;
+          let isStatsDirty = false;
+
+          const loadMessageStatsToRam = () => {
+            if (inMemoryMessageStats !== null) return inMemoryMessageStats;
+            try {
+              if (fs.existsSync(statsPath)) {
+                const parsed = JSON.parse(fs.readFileSync(statsPath, "utf8"));
+                inMemoryMessageStats = parsed && typeof parsed === "object" ? parsed : {};
+              } else {
+                inMemoryMessageStats = {};
+              }
+            } catch (e) {
+              console.error("❌ Lỗi nạp message_stats.json vào RAM:", e.message);
+              inMemoryMessageStats = {};
+            }
+            return inMemoryMessageStats;
+          };
+
+          const flushStatsToDisk = () => {
+            if (!isStatsDirty || !inMemoryMessageStats) return;
+            try {
+              fs.writeFileSync(statsPath, JSON.stringify(inMemoryMessageStats, null, 2));
+              isStatsDirty = false;
+            } catch (err) {
+              console.error("❌ Lỗi ghi message_stats.json xuống đĩa:", err.message);
+            }
+          };
+
+          // Tự động flush dữ liệu định kỳ mỗi 15 giây nếu có tin nhắn mới
+          setInterval(flushStatsToDisk, 15000);
+
+          // Flush an toàn khi tắt bot
+          process.on("SIGINT", flushStatsToDisk);
+          process.on("SIGTERM", flushStatsToDisk);
+          process.on("exit", flushStatsToDisk);
+
           let dailyTopStateCache = null;
           let monthlyTopStateCache = null;
 
@@ -1440,10 +1983,7 @@ const attemptLogin = () => {
             if (isResettingDailyStreak) return;
             isResettingDailyStreak = true;
             try {
-              const stats = {};
-              if (fs.existsSync(statsPath)) {
-                Object.assign(stats, JSON.parse(fs.readFileSync(statsPath, "utf8")));
-              }
+              const stats = loadMessageStatsToRam();
 
               const yesterdayKey = getPreviousDayKey();
               const state = readDailyTopState();
@@ -1485,6 +2025,7 @@ const attemptLogin = () => {
                         entry.streak.current = 0;
 
                         stats[threadID][uid] = entry;
+                        isStatsDirty = true;
                       }
                     }
                   }
@@ -1495,7 +2036,7 @@ const attemptLogin = () => {
                 }
               }
 
-              fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
+              flushStatsToDisk();
               writeDailyTopState(state);
               console.log("✅ Hoàn thành quét reset chuỗi tương tác hàng ngày.");
             } catch (e) {
@@ -1509,11 +2050,7 @@ const attemptLogin = () => {
             if (isSendingDailyTop) return;
             isSendingDailyTop = true;
             try {
-              const stats = {};
-              if (fs.existsSync(statsPath)) {
-                const data = JSON.parse(fs.readFileSync(statsPath, "utf8"));
-                Object.assign(stats, data);
-              }
+              const stats = loadMessageStatsToRam();
 
               const yesterdayKey = getPreviousDayKey();
               const todayKey = getTimeKeys().dayKey;
@@ -1682,11 +2219,7 @@ const attemptLogin = () => {
             if (isSendingMonthlyTop) return;
             isSendingMonthlyTop = true;
             try {
-              const stats = {};
-              if (fs.existsSync(statsPath)) {
-                const data = JSON.parse(fs.readFileSync(statsPath, "utf8"));
-                Object.assign(stats, data);
-              }
+              const stats = loadMessageStatsToRam();
 
               const previousMonthKey = getPreviousMonthKey();
               const state = readMonthlyTopState();
@@ -1825,6 +2358,7 @@ const attemptLogin = () => {
                       if (/^\d+$/.test(uid)) {
                         if (stats[threadID][uid] && stats[threadID][uid].streak) {
                           stats[threadID][uid].streak.brokenCount = 0;
+                          isStatsDirty = true;
                         }
                       }
                     }
@@ -1863,7 +2397,7 @@ const attemptLogin = () => {
                 }
               }
 
-              fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
+              flushStatsToDisk();
               writeMonthlyTopState(state);
             } catch (e) {
               console.error("❌ Lỗi gửi TOP 10 tương tác tháng cho tất cả nhóm:", e);
@@ -1897,12 +2431,7 @@ const attemptLogin = () => {
             const monthlyState = readMonthlyTopState();
             const yesterdayKey = getPreviousDayKey(now);
             const previousMonthKey = getPreviousMonthKey(now);
-            const stats = {};
-            if (fs.existsSync(statsPath)) {
-              try {
-                Object.assign(stats, JSON.parse(fs.readFileSync(statsPath, "utf8")));
-              } catch (e) {}
-            }
+            const stats = loadMessageStatsToRam();
 
             // Kiểm tra xem còn nhóm nào chưa nhận báo cáo ngày hôm qua không
             const hasPendingDaily = Object.keys(stats).some(
@@ -1981,10 +2510,7 @@ const attemptLogin = () => {
 
           const updateMessageStats = (senderID, threadID, event = null, isRented = true) => {
             try {
-              let stats = {};
-              if (fs.existsSync(statsPath)) {
-                stats = JSON.parse(fs.readFileSync(statsPath, "utf8"));
-              }
+              const stats = loadMessageStatsToRam();
 
               if (!stats[threadID]) {
                 stats[threadID] = {};
@@ -2032,12 +2558,11 @@ const attemptLogin = () => {
               trimMapByNewestKeys(entry.monthly, 18);
 
               stats[threadID][uid] = entry;
-
-              fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
+              isStatsDirty = true; // Đánh dấu dữ liệu đã thay đổi để flush định kỳ 15s
 
               return stats[threadID];
             } catch (e) {
-              console.error("❌ Lỗi cập nhật thống kê tin nhắn:", e);
+              console.error("❌ Lỗi cập nhật thống kê tin nhắn trên RAM:", e);
               return null;
             }
           };
@@ -2078,7 +2603,16 @@ const attemptLogin = () => {
                 } catch (e) {}
 
                 console.warn(`[🚨 CẢNH BÁO] Profile "${cred.profileName}" bị mất kết nối/die cookie. Tự động khởi chạy Trình duyệt lấy lại cookie mới...`);
-                runAutoExtractor(cred.profileName);
+                const success = runAutoExtractor(cred.profileName);
+                if (!success) {
+                  (async () => {
+                    const rotated = await handleProfileCheckpointAndRotate(cred.profileName);
+                    if (!rotated) {
+                      requestWorkerRestart(`tự động lấy lại cookie mới cho ${cred.profileName}`);
+                    }
+                  })();
+                  return;
+                }
                 requestWorkerRestart(`tự động lấy lại cookie mới cho ${cred.profileName}`);
                 return;
               }
@@ -2147,7 +2681,7 @@ const attemptLogin = () => {
                       // Đã bỏ cơ chế tự out sau 1 tiếng theo yêu cầu của user.
                       // Nhóm sẽ vĩnh viễn nằm trong Sổ đỏ với is_admin_rental = 0 cho đến khi khách thuê bot hoặc admin tự kích.
                     } else {
-                      assignedClusterId = 1; // Inbox riêng tư mặc định cho Cụm 1
+                      assignedClusterId = myClusterId; // Inbox riêng tư (1-1 / E2EE): Nick nào nhận được tin nhắn trực tiếp thì nick đó tự xử lý
                     }
                   }
                 } // Close the 'else' block for test boxes
@@ -2378,63 +2912,7 @@ const attemptLogin = () => {
 
 
 
-              // 2b. Cập nhật ANTITHUHOI tức thời (nếu được bật)
-              try {
-                const antithuhoiPath = path.join(
-                  __dirname,
-                  "cache/antithuhoi/settings.json",
-                );
-                if (fs.existsSync(antithuhoiPath)) {
-                  const antithuhoiSettings = JSON.parse(
-                    fs.readFileSync(antithuhoiPath, "utf8"),
-                  );
-                  if (antithuhoiSettings[event.threadID]) {
-                    const messagesPath = path.join(
-                      __dirname,
-                      `cache/antithuhoi/messages_${event.threadID}.json`,
-                    );
-                    const threadInfo = await getThreadInfoCached(api, event.threadID);
-
-                    if (threadInfo) {
-                      const memberInfo = Array.isArray(threadInfo?.userInfo)
-                        ? threadInfo.userInfo
-                        : [];
-                      const nameById = new Map(
-                        memberInfo.map((u) => [String(u.id), u.name || ""]),
-                      );
-                      const history = await _quietGetThreadHistory(
-                        api,
-                        event.threadID,
-                        15,
-                      );
-                      const messages = history
-                        .filter(
-                          (msg) => msg.body && String(msg.senderID) !== String(botID),
-                        )
-                        .map((msg) => ({
-                          messageID: msg.messageID,
-                          senderID: msg.senderID,
-                          senderName:
-                            nameById.get(String(msg.senderID)) ||
-                            msg.senderName ||
-                            "Unknown",
-                          body: msg.body,
-                          timestamp: msg.timestamp,
-                          attachments: msg.attachments ? msg.attachments.length : 0,
-                        }))
-                        .reverse();
-                      const dir = path.dirname(messagesPath);
-                      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-                      fs.writeFileSync(
-                        messagesPath,
-                        JSON.stringify(messages, null, 2),
-                      );
-                    }
-                  }
-                }
-              } catch (err) {
-                // Im lặng - không print error để không spam log
-              }
+              // 2b. ANTITHUHOI: Đã được module hóa và xử lý bất đồng bộ qua modules/events/antithuhoi.js (0ms, 0 Network API Call trên hot path)
             }
 
             if (!event.body) return;
@@ -2453,7 +2931,7 @@ const attemptLogin = () => {
             }
 
             const isBotSender = senderID === String(botID);
-            const isInbox = threadID && senderID && threadID === senderID;
+            const isInbox = (threadID && senderID && threadID === senderID) || event.isGroup === false;
             const normalizedBody = normalizeText(body);
 
             const { checkRentalStatus, getRentalExpiry, isRentalStopped } = require("./modules/utils/rental");
@@ -2495,7 +2973,7 @@ const attemptLogin = () => {
               );
 
             if (normalizedBody === "bot dau") {
-              if (!isAdmin) {
+              if (!isAdmin && !isInbox) {
                 const isRented = await checkRentalStatus(event.threadID);
                 if (!isRented) return sendRentalNotice();
               }
@@ -2503,7 +2981,7 @@ const attemptLogin = () => {
             }
 
             if (normalizedBody === "prefix") {
-              if (!isAdmin) {
+              if (!isAdmin && !isInbox) {
                 const isRented = await checkRentalStatus(event.threadID);
                 if (!isRented) return sendRentalNotice();
               }
@@ -2535,9 +3013,9 @@ const attemptLogin = () => {
               // =================================================================
               // 🛡️ KIỂM TRA HẠN THUÊ BOT (RENTAL CHECK)
               // =================================================================
-              const isFreeCommand = ["thuebot", "adminbot", "gopy"].includes(firstWord);
+              const isFreeCommand = ["thuebot", "adminbot", "gopy", "dangky", "matkhau", "register", "password", "webpass"].includes(firstWord);
 
-              if (!isAdmin && !isFreeCommand) {
+              if (!isAdmin && !isFreeCommand && !isInbox) {
                 const isRented = await checkRentalStatus(event.threadID);
 
                 if (!isRented) {
@@ -2663,6 +3141,11 @@ const attemptLogin = () => {
             // XỬ LÝ REPLY (Tài Xỉu, Bầu Cua...)
             // =================================================================
             if (event.type === "message_reply") {
+              // Bỏ qua nếu tin nhắn được reply là của bot khác trong cùng box test
+              if (event.messageReply?.senderID && String(event.messageReply.senderID) !== String(botID)) {
+                return;
+              }
+
               console.log("DBG message_reply event:", JSON.stringify({
                 type: event.type,
                 senderID: event.senderID,
@@ -2679,7 +3162,7 @@ const attemptLogin = () => {
               const adminList = Array.isArray(config?.adminIDs) ? config.adminIDs : (Array.isArray(global.config?.adminIDs) ? global.config.adminIDs : []);
               const isAdmin = adminList.includes(event.senderID) || String(event.senderID) === String(botID);
               const repliedText = String(event.messageReply?.body || "");
-              const isThuebotMenuReply = repliedText.includes("BẢNG GIÁ THUÊ BOT");
+              const isThuebotMenuReply = repliedText.includes("BẢNG GIÁ THUÊ BOT") || repliedText.includes("DANH SÁCH NHÓM THUÊ BOT") || repliedText.includes("DANH SÁCH NHÓM") || repliedText.includes("LỊCH SỬ ĐƠN HÀNG");
 
               const permCheck = await checkPermission(event.threadID, event.senderID, api);
 

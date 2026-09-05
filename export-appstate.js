@@ -706,7 +706,7 @@ async function handleFacebookContinue(context, timeoutMs = 60000, profileIndex =
                 continue;
             }
             
-            // Xử lý Checkpoint "Bỏ qua" (ví dụ màn hình "Lưu trình duyệt tự động?")
+                // Xử lý Checkpoint "Bỏ qua" (ví dụ màn hình "Lưu trình duyệt tự động?")
             if (url.includes('/checkpoint')) {
                 const isAutoTextVisible = await page.getByText(/tự động/i).first().isVisible({ timeout: 500 }).catch(() => false);
                 const skipBtn = page.locator('span:has-text("Bỏ qua"), button:has-text("Bỏ qua"), div[role="button"]:has-text("Bỏ qua")').first();
@@ -715,6 +715,14 @@ async function handleFacebookContinue(context, timeoutMs = 60000, profileIndex =
                     await skipBtn.click({ timeout: 4000 }).catch(() => {});
                     await page.waitForTimeout(3000).catch(() => {});
                     continue;
+                }
+
+                // Nếu là màn hình khóa tài khoản nghiêm trọng (checkpoint 956/282 hoặc báo đã bị khóa)
+                const isHardCp = url.includes('/checkpoint/1501092823525282') ||
+                                 await page.locator('text=/Tài khoản của bạn đã bị khóa|We locked your account|account locked|tài khoản bị vô hiệu hóa/i').first().isVisible({ timeout: 500 }).catch(() => false);
+                if (isHardCp) {
+                    console.warn(`[⚠️] Phát hiện tài khoản đã bị Facebook khóa dính Checkpoint (${url}). Dừng thao tác và thoát sớm, không spam 2FA...`);
+                    break;
                 }
             }
             
@@ -1424,6 +1432,13 @@ async function main() {
                     const profileAppstatePath = path.join(appstatesDir, `appstate_${profileDir}.json`);
                     fs.writeFileSync(profileAppstatePath, JSON.stringify(profileAppState, null, 2), 'utf8');
                     console.log(`[💾] Đã lưu appstate riêng cho Profile "${profileDir}" tại: ${profileAppstatePath}`);
+                    checkAndWarnDuplicateUid(profileAppState, profileDir, appstatesDir);
+                    try {
+                        const accMgr = require('./src/managers/accountProfilesManager');
+                        if (accMgr && typeof accMgr.clearProfileCheckpoint === 'function') {
+                            accMgr.clearProfileCheckpoint(profileDir);
+                        }
+                    } catch (e) {}
 
                     if (cookies.length === 0) {
                         cookies = currentCookies;
@@ -1443,7 +1458,8 @@ async function main() {
                     currentSpawnedProc = null;
                 } else {
                     if (cpInfo.isCheckpoint) {
-                        console.warn(`[⚠️] Profile "${profileDir}" bị dính link checkpoint (${cpInfo.url}). Tự động bỏ qua và chuyển sang Profile tiếp theo...`);
+                        const skipSuffix = (candidateProfilesToUse.length > (i + 1)) ? ' Tự động bỏ qua và chuyển sang Profile tiếp theo...' : '';
+                        console.warn(`[⚠️] Profile "${profileDir}" bị dính link checkpoint (${cpInfo.url}).${skipSuffix}`);
                     } else {
                         console.warn(`[⚠️] Profile "${profileDir}" bị khóa hoặc chưa đăng nhập Facebook.`);
                     }
@@ -1468,6 +1484,28 @@ async function main() {
         }
 
         console.log(`[+] Lấy thành công ${fbCookies.length} cookie Facebook (bao gồm cả session c_user/i_user).`);
+
+function checkAndWarnDuplicateUid(appState, profileName, appstatesDir) {
+    try {
+        const cUserCookie = (appState || []).find(c => c.key === 'c_user' || c.name === 'c_user' || c.key === 'i_user' || c.name === 'i_user');
+        const currentUid = cUserCookie ? (cUserCookie.value || cUserCookie.val) : null;
+        if (!currentUid || !fs.existsSync(appstatesDir)) return;
+
+        const otherFiles = fs.readdirSync(appstatesDir).filter(f => f.startsWith('appstate_') && f.endsWith('.json') && f !== `appstate_${profileName}.json`);
+        for (const oFile of otherFiles) {
+            try {
+                const otherRaw = JSON.parse(fs.readFileSync(path.join(appstatesDir, oFile), 'utf8'));
+                const otherUser = Array.isArray(otherRaw) ? otherRaw.find(c => (c.key === 'c_user' || c.name === 'c_user' || c.key === 'i_user' || c.name === 'i_user')) : null;
+                const otherUid = otherUser ? (otherUser.value || otherUser.val) : null;
+                if (otherUid && String(otherUid) === String(currentUid)) {
+                    const otherProf = oFile.replace(/^appstate_/, '').replace(/\.json$/, '');
+                    console.warn(`\n[🚨 CẢNH BÁO TRÙNG TÀI KHOẢN] Profile "${profileName}" vừa lấy cookie của UID ${currentUid}, bị TRÙNG với Profile "${otherProf}"!`);
+                    console.warn(`[👉 HƯỚNG DẪN] Mỗi Cụm/Profile phải chạy 1 tài khoản Facebook riêng biệt. Hãy mở trình duyệt và đăng nhập đúng nick riêng cho Profile "${profileName}".\n`);
+                }
+            } catch (_) {}
+        }
+    } catch (_) {}
+}
 
 async function saveAppStateAndExit(cookiesList, b, proc, cdp, closeCdp, targetProfile) {
     const fbCookies = (cookiesList || []).filter(c => 
@@ -1514,6 +1552,13 @@ async function saveAppStateAndExit(cookiesList, b, proc, cdp, closeCdp, targetPr
         const profileAppstatePath = path.join(appstatesDir, `appstate_${targetProfile}.json`);
         fs.writeFileSync(profileAppstatePath, JSON.stringify(appState, null, 2), 'utf8');
         console.log(`[💾] Đã sao chép appstate riêng cho Profile "${targetProfile}" tại: ${profileAppstatePath}`);
+        checkAndWarnDuplicateUid(appState, targetProfile, appstatesDir);
+        try {
+            const accMgr = require('./src/managers/accountProfilesManager');
+            if (accMgr && typeof accMgr.clearProfileCheckpoint === 'function') {
+                accMgr.clearProfileCheckpoint(targetProfile);
+            }
+        } catch (e) {}
         
         try {
             const activeInfoPath = path.join(__dirname, 'runtime', 'active_profile.json');

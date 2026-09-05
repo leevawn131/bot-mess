@@ -20,9 +20,13 @@ class Database {
                 if (err) {
                     return reject(err);
                 }
-                // Enable Foreign Keys & WAL mode for speed
+                // Enable Foreign Keys, WAL mode & Concurrency settings
+                this.db.run('PRAGMA journal_mode = WAL;');
+                this.db.run('PRAGMA busy_timeout = 5000;');
+                this.db.run('PRAGMA synchronous = NORMAL;');
                 this.db.run('PRAGMA foreign_keys = ON;');
-                this.db.run('PRAGMA journal_mode = WAL;', () => {
+                this.db.run('PRAGMA cache_size = -2000;');
+                this.db.run('PRAGMA temp_store = MEMORY;', () => {
                     this.loadSchema()
                         .then(resolve)
                         .catch(reject);
