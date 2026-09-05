@@ -3,6 +3,7 @@ module.exports = {
     {
       name: "botmess",
       script: "./index.js",
+      cwd: __dirname,
       watch: false
     }
   ]

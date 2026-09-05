@@ -255,6 +255,7 @@ Toàn bộ dữ liệu của bot được quản lý độc lập tại thư m�
 | `add` | `!add <link profile / UID>` | Thêm thành viên vào nhóm chat |
 | `anti` | `!anti [out\|theme\|name\|tagall]` | Bật/tắt các lớp bảo vệ chống phá nhóm |
 | `autochao` | `!autochao [on\|off]` | Bật/tắt tự động gửi lời chào khi có tin nhắn đầu ngày |
+| `autobd` | `!autobd [on\|off]` | Bật/tắt tự động đặt biệt danh cho thành viên mới theo form [kí tự] + [tên] |
 | `cambot` | `!cambot [tag / UID]` | Cấm thành viên chỉ định sử dụng bot trong nhóm |
 | `canhbao` | `!canhbao [tag] [lý do]` | Cảnh báo thành viên (đủ 3 lần tự động kick) |
 | `checkbd` | `!checkbd` | Kiểm tra danh sách thành viên chưa đặt biệt danh |

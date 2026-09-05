@@ -4,6 +4,7 @@
 .env
 .env.local
 .env.*.local
+config.json
 appstate.json
 appstate.json.bak
 appstates/
@@ -19,8 +20,9 @@ youtube_cookies.txt
 /cache/
 /modules/cache/
 /logs/
-/Horizon_Database/SyntheticDatabase.sqlite
-/Horizon_Database/memory.log
+/Horizon_Database/*
+!/Horizon_Database/A_README.md
+!/Horizon_Database/RandPass.json
 
 # ==========================================
 # 3. Database & SQLite Journal / Temp Files
@@ -107,6 +109,9 @@ venv/
 # ==========================================
 *.backup
 *.bak
+*OLD*.js
+*OLD[0-9]*.js
+src/database/database1.js
 
 # ==========================================
 # 9. Runtime Data & Test Scratch Files
